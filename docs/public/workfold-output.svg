@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="330" viewBox="0 0 960 330" role="img">
+  <title>Example Workfold terminal report</title>
+  <desc>A colored weekly activity matrix with a compressed time gap, working hours, and summary.</desc>
+  <rect width="960" height="330" rx="12" fill="#0d1117"/>
+  <style>
+    text {
+      fill: #c9d1d9;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 16px;
+      font-variant-ligatures: none;
+    }
+    .strong { fill: #f0f6fc; font-weight: 600; }
+    .muted { fill: #8b949e; }
+    .git { fill: #3fb950; font-size: 18px; }
+    .filesystem { fill: #58a6ff; font-size: 18px; }
+    .outside { fill: #ff7b72; font-size: 18px; font-weight: 700; }
+  </style>
+
+  <g transform="translate(24 32)">
+    <text class="strong" x="0" y="0">Time band</text>
+    <text class="strong" x="165" y="0">Mon</text>
+    <text class="strong" x="270" y="0">Tue</text>
+    <text class="strong" x="375" y="0">Wed</text>
+    <text class="strong" x="480" y="0">Thu</text>
+    <text class="strong" x="585" y="0">Fri</text>
+    <text class="strong" x="690" y="0">Sat</text>
+    <text class="strong" x="795" y="0">Sun</text>
+
+    <text x="0" y="42">07:48–08:12</text>
+    <text class="outside" x="165" y="42">○</text>
+    <text class="git" x="183" y="42">●</text>
+    <text class="filesystem" x="201" y="42">■</text>
+    <text class="git" x="270" y="42">●</text>
+
+    <text class="muted" x="0" y="74">⋮ 1h 8m</text>
+
+    <text x="0" y="106">09:20–09:29</text>
+    <text class="filesystem" x="480" y="106">■</text>
+    <text class="git" x="498" y="106">●</text>
+
+    <text class="git" x="0" y="152">●</text>
+    <text x="18" y="152"> Git · </text>
+    <text class="filesystem" x="90" y="152">■</text>
+    <text x="108" y="152"> Filesystem · </text>
+    <text class="outside" x="250" y="152">○</text>
+    <text x="268" y="152"> Outside working hours</text>
+
+    <text x="0" y="184">Working hours: Mo-Fr 08:00-16:30</text>
+
+    <text class="strong" x="0" y="226">Events</text>
+    <text x="96" y="226">6</text>
+    <text class="strong" x="0" y="252">Schedule</text>
+    <text x="96" y="252">5 inside (83.3%) · 1 outside (16.7%)</text>
+    <text class="strong" x="0" y="278">Calendar</text>
+    <text x="96" y="278">6 weekday (100.0%) · 0 weekend (0.0%)</text>
+  </g>
+</svg>
