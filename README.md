@@ -43,11 +43,9 @@ reflogs, filesystem metadata, combined-source views, the `full` profile, strict
 coverage accounting, and outside-event listing share the same normalized
 pipeline.
 
-See the [MVP specification](https://github.com/janthmueller/workfold/blob/main/MVP.md)
-for exact semantics and the
-[implementation plan](https://github.com/janthmueller/workfold/blob/main/PLAN.md)
-for delivery status. The Astro site in `docs/` documents the terminal product;
-it is not an HTML reporting feature.
+The [documentation](https://janthmueller.github.io/workfold/) covers CLI usage,
+accuracy, and development. The Astro site in `docs/` documents the terminal
+product; it is not an HTML reporting feature.
 
 ## Install
 
