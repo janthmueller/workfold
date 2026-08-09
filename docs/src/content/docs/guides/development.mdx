@@ -1,0 +1,131 @@
+---
+title: Development
+description: Set up, test, package, and document a Workfold checkout.
+---
+
+Workfold is a Python 3.10+ project managed with uv. Nix provides a reproducible
+development shell with Python, uv, Ruff, Node.js, pnpm, and release tooling.
+Rich is confined to the terminal presentation layer; it is not a CLI framework
+or TUI architecture.
+
+## Repository layout
+
+The project deliberately uses a flat package layout:
+
+```text
+workfold/
+├── workfold/       # Python package and CLI implementation
+│   ├── collectors/
+│   └── renderers/
+├── tests/
+├── docs/           # Astro Starlight product documentation
+├── MVP.md          # normative product contract
+├── PLAN.md         # staged implementation plan
+└── pyproject.toml
+```
+
+There is no `src/` wrapper. Packaging discovers `workfold*` directly from the
+repository root.
+
+## Set up the environment
+
+```bash
+nix develop
+uv sync --extra dev
+```
+
+Run the checkout without installing another copy:
+
+```bash
+uv run workfold --help
+uv run python -m workfold --version
+```
+
+Without Nix, install uv separately and run `uv sync --extra dev` with a
+compatible Python interpreter.
+
+## Run quality checks
+
+```bash
+uv run pytest
+ruff check .
+ruff format --check .
+uv run pyright
+```
+
+Tests use temporary repositories with controlled timestamps for Git integration
+behavior. Filesystem capability tests must report or skip unavailable creation
+time rather than substituting POSIX ctime. Linux tests exercise the native
+`statx` adapter, nanosecond provenance, identity validation, and final-symlink
+no-follow behavior.
+
+## Build packages
+
+Build wheel and source distributions with:
+
+```bash
+uv build
+uv run --extra release twine check dist/*
+```
+
+After a push to `main` passes the complete `Test` workflow, the `Release`
+workflow verifies that the tested commit is still current, creates the alpha
+release, publishes it to PyPI, and attaches PyInstaller archives for the
+supported platforms to the GitHub release. A manual dispatch remains available
+as a guarded fallback. Local development does not need publishing credentials;
+GitHub uses the protected `pypi` environment and trusted publishing.
+
+## Work on the documentation
+
+Install, validate, build, or serve the Astro Starlight site with:
+
+```bash
+nix run .#docs-install
+nix run .#docs-check
+nix run .#docs-build
+nix run .#docs-dev
+```
+
+The site documents the terminal CLI. Do not add an HTML report, web server, or
+browser renderer while those remain outside the MVP.
+
+## Implementation boundaries
+
+Collectors emit normalized, provenance-preserving timestamp observations.
+Configuration resolves time, mode, and the evidence profile as three independent
+axes. The profile defaults to `standard`; neither portable nor full expansion
+may rewrite time or mode.
+Schedule classification, display cropping, greedy globally aligned clustering,
+renderer-neutral report construction, and terminal rendering remain separate
+stages. The clusterer emits half-open semantic bands and literal event data;
+only the renderer creates Rich objects or assigns green/blue/red styles.
+Repository-controlled values must be sanitized and added as literal Rich text,
+never parsed as markup.
+
+The renderer formats sparse band endpoints as `HH:MM` even when classified
+markers or custom cluster windows have second-level precision. Do not round the
+underlying instant to obtain that label: normalized provenance and outside-event
+rows retain exact seconds and available nanoseconds. The renderer must emit the
+matrix first, without a title or subtitle. After the matrix it emits a
+content-aware symbol key without a heading, a left-aligned working-hours line,
+and three direct statistic rows without a Summary heading: Events, Schedule,
+and Calendar. Both split rows partition Events but answer independent questions.
+The key derives from visible markers after cropping and mentions `×N` only if
+count tokens render. Only `--verbose` adds scope, period, full successful
+coverage, source/record breakdowns, cluster/compression policy, exact collector
+choices, author scope, collection extents, and ignore/exclusion policy; it also
+includes the detailed coverage ledger. `--coverage` includes the ledger without
+those verbose details, and evidence-profile resolution must not enable either
+output mode. The minimal default must still append exception notices for partial
+collection, explicit narrowing, unsupported capabilities, and nonzero cropping.
+
+Keep record counts, timestamp observations, and plotted activity markers
+distinct: they intentionally answer different accounting questions. Ordinary
+cells draw one symbol per activity marker. Exact `×N` compaction is a
+width-driven renderer fallback and must not alter event, summary, or coverage
+counts.
+
+Before changing behavior, read the normative
+[MVP specification](https://github.com/janthmueller/workfold/blob/main/MVP.md)
+and the staged
+[implementation plan](https://github.com/janthmueller/workfold/blob/main/PLAN.md).

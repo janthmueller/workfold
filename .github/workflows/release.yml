@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    if: >
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: main
+      - name: Require the tested commit to remain current
+        id: check
+        env:
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch origin main
+          CURRENT_SHA="$(git rev-parse origin/main)"
+          if [ "$TESTED_SHA" = "$CURRENT_SHA" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tested SHA $TESTED_SHA is no longer current main ($CURRENT_SHA); skipping release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: guard
+    if: needs.guard.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    outputs:
+      tag: ${{ steps.release_tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: main
+      - name: Require successful tests for a manual release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          CONCLUSION="$(gh run list --workflow test.yml --commit "$SHA" --status completed --limit 1 --json conclusion --jq '.[0].conclusion // ""')"
+          test "$CONCLUSION" = success
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: python -m pip install ".[release]"
+      - name: Version and build release
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: semantic-release version --as-prerelease --prerelease-token alpha
+      - name: Resolve release tag
+        id: release_tag
+        run: echo "tag=$(git describe --tags --abbrev=0)" >> "$GITHUB_OUTPUT"
+      - run: python -m twine check dist/*
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: semantic-release publish
+      - uses: pypa/gh-action-pypi-publish@v1.13.0
+        with:
+          skip-existing: true
+
+  binaries:
+    needs: release
+    uses: ./.github/workflows/binaries.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+    permissions:
+      contents: write

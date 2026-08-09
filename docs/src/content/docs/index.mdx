@@ -1,0 +1,116 @@
+---
+title: Workfold
+slug: /
+description: Fold local Git and filesystem timestamps into an honest weekly terminal view.
+---
+
+Workfold is a local, terminal-only CLI for answering two questions:
+
+1. When did discoverable work activity happen?
+2. Which recorded events occurred inside or outside an intended working schedule?
+
+It converts selected timestamps into one timezone, folds every selected date
+onto a representative Monday-to-Sunday week, and renders a compact terminal
+chart. The result describes discrete evidence, not continuous work duration.
+
+:::note[Development status]
+Workfold is an alpha. The terminal-only CLI includes the sparse Rich-based
+chart, Git files/tags/reflogs, filesystem metadata, combined-source views, and
+exhaustive coverage.
+:::
+
+## Quick start
+
+Workfold requires Python 3.10 or newer. Git views also require the local `git`
+executable.
+
+```bash
+pip install workfold
+workfold --help
+```
+
+For an isolated CLI environment, use `uv tool install workfold` or
+`pipx install workfold`. Standalone archives are available from
+[GitHub releases](https://github.com/janthmueller/workfold/releases).
+
+Inside a Git repository, run:
+
+```bash
+workfold
+```
+
+With no flags, Workfold selects the current ISO week in the operating system's
+local timezone (`-t this-week`), uses Git mode (`-m git`), reads commit author
+timestamps from all local refs under the `standard` profile (`-p standard`),
+uses one-hour greedy cluster windows, and classifies against
+`Mo-Fr 08:00-16:30`.
+
+```bash
+workfold . -t 2026-W31
+workfold . -t 2026-07-01..2026-07-31
+workfold . --timezone Europe/Berlin --list-outside
+workfold . -t all -m git -p portable
+workfold . -t all -m all -p full
+workfold . --cluster-window 30s
+workfold . --cluster-window 10m
+workfold . --cluster-window 1h5m
+```
+
+`-p/--profile` defaults to `standard`. The `portable` profile is Git-only commit
+author/committer and annotated-tag tagger evidence stored in Git objects; it
+says nothing about remote publication. The `full` profile expands evidence only
+inside the selected time and mode, so the canonical exhaustive command spells
+out `-t all -m all -p full`.
+
+## Read the chart
+
+The chart renders only occupied time clusters in implicit `00:00`-toward-`24:00`
+order; it does not add empty day-boundary rows. Starting with the earliest
+unassigned local wall-clock event, Workfold greedily forms one globally aligned
+half-open assignment window of the configured width, assigns events from all
+seven weekdays, then repeats. A displayed label spans the first through last
+observed event in that cluster. Band endpoints always display as `HH:MM`, even
+for second-level windows and events; exact seconds and nanoseconds remain in
+normalized provenance and outside-event rows. Empty bands are omitted, and a
+gap of at least one hour between observed endpoints uses one dim duration cue
+rather than rows of empty intervals.
+
+The matrix is the first terminal output; no title or context line appears above
+it. A content-aware symbol key, left-aligned working-hours line, and three direct
+statistic rows follow. The key has no heading and names only Git, filesystem,
+outside-hours, and exact-count categories actually visible in the matrix. There
+is no Summary heading: Events shows the total, Schedule splits it into
+inside/outside, and Calendar independently splits it into weekday/weekend.
+`--verbose` adds scope, period, the full successful coverage status,
+source/record breakdowns, cluster/compression policy, exact collector choices,
+author scope, collection extents, ignore/exclusion policy, and the detailed
+coverage ledger. Use
+`--coverage` for the ledger without the operational details. Partial collection,
+explicit narrowing, unsupported capabilities, and nonzero cropping still appear
+by default as exception notices.
+
+Each ordinary symbol is one activity marker:
+
+- `●` is an inside-hours Git marker, shown in green;
+- `■` is an inside-hours filesystem marker, shown in blue;
+- `○` and `□` are outside-hours Git/filesystem markers, shown in red.
+
+Circle/square still identifies the source and filled/hollow still identifies
+schedule state with `--no-color`, `NO_COLOR`, redirected output, or a non-color
+terminal. When an unusually busy cell cannot fit individual symbols, exact
+tokens such as `●×12` replace that cell; Workfold never substitutes an
+approximate density band.
+
+## Local by design
+
+Collection reads local Git records and current filesystem metadata. It does not
+call GitHub, GitLab, Bitbucket, or another remote service, and it does not start
+a web server. This Astro site is product documentation only; Workfold's MVP
+output is the terminal report.
+
+Continue with [Using Workfold](./guides/usage/) or read
+[Coverage, privacy, and accuracy](./reference/accuracy/). The precise behavior
+contract lives in
+[MVP.md](https://github.com/janthmueller/workfold/blob/main/MVP.md), with staged
+work tracked in
+[PLAN.md](https://github.com/janthmueller/workfold/blob/main/PLAN.md).

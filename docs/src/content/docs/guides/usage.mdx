@@ -1,0 +1,281 @@
+---
+title: Using Workfold
+description: Select local activity, schedules, sources, and terminal detail.
+---
+
+:::note[Alpha surface]
+The terminal behavior below, including the sparse chart, is implemented. The
+CLI remains an alpha surface, so use `workfold --help` for the exact build you
+are running.
+:::
+
+## Default view
+
+```bash
+workfold [PATH ...]
+```
+
+With no path, Workfold uses `.`. For Git collection, a path selects its entire
+containing repository, not a history pathspec. Multiple paths in the same
+repository are deduplicated. If the selected path is not in a repository, use
+`-m fs` or pass a repository path.
+
+The default view selects:
+
+- the current ISO week in the resolved local timezone;
+- the `standard` evidence profile;
+- Git commit records reachable through all local refs;
+- author timestamps from every author;
+- `Mo-Fr 08:00-16:30` as the working schedule;
+- a `1h` sparse cluster window.
+
+`-m/--mode` selects `git`, `fs`, or `all` and defaults to `git`. It is
+independent from `-t/--time`: changing one never changes the other.
+
+Git collection invokes the local `git` executable. It does not fetch, contact a
+remote, or limit history to the currently checked-out branch unless you request
+`--git-commits-from HEAD`.
+
+## Select dates
+
+`-t/--time` defaults to `this-week` and accepts one selector kind at a time:
+
+```bash
+# One ISO week, or a union of repeated weeks
+workfold . -t 2026-W31
+workfold . -t 2026-W30 -t 2026-W31
+
+# Inclusive local calendar dates; either endpoint may be open
+workfold . -t 2026-07-01..2026-07-31
+workfold . -t 2026-01-01..
+workfold . -t ..2026-07-31
+
+# Every available date for the otherwise selected mode/evidence scope
+workfold . -t all
+```
+
+`this-week`, ranges, and `all` occur once. Repetition is reserved for ISO weeks;
+mixing selector kinds is invalid. All selected dates still fold onto one
+Monday-to-Sunday chart. Internally, Workfold converts inclusive calendar choices
+to half-open instant ranges so a boundary event is not counted twice.
+
+## Configure timezone and schedule
+
+Events are converted into the selected IANA timezone before weekday, clock
+time, and schedule classification are derived. This preserves daylight-saving
+rules.
+
+```bash
+workfold . --timezone Europe/Berlin
+workfold . --hours 'Mo-Fr 08:00-16:30'
+workfold . --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
+workfold . --hours 'Mo-Fr 08:00-12:00,13:00-16:30'
+```
+
+Schedule intervals are half-open: the start is inside and the end is outside.
+A weekday accepts either Workfold's two-letter token (`Mo`, `Th`) or its common
+three-letter English alias (`Mon`, `Thu`), case-insensitively. Output is
+normalized to the two-letter form.
+A weekday with no interval is entirely outside. Overnight intervals are not in
+the MVP; express the two sides as clauses on adjacent days.
+
+## Read and tune the sparse chart
+
+The default chart renders only occupied bands in implicit
+`00:00`-toward-`24:00` order; it does not print empty boundary rows. Workfold
+sorts visible events by localized wall-clock time, uses the earliest unassigned
+event as an anchor, assigns every weekday's events in the half-open interval
+`[anchor, anchor + cluster-window)`, and repeats. The anchor never moves when a
+later event joins the band, and an event exactly on the end starts or joins the
+next band. All seven weekday columns share these bands, so rows remain
+comparable. A row label shows its first through last observed event, not the
+entire assignment window. Its endpoint labels always use `HH:MM`; seconds are
+deliberately omitted even for second-level windows or events. Exact seconds and
+nanoseconds remain in normalized provenance and exact outside-event rows.
+
+`--cluster-window` accepts a positive duration below 24 hours. Components use
+`h`, `m`, and `s` in that order without repeating a unit. Whitespace is optional
+between complete components, but a spaced value must be quoted as one CLI
+argument. The default is `1h`; smaller values such as `30s` and `10m` are custom
+views:
+
+```bash
+workfold . --cluster-window 30s
+workfold . --cluster-window 10m
+workfold . --cluster-window 1h
+workfold . --cluster-window 1h5m
+workfold . --cluster-window '1h 5m'
+```
+
+Events are ordered by local wall time, actual instant, canonical source (Git
+before filesystem for simultaneous ties), and stable marker ID; weekdays only
+group those events into columns. Each ordinary event is a symbol: Git uses
+circles, filesystem uses squares,
+inside-hours markers are filled, and outside-hours markers are hollow. Color
+adds green for inside-hours Git, blue for inside-hours filesystem, and red for
+outside-hours events. If a cell is too busy for individual symbols at the
+available width, exact tokens such as `●×12 ■×4 ○×2` replace only that
+cell; they are counts, not density estimates. Empty bands are always omitted,
+and a gap of at least one hour between consecutive observed cluster endpoints
+gets one dim duration cue.
+
+Terminal output starts directly with the matrix; there is no title or context
+subtitle above it. A content-aware symbol key follows without a heading. It
+names only categories actually visible after display cropping and explains
+`×N` only when exact-count tokens occur. The configured schedule follows on an
+independent left-aligned `Working hours:` line. Three statistic rows then appear
+without a Summary heading: Events is the common total, Schedule is its
+inside/outside split, and Calendar is its independent weekday/weekend split.
+Both split rows show counts and percentages of Events; a weekend event can also
+be outside the schedule. Use `--verbose` for scope, period, the complete successful
+coverage wording, source/record breakdowns, cluster/compression policy, exact
+collector selection, author scope, collection extents, ignore/exclusion policy,
+and the detailed coverage ledger. Use `--coverage` for the ledger without those
+verbose details. Partial collection, explicit narrowing, unsupported
+capabilities, and nonzero cropping remain visible by default as exception
+notices.
+
+`--display-hours` crops chart rows only. It does not change classification:
+
+```bash
+workfold . --hours 'Mo-Fr 08:00-16:30' --display-hours '06:00-22:00'
+```
+
+A compact notice after the summary reports nonzero event counts hidden before or
+at/after an explicit half-open crop; zero-valued crop notices are omitted.
+Cropping happens before clustering and the requested bounds are not rounded, so
+a marker at the start is visible and one exactly at the end is hidden.
+
+## Inspect Git evidence
+
+The Git source has independent record, granularity, timestamp-role, reachability,
+and identity choices:
+
+```bash
+workfold . -m git --git-records commit
+workfold . -m git --git-records file-change
+workfold . -m git --git-records commit,file-change
+workfold . --git-commit-times author
+workfold . --git-commit-times committer
+workfold . --git-commit-times author,committer
+workfold . --git-records tag
+workfold . --git-records reflog
+workfold . --git-records commit,tag,reflog
+workfold . --git-commits-from HEAD
+workfold . --git-commits-from all-local-refs
+workfold . --author 'Ada' --author 'ada@example.com'
+```
+
+Repeated author filters match names or email addresses with OR semantics. With
+no filter, all authors are included. Author and committer observations at an
+identical instant on the same commit may share one plotted marker, while both
+roles remain present in provenance and coverage.
+
+Annotated tags carry tagger timestamps; lightweight tags have no independent
+tagger time. Reflogs are local and may be disabled or expired. Git stores tree
+snapshots, not human file-change actions: Workfold derives each change from the
+commit-versus-first-parent tree difference (or root-versus-empty tree), uses
+Git's reported change kind, and preserves renames when Git reports one.
+
+## Inspect filesystem evidence
+
+Filesystem mode scans current metadata rather than reconstructing editing
+history:
+
+```bash
+workfold . -m fs --fs-times birth,modified
+workfold . -m fs --fs-times metadata-changed,accessed
+workfold . -m fs --fs-entries file,directory
+workfold . -m fs -p full
+workfold . -m all
+```
+
+Timestamp labels are deliberately precise:
+
+- `birth` uses a real birth/creation time only where available; on Linux,
+  Workfold requests `STATX_BTIME` through `statx`;
+- `modified` is mtime;
+- `metadata-changed` is POSIX metadata-change ctime, never creation time;
+- `accessed` is atime and is labeled potentially unreliable.
+
+Regular files are scanned by default. `--fs-entries` accepts a comma-separated
+combination of `file`, `directory`, and `symlink`. Symlink targets are not
+followed, including by Linux birth-time reads, and raw `.git/` internals are
+always excluded. A filesystem that does not return birth time is reported as
+unavailable rather than receiving a fabricated ctime value. In a Git worktree,
+standard Git ignore semantics are respected by default:
+
+```bash
+workfold . -m fs --respect-gitignore
+workfold . -m fs --include-ignored
+workfold . -m fs --exclude node_modules --exclude '*.log'
+```
+
+Tracked files remain included even if a current ignore pattern matches them.
+Explicit exclusions are applied after discovery and always win.
+
+## Choose an evidence profile
+
+```bash
+workfold . -p standard
+workfold . -t all -m git -p portable
+workfold . -t all -m all -p full
+workfold . -t 2026-W31 -m fs -p full
+```
+
+`-p/--profile` defaults to `standard`, which uses the ordinary granular
+evidence selectors and their defaults. The `portable` profile is Git-only and
+selects timestamps stored in Git objects: commit
+author and committer times from all local refs plus annotated-tag tagger times.
+Lightweight tags have no tagger time and remain explicitly unavailable. It
+excludes derived file-change events, local reflogs, and filesystem metadata.
+Portable evidence does not describe remote publication state: Workfold neither
+contacts a remote nor infers when an object was pushed.
+
+The `full` profile selects every supported evidence kind only within the
+existing time and mode. It never implies `-t all` or `-m all`. In Git mode it
+enables commit, file-change, tag, and reflog records, both commit times, and all
+local refs. In filesystem mode it enables all timestamp/entry kinds and ignored
+entries. It changes collection scope only and does not enable detailed ledger
+output.
+
+Portable and full are locked profiles and reject granular selectors that would
+redefine them. `--author` and, when filesystem mode is enabled, repeatable
+`--exclude` may narrow a locked profile. The default coverage exception reports
+active author filtering and/or explicit exclusions, while verbose Scope shows
+mode plus profile and the remaining verbose details list the filter values.
+
+## Control terminal detail
+
+```bash
+workfold . --cluster-window 30s
+workfold . --cluster-window 10m
+workfold . --cluster-window 1h
+workfold . --cluster-window 1h5m
+workfold . --cluster-window '1h 5m'
+workfold . --no-color
+NO_COLOR=1 workfold .
+workfold . --list-outside --limit 50
+workfold . --coverage
+workfold . --strict
+workfold . --verbose
+```
+
+With color disabled, circle/square still identifies Git/filesystem and
+filled/hollow still identifies inside/outside hours; no `G`, `F`, `M`, density,
+or color-only distinction is required.
+
+`--verbose` appends operational details after the compact summary: cluster and
+compression policy, Scope (mode plus profile), Period (range plus timezone), the
+full Coverage status, source/record breakdowns, exact Git/filesystem collector
+selection, author scope, resolved repositories/roots, and filesystem
+ignore/exclusion policy. It does not change the matrix, compact totals, or
+coverage result, and it also appends the detailed accounting ledger.
+`--coverage` prints that same ledger without the verbose context/operational
+block. Neither output flag changes collection scope, and the `full` profile
+enables neither one implicitly.
+
+The outside list is chronological and bounded. `--strict` returns a non-zero
+status for partial traversal, parsing, or permission failures instead of
+accepting a useful-but-partial report. Unsupported platform capabilities remain
+visible and are never replaced with invented timestamps.

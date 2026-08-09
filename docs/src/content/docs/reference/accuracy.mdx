@@ -1,0 +1,127 @@
+---
+title: Coverage, privacy, and accuracy
+description: Understand what Workfold can account for and what timestamps prove.
+---
+
+## What an event means
+
+A Workfold event is a discrete activity marker derived from a timestamp that is
+still discoverable in the requested local sources. It is evidence that a record
+has that timestamp; it is not proof of continuous work before or after it.
+
+Workfold does not estimate hours worked, billable time, focus, or productivity.
+Its within/outside percentages count classifiable activity markers, not time
+duration.
+
+## The completeness boundary
+
+The central invariant is that every timestamp slot requested from every record
+discovered in scope must end in an accounted state. A timestamp is:
+
+- captured and included;
+- captured and removed by the date, identity, ignore, or explicit filter;
+- unavailable on the individual record;
+- unsupported by the platform/filesystem; or
+- unreadable because collection, parsing, traversal, or metadata access failed.
+
+Workfold therefore uses qualified wording such as:
+
+> complete for all discoverable timestamps in the requested scope
+
+That scope includes paths, the time selector, mode, evidence profile, record and
+timestamp kinds, commit reachability, authors, filesystem ignore policy,
+explicit exclusions, and platform capabilities. `--coverage` prints the
+detailed ledger without operational details; `--verbose` prints operational
+details, the full successful coverage status, and that ledger. The `full`
+profile changes collection scope only and does not imply either report-detail
+flag.
+
+Default output omits the ordinary complete status, but it must show a compact
+coverage exception for active author filtering, explicit exclusions,
+unsupported capabilities, partial collection, or collection errors. The
+verbose Scope fact combines mode and profile, such as `Git · portable`, while
+the full Coverage fact stays focused on completeness.
+
+The ledger keeps three conservation checks separate:
+
+1. discovered source records end as eligible or an explicit record-level
+   disposition;
+2. requested timestamp slots end as captured, unavailable, unsupported, or
+   errored;
+3. captured observations end as included or filtered, and included observations
+   end as plotted or explicitly coalesced.
+
+Records, timestamp observations, and plotted events are different totals. For
+example, one commit with identical author and committer instants can produce two
+captured observations but one marker, with both roles preserved.
+
+Sparse chart layout does not change this accounting. Empty wall-clock bands are
+omitted because they contain no selected markers, not because collection skipped
+them. Ordinary cells show one symbol per activity marker. If the terminal is too
+narrow for that representation, a cell switches to exact per-symbol `×N` counts;
+the underlying markers, source/schedule totals, and coverage ledger are unchanged.
+Chart band labels deliberately use minute-only `HH:MM` endpoints, including for
+second-level events and cluster windows. This display choice does not round or
+overwrite the normalized instant: exact seconds and available nanoseconds remain
+in provenance and exact outside-event listings.
+
+## Source-specific limitations
+
+### Git
+
+- Author and committer dates can differ, be manually assigned, and be rewritten.
+- File changes are derived from first-parent tree differences, not stored human
+  actions; root commits are compared with an empty tree.
+- Annotated tags may have independent tagger dates; lightweight tags do not.
+- Reflogs are machine-local, optional, and subject to expiration.
+- The portable profile means timestamps stored in commit and annotated-tag
+  objects. It does not prove when an object was pushed or published, and
+  Workfold does not contact a remote to guess.
+- Git file creation means first recorded addition in selected reachable history,
+  not operating-system creation.
+- A deleted untracked file leaves no Git evidence.
+
+### Filesystem
+
+- A scan sees only the current metadata snapshot, not earlier values.
+- Copying, checkout, archive extraction, formatting, and builds may alter times.
+- Creation/birth time is not exposed by every operating system or filesystem.
+  On Linux, Workfold requests `STATX_BTIME` through libc `statx`; the individual
+  slot remains unavailable when the filesystem does not return that mask bit.
+- POSIX ctime means inode/status metadata change; it is never labeled creation.
+- Atime may be disabled, delayed by `relatime`, or changed by another read.
+- Deleted untracked entries and earlier mutable metadata values are
+  unrecoverable. Unsaved and past uncommitted edit sessions cannot be
+  reconstructed without a watcher, which is outside the MVP.
+
+Collection is not an atomic snapshot. A repository or tree changing during a
+run can produce partial coverage; Workfold reports detected failures but does
+not lock the user's working tree.
+
+## Privacy and security
+
+The collection pipeline is local:
+
+- Git is invoked without fetching or contacting remote hosting APIs;
+- filesystem scans do not read arbitrary date-like text from file contents;
+- no telemetry, persistent activity database, background watcher, or web server
+  belongs to the MVP;
+- terminal-facing repository text is sanitized before rendering.
+
+Reports can still contain local paths, author identities, commit subjects,
+reflog messages, and filenames. Review output before sharing it.
+
+## Errors and strict mode
+
+Invalid option combinations and invalid dates, schedules, or timezones are
+usage errors. If some selected targets succeed while another read fails, a
+normal multi-target run may render useful output with a prominent `partial`
+coverage status and diagnostics.
+
+Use `--strict` when partial evidence must fail automation. It makes traversal,
+subprocess, parsing, permission, and metadata-read errors return a non-zero exit
+status. A platform-wide unsupported timestamp kind is reported as unsupported,
+not fabricated and not silently counted as captured.
+
+For the exact accounting contract, see the
+[MVP specification](https://github.com/janthmueller/workfold/blob/main/MVP.md).
