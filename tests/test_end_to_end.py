@@ -22,7 +22,12 @@ def _git_date(value: datetime) -> str:
 
 def _set_times(path: Path, value: datetime) -> None:
     instant_ns = int(value.timestamp()) * 1_000_000_000
-    os.utime(path, ns=(instant_ns, instant_ns), follow_symlinks=False)
+    try:
+        os.utime(path, ns=(instant_ns, instant_ns), follow_symlinks=False)
+    except NotImplementedError:
+        # These fixtures are regular files; Windows does not expose the
+        # no-follow variant even though setting their timestamps is supported.
+        os.utime(path, ns=(instant_ns, instant_ns))
 
 
 def _assert_summary_count(rendered: str, label: str, count: int) -> None:

@@ -406,6 +406,13 @@ def read_semantic_reflog(path: Path, *, repository: GitRepository) -> tuple[byte
                 "Git resolved a reflog outside its repository metadata directories",
                 path=path,
             )
+        resolved_snapshot = os.lstat(resolved)
+        if not stat.S_ISREG(resolved_snapshot.st_mode):
+            raise GitReflogReadError(
+                "invalid_git_reflog_file",
+                "Git resolved a reflog that is not a regular file",
+                path=resolved,
+            )
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         descriptor = os.open(resolved, flags)

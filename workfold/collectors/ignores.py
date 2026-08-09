@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Final
 
-from pathspec import PathSpec
+from pathspec import GitIgnoreSpec
 
 from workfold.provenance import lexical_absolute
 
@@ -66,7 +66,7 @@ class ExplicitExcluder:
     """Match the non-negating Git-wildmatch subset used by ``--exclude``."""
 
     patterns: tuple[str, ...]
-    _spec: PathSpec
+    _spec: GitIgnoreSpec
 
     @classmethod
     def compile(cls, patterns: Sequence[str]) -> ExplicitExcluder:
@@ -80,7 +80,7 @@ class ExplicitExcluder:
                 raise ExclusionPatternError(f"negated --exclude patterns are not supported: {pattern!r}")
             if "\0" in pattern:
                 raise ExclusionPatternError("explicit exclusion patterns cannot contain NUL bytes")
-        return cls(normalized, PathSpec.from_lines("gitwildmatch", normalized))
+        return cls(normalized, GitIgnoreSpec.from_lines(normalized))
 
     def matches(self, relative_path: PurePosixPath | str, *, is_directory: bool) -> bool:
         """Return whether a root-relative path is explicitly excluded."""

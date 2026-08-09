@@ -436,8 +436,15 @@ def test_include_ignored_is_an_explicit_complete_policy_even_without_git(tmp_pat
 def test_unsupported_unavailable_and_error_timestamp_slots_reconcile(tmp_path: Path) -> None:
     unavailable_path = tmp_path / "unavailable"
     unavailable_path.write_text("work", encoding="utf-8")
+    missing_birth = cast(os.stat_result, type("MissingBirthStat", (), {"st_mode": stat.S_IFREG})())
+
+    def missing_birth_lstat(path: Path) -> os.stat_result:
+        assert path == unavailable_path
+        return missing_birth
+
     unavailable = FilesystemCollector(
-        timestamp_adapter=FilesystemTimestampAdapter(platform_name="darwin", created_supported=True)
+        timestamp_adapter=FilesystemTimestampAdapter(platform_name="darwin", created_supported=True),
+        lstat_reader=missing_birth_lstat,
     ).collect(
         (unavailable_path,),
         timestamp_kinds=(TimestampKind.FS_CREATED,),

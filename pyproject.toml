@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
-    "pathspec>=0.12,<2",
+    "pathspec>=1,<2",
     "rich>=14,<15",
     "tzdata>=2025.2; sys_platform == 'win32'",
     "tzlocal>=5,<6",

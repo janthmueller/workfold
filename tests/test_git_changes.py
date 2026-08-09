@@ -156,6 +156,7 @@ def test_merge_is_compared_only_against_its_first_parent(tmp_path: Path) -> None
     assert result.changes[0].diff_basis == first_parent
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows paths cannot represent arbitrary undecodable bytes")
 def test_paths_are_nul_safe_and_preserve_undecodable_bytes(tmp_path: Path) -> None:
     repo = GitRepo.create(tmp_path / "bytes")
     raw_name = b"tab\tline\ninvalid-\xff.txt"

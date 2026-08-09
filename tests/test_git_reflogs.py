@@ -137,6 +137,7 @@ def test_collects_all_available_namespaces_with_exact_raw_provenance(tmp_path: P
     assert custom_observation.origin.target_id == first
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows directory names cannot contain newlines")
 def test_collects_reflogs_from_repository_path_containing_newline(tmp_path: Path) -> None:
     repo = GitRepo.create(tmp_path / "reflog\nrepository")
     repo.commit(
@@ -354,7 +355,7 @@ def test_raw_parser_preserves_bytes_selectors_duplicates_and_messages() -> None:
     assert newest.raw_message == b"message\twith tab\xff"
     assert newest.duplicate_ordinal == 1
     assert oldest.duplicate_ordinal == 0
-    assert os.fsencode(newest.actor_name) == b"Name-\xff"
+    assert newest.actor_name.encode("utf-8", errors="surrogateescape") == b"Name-\xff"
 
 
 def test_raw_parser_accepts_empty_log_and_message_without_tab() -> None:
@@ -525,7 +526,7 @@ def test_semantic_reflog_reader_rejects_a_symlink_swap_before_open(
     with pytest.raises(GitReflogReadError) as error:
         read_semantic_reflog(reflog, repository=repository)
 
-    assert error.value.code == "git_reflog_read_error"
+    assert error.value.code == "invalid_git_reflog_file"
 
 
 @pytest.mark.parametrize(

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
+from io import BytesIO, TextIOWrapper
 from pathlib import Path
 
 import pytest
-from workfold.cli import build_parser, main
+from workfold.cli import build_parser, configure_windows_stdio, main
 
 from support.git_repo import GitRepo
 
@@ -44,6 +45,17 @@ def test_cli_reports_version(capsys: pytest.CaptureFixture[str]) -> None:
 
     assert error.value.code == 0
     assert capsys.readouterr().out.startswith("workfold ")
+
+
+@pytest.mark.parametrize(("platform_name", "expected_encoding"), [("win32", "utf-8"), ("linux", "cp1252")])
+def test_cli_configures_utf8_output_only_on_windows(platform_name: str, expected_encoding: str) -> None:
+    stream = TextIOWrapper(BytesIO(), encoding="cp1252", errors="strict")
+
+    configure_windows_stdio((stream,), platform_name=platform_name)
+
+    assert stream.encoding.casefold() == expected_encoding
+    assert stream.errors == ("backslashreplace" if platform_name == "win32" else "strict")
+    stream.close()
 
 
 def test_help_exposes_the_accuracy_and_privacy_notes() -> None:

@@ -100,9 +100,16 @@ class FilesystemTimestampAdapter:
         if kind is TimestampKind.FS_CREATED:
             if self.created_supported is not None:
                 return self.created_supported
-            if self.is_windows or _stat_result_has("st_birthtime_ns") or _stat_result_has("st_birthtime"):
+            if self.is_windows:
                 return True
-            return self.is_linux and self.linux_birthtime_reader is not None and self.linux_birthtime_reader.available
+            if self.is_linux:
+                python_exposes_birthtime = self.platform_name == sys.platform and (
+                    _stat_result_has("st_birthtime_ns") or _stat_result_has("st_birthtime")
+                )
+                return python_exposes_birthtime or (
+                    self.linux_birthtime_reader is not None and self.linux_birthtime_reader.available
+                )
+            return _stat_result_has("st_birthtime_ns") or _stat_result_has("st_birthtime")
         if kind is TimestampKind.FS_METADATA_CHANGED:
             if self.metadata_changed_supported is not None:
                 return self.metadata_changed_supported
@@ -170,6 +177,8 @@ class FilesystemTimestampAdapter:
     def _uses_linux_statx(self, snapshot: object | None = None) -> bool:
         if not self.is_linux:
             return False
+        if snapshot is None and self.platform_name != sys.platform:
+            return True
         target = os.stat_result if snapshot is None else snapshot
         return not hasattr(target, "st_birthtime_ns") and not hasattr(target, "st_birthtime")
 

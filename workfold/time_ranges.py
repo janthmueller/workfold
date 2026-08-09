@@ -116,7 +116,7 @@ def resolve_timezone(name: str) -> ZoneInfo:
         raise TimeRangeError("timezone name must not be empty")
     try:
         return ZoneInfo(normalized)
-    except (ValueError, ZoneInfoNotFoundError) as error:
+    except (OSError, ValueError, ZoneInfoNotFoundError) as error:
         raise TimeRangeError(f"unknown IANA timezone: {name}") from error
 
 

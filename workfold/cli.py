@@ -5,11 +5,25 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
-from typing import NoReturn
+from typing import NoReturn, Protocol, TextIO, cast
 
 from workfold import __version__
 from workfold.config import RawOptions, UsageError, options_from_namespace
 from workfold.sanitization import sanitize_terminal_text
+
+
+class _ReconfigurableTextIO(Protocol):
+    def reconfigure(self, *, encoding: str | None = None, errors: str | None = None) -> None: ...
+
+
+def configure_windows_stdio(streams: Sequence[TextIO], *, platform_name: str) -> None:
+    """Keep Unicode chart symbols usable in Windows consoles and redirects."""
+
+    if platform_name != "win32":
+        return
+    for stream in streams:
+        if hasattr(stream, "reconfigure"):
+            cast(_ReconfigurableTextIO, stream).reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
 class SafeArgumentParser(argparse.ArgumentParser):
@@ -177,6 +191,7 @@ def parse_options(argv: Sequence[str] | None = None) -> RawOptions:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the command-line interface."""
+    configure_windows_stdio((sys.stdout, sys.stderr), platform_name=sys.platform)
     try:
         options = parse_options(argv)
         from workfold.application import run

@@ -176,6 +176,7 @@ def test_collector_resolves_whole_repository_and_preserves_raw_dates(tmp_path: P
         result.commits[0].to_observation(TimestampKind.GIT_REFLOG)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows directory names cannot contain newlines")
 def test_collector_preserves_repository_paths_containing_newlines(tmp_path: Path) -> None:
     repo = GitRepo.create(tmp_path / "repo\nwith-newline")
     commit_id = repo.commit(

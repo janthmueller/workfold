@@ -187,7 +187,7 @@ def test_standard_git_ignore_semantics_include_nested_info_global_and_tracked_ru
     global_excludes = tmp_path / "global-excludes"
     global_excludes.write_text("*.cache\n", encoding="utf-8")
     global_config = tmp_path / "global-config"
-    global_config.write_text(f"[core]\n\texcludesFile = {global_excludes}\n", encoding="utf-8")
+    global_config.write_text(f"[core]\n\texcludesFile = {global_excludes.as_posix()}\n", encoding="utf-8")
 
     paths = {
         name: repo.path / name

@@ -66,7 +66,7 @@ jobs:
           git -C "$FIXTURE" add work.txt
           GIT_AUTHOR_DATE="2026-08-03T10:00:00+02:00" GIT_COMMITTER_DATE="2026-08-03T10:00:00+02:00" git -C "$FIXTURE" commit -m "fixture activity"
           wheel-smoke/bin/workfold "$FIXTURE" --time all --timezone Europe/Berlin --no-color > wheel-report.txt
-          grep -Eq '^Events[[:space:]]+1[[:space:]]' wheel-report.txt
+          grep -Eq '^Events[[:space:]]+1[[:space:]]*$' wheel-report.txt
 
   binaries:
     uses: ./.github/workflows/binaries.yml
