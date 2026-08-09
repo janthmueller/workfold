@@ -52,7 +52,8 @@ The three main selectors are independent:
 | `-m`, `--mode` | Evidence source | `git`, `fs`, `all` |
 | `-p`, `--profile` | Collection depth | `standard`, `portable`, `full` |
 
-- `standard` uses the fast defaults for the selected mode.
+- `standard` uses commit author dates for Git and birth/modified dates for
+  regular files, while respecting Git ignore rules.
 - `portable` uses commit author/committer and annotated-tag timestamps stored in
   Git objects; it excludes local reflogs and filesystem metadata.
 - `full` enables every supported evidence kind inside the selected time and
