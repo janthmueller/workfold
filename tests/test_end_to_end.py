@@ -247,15 +247,16 @@ def test_full_all_mode_collects_all_record_families_and_reports_capabilities(
     assert "Git reflog entries discovered:" in rendered
     assert "filesystem entries discovered:" in rendered
     assert "Git tagger captured: 1" in rendered
-    assert "filesystem creation/birth time:" in rendered
+    assert "filesystem created captured:" in rendered
     assert "explicitly excluded=1" in rendered
     assert "Coverage details:" in rendered
     assert "Details\n" not in rendered
     assert not re.search(r"^(?:Scope|Period|Breakdown)\b", rendered, re.MULTILINE)
-    if "filesystem creation/birth time: unsupported" in rendered:
+    if "filesystem creation/birth time:" in rendered:
         normalized = " ".join(rendered.split())
-        assert "filesystem creation/birth time unavailable:" in normalized
-        assert "unsupported capability result" not in rendered
+        if "filesystem creation/birth time: unsupported" in normalized:
+            assert "filesystem creation/birth time unavailable:" in normalized
+            assert "unsupported capability result" not in rendered
 
 
 def test_portable_collects_only_git_object_timestamp_evidence(tmp_path: Path) -> None:

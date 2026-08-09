@@ -88,7 +88,7 @@ jobs:
           NO_COLOR=1 "$BINARY" "$FIXTURE" --mode all --time all --fs-times modified --timezone Europe/Berlin --strict --coverage > combined-report.txt
           grep -Eq '^Events[[:space:]]+2[[:space:]]*$' combined-report.txt
           grep -F "Git commits discovered: 1" combined-report.txt
-          grep -F "filesystem entries discovered: 1" combined-report.txt
+          grep -F "filesystem entries discovered: 3; eligible=1" combined-report.txt
           python -c 'from pathlib import Path; assert b"\x1b" not in Path("combined-report.txt").read_bytes()'
           test -f dist/workfold/LICENSE
           test -f dist/workfold/README.md
