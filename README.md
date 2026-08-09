@@ -1,4 +1,7 @@
 # Workfold
+[![PyPI Latest Release](https://img.shields.io/pypi/v/workfold.svg)](https://pypi.org/project/workfold/)
+[![Pepy Total Downloads](https://img.shields.io/pepy/dt/workfold)](https://pepy.tech/project/workfold)
+[![GitHub License](https://img.shields.io/github/license/janthmueller/workfold)](https://github.com/janthmueller/workfold/blob/main/LICENSE)
 
 Workfold folds local Git and filesystem timestamps onto one representative
 Monday-to-Sunday week. It highlights activity outside your intended working
