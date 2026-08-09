@@ -10,7 +10,6 @@ on:
 permissions:
   actions: read
   contents: write
-  id-token: write
 
 concurrency:
   group: release-main
@@ -56,9 +55,9 @@ jobs:
     needs: guard
     if: needs.guard.outputs.should_release == 'true'
     runs-on: ubuntu-latest
-    environment: pypi
     outputs:
-      tag: ${{ steps.release_tag.outputs.tag }}
+      released: ${{ steps.release_state.outputs.released }}
+      tag: ${{ steps.release_state.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -82,20 +81,52 @@ jobs:
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
         run: semantic-release version --as-prerelease --prerelease-token alpha
-      - name: Resolve release tag
-        id: release_tag
-        run: echo "tag=$(git describe --tags --abbrev=0)" >> "$GITHUB_OUTPUT"
-      - run: python -m twine check dist/*
+      - name: Detect release
+        id: release_state
+        shell: bash
+        run: |
+          if [[ -d dist ]] && compgen -G "dist/*" > /dev/null; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$(git describe --tags --abbrev=0)" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "No new release artifacts were produced; skipping publish jobs."
+          fi
+      - if: steps.release_state.outputs.released == 'true'
+        run: python -m twine check dist/*
+      - name: Preserve Python distributions
+        if: steps.release_state.outputs.released == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-distributions
+          path: dist/
+          if-no-files-found: error
       - name: Publish GitHub release
+        if: steps.release_state.outputs.released == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: semantic-release publish
+
+  pypi:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-distributions
+          path: dist/
       - uses: pypa/gh-action-pypi-publish@v1.13.0
         with:
           skip-existing: true
 
   binaries:
-    needs: release
+    needs: [release, pypi]
+    if: needs.release.outputs.released == 'true' && needs.pypi.result == 'success'
     uses: ./.github/workflows/binaries.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
