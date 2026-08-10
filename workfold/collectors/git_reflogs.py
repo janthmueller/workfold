@@ -48,6 +48,7 @@ _PER_WORKTREE_REF_PREFIXES: Final[tuple[str, ...]] = (
 
 _DEFAULT_READ_SEMANTIC_REFLOG = read_semantic_reflog
 
+
 def _command_diagnostic(
     error: GitCommandError,
     *,

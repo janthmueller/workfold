@@ -368,7 +368,6 @@ class FilesystemCollector:
             retain_entry(entries, item.origin, disposition)
 
 
-
 __all__ = [
     "CollectedFilesystemEntry",
     "DirectorySafetyError",

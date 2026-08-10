@@ -25,6 +25,7 @@ _STATX_BUFFER_SIZE: Final[int] = 0x100
 
 
 class _StatxTimestamp(ctypes.Structure):
+    _layout_ = "ms"
     _pack_ = 1
     _fields_ = [
         ("tv_sec", ctypes.c_int64),
@@ -37,6 +38,7 @@ class _Statx(ctypes.Structure):
     # Linux's UAPI fixes this structure at 0x100 bytes. The explicit padding
     # keeps the binding independent of libc headers while retaining the exact
     # offsets of every field Workfold reads.
+    _layout_ = "ms"
     _pack_ = 1
     _fields_ = [
         ("stx_mask", ctypes.c_uint32),

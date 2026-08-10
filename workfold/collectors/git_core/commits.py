@@ -299,7 +299,9 @@ def _collect_repository_commits(
                 discovered += len(object_ids)
                 input_data = b"".join(object_id.encode("ascii") + b"\n" for object_id in object_ids)
                 try:
-                    batch_output = runner.run(("cat-file", "--batch"), cwd=repository.root, input_data=input_data).stdout
+                    batch_output = runner.run(
+                        ("cat-file", "--batch"), cwd=repository.root, input_data=input_data
+                    ).stdout
                     batch = parse_cat_file_batch(batch_output, object_ids)
                 except GitCommandError as error:
                     diagnostics.append(command_diagnostic(error, stage="git_object_read", target=repository.root))

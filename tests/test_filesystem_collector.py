@@ -202,16 +202,26 @@ def test_git_inventory_restricts_candidates_to_literal_selected_subdirectory(tmp
     (repo.path / ".gitignore").write_text("*.tmp\n", encoding="utf-8")
     inside = selected / "inside.txt"
     inside.write_text("inside", encoding="utf-8")
-    unusual = selected / "line\nbreak.txt"
-    unusual.write_text("unusual", encoding="utf-8")
     (selected / "ignored.tmp").write_text("ignored", encoding="utf-8")
     (repo.path / "outside.txt").write_text("outside", encoding="utf-8")
 
     result = FilesystemCollector().collect((selected,), timestamp_kinds=FS_MODIFIED)
 
-    assert {item.path for item in result.eligible_origins} == {inside, unusual}
+    assert {item.path for item in result.eligible_origins} == {inside}
     assert result.accounting.records[0].ignored == 1
     assert all(item.origin.repository_or_root == selected for item in result.entries)
+    assert not result.diagnostics
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows filenames cannot contain newlines")
+def test_git_inventory_preserves_newlines_in_paths(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    unusual = repo.path / "line\nbreak.txt"
+    unusual.write_text("unusual", encoding="utf-8")
+
+    result = FilesystemCollector().collect((repo.path,), timestamp_kinds=FS_MODIFIED)
+
+    assert unusual in {item.path for item in result.eligible_origins}
     assert not result.diagnostics
 
 
@@ -874,13 +884,21 @@ def test_queued_directory_replaced_by_symlink_cannot_escape_scan_root(tmp_path: 
     displaced = root / "displaced"
     swapped = False
 
-    def swapping_scandir(path: Path) -> AbstractContextManager[Iterator[os.DirEntry[str]]]:
+    @contextmanager
+    def swapping_scandir(path: Path) -> Generator[Iterator[os.DirEntry[str]], None, None]:
         nonlocal swapped
         if path == trigger and not swapped:
             escape.rename(displaced)
             escape.symlink_to(outside, target_is_directory=True)
             swapped = True
-        return scandir_no_follow(path)
+        with scandir_no_follow(path) as iterator:
+            if path == root:
+                # Traversal uses a LIFO directory stack. Fix the root order so
+                # the trigger is visited before the queued escape directory on
+                # every filesystem instead of relying on os.scandir ordering.
+                yield iter(sorted(iterator, key=lambda item: item.name))
+            else:
+                yield iterator
 
     result = FilesystemCollector(scandir_reader=swapping_scandir).collect(
         (root,),

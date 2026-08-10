@@ -161,7 +161,10 @@ class AggregationBuilder:
             retained_outside_markers=retained_outside,
             outside_marker_count=self._outside_marker_count,
         )
-        if aggregation.displayed_event_count + self._hidden_before_total + self._hidden_after_total != self._event_count:
+        if (
+            aggregation.displayed_event_count + self._hidden_before_total + self._hidden_after_total
+            != self._event_count
+        ):
             raise RuntimeError("displayed and hidden marker totals do not reconcile")
         return aggregation
 

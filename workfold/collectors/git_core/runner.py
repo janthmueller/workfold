@@ -180,7 +180,11 @@ class GitRunner:
     ) -> Iterator[bytes]:
         """Yield stdout records without retaining an unbounded Git response."""
 
-        if self._process_runner is not subprocess.run or type(self).run is not GitRunner.run or self._timeout is not None:
+        if (
+            self._process_runner is not subprocess.run
+            or type(self).run is not GitRunner.run
+            or self._timeout is not None
+        ):
             yield from self.run(arguments, cwd=cwd, allowed_returncodes=allowed_returncodes).stdout.splitlines(
                 keepends=True
             )

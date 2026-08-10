@@ -115,7 +115,11 @@ class GitIgnoreRunner:
     ) -> bytes:
         """Feed bounded stdout chunks to *consumer* and return bounded stderr."""
 
-        if self._process_runner is not subprocess.run or type(self).run is not GitIgnoreRunner.run or self._timeout is not None:
+        if (
+            self._process_runner is not subprocess.run
+            or type(self).run is not GitIgnoreRunner.run
+            or self._timeout is not None
+        ):
             completed = self.run(arguments, cwd=cwd, allowed_returncodes=allowed_returncodes)
             consumer(completed.stdout)
             return completed.stderr[: self._stderr_limit]

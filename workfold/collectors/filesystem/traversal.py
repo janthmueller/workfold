@@ -154,7 +154,9 @@ def discover_entries(
 
                         candidate_type = entry_type(snapshot.st_mode)
                         candidate_origin = origin(root, path, candidate_type)
-                        relative = PurePosixPath(name) if directory_relative == root_relative else directory_relative / name
+                        relative = (
+                            PurePosixPath(name) if directory_relative == root_relative else directory_relative / name
+                        )
                         relative_text = relative.as_posix()
                         inventory_ignored = relative_text in inventory_ignored_paths
                         if inventory_ignored:

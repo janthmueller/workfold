@@ -27,8 +27,7 @@ def open_semantic_reflog(path: Path, *, repository: GitRepository) -> tuple[int,
     try:
         resolved = path.resolve(strict=True)
         allowed_roots = tuple(
-            root.resolve(strict=True)
-            for root in dict.fromkeys((repository.git_dir, repository.common_dir))
+            root.resolve(strict=True) for root in dict.fromkeys((repository.git_dir, repository.common_dir))
         )
         if not any(_is_within(resolved, root) for root in allowed_roots):
             raise GitReflogReadError(

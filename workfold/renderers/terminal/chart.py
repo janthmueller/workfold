@@ -36,7 +36,9 @@ def render_chart(report: Report, options: TerminalOptions) -> Iterable[Text]:
     yield header
 
     if not aggregation.clusters:
-        message = "No events in the displayed time range." if aggregation.event_count else "No events in selected scope."
+        message = (
+            "No events in the displayed time range." if aggregation.event_count else "No events in selected scope."
+        )
         yield Text(message, style="dim")
         return
 
@@ -143,8 +145,10 @@ def _cluster_lines(cluster: TimeCluster, *, label: str, time_width: int, day_wid
     rendered: list[Text] = []
     for line_index in range(height):
         time_label = label if line_index == 0 else "↳"
-        line = Text(pad_right(time_label, time_width)) if line_index == 0 else Text(
-            pad_right(time_label, time_width), style="dim"
+        line = (
+            Text(pad_right(time_label, time_width))
+            if line_index == 0
+            else Text(pad_right(time_label, time_width), style="dim")
         )
         for cell_lines in cells:
             line.append(" ")
