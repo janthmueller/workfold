@@ -4,13 +4,19 @@ import pytest
 from workfold.collectors.base import CollectorDiagnostic, DiagnosticBuffer, DiagnosticSeverity
 
 
-def _diagnostic(index: int, severity: DiagnosticSeverity) -> CollectorDiagnostic:
+def _diagnostic(
+    index: int,
+    severity: DiagnosticSeverity,
+    *,
+    affects_completeness: bool = False,
+) -> CollectorDiagnostic:
     return CollectorDiagnostic(
         code=f"failure_{index}",
         stage="fixture",
         target=f"target-{index}",
         message=f"failure {index}",
         severity=severity,
+        affects_completeness=affects_completeness,
     )
 
 
@@ -46,3 +52,15 @@ def test_diagnostic_buffer_validates_its_limit_and_omits_no_summary_when_complet
 
     assert diagnostics.snapshot() == (diagnostic,)
     assert diagnostics.error_count == 0
+
+
+def test_diagnostic_buffer_preserves_completeness_impact_when_sample_is_truncated() -> None:
+    diagnostics = DiagnosticBuffer(limit=1)
+    diagnostics.append(_diagnostic(1, DiagnosticSeverity.INFO))
+    diagnostics.append(_diagnostic(2, DiagnosticSeverity.WARNING, affects_completeness=True))
+
+    summary = diagnostics.snapshot()[-1]
+
+    assert summary.code == "diagnostics_truncated"
+    assert summary.severity is DiagnosticSeverity.WARNING
+    assert summary.affects_completeness

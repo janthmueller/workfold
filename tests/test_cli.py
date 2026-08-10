@@ -174,6 +174,8 @@ def test_cli_maps_usage_errors_to_status_two(capsys: pytest.CaptureFixture[str])
 
     captured = capsys.readouterr()
     assert not captured.out
+    assert captured.err.startswith("error: ")
+    assert "workfold: error:" not in captured.err
     assert "unknown IANA timezone" in captured.err
 
 
@@ -195,6 +197,8 @@ def test_argparse_escapes_control_characters_in_unknown_options(
     assert error.value.code == 2
     captured = capsys.readouterr()
     assert "\x1b" not in captured.err
+    assert "\nerror: " in captured.err
+    assert "workfold: error:" not in captured.err
     assert r"\x1b[31mforged" in captured.err
 
 

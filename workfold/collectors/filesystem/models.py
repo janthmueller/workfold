@@ -189,7 +189,7 @@ class FilesystemCollectionResult:
     def is_partial(self) -> bool:
         """Return whether an operational error prevented complete collection."""
 
-        return any(item.severity is DiagnosticSeverity.ERROR for item in self.diagnostics)
+        return any(item.severity is DiagnosticSeverity.ERROR or item.affects_completeness for item in self.diagnostics)
 
     def build_coverage(
         self,

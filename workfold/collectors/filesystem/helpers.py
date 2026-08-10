@@ -170,7 +170,9 @@ def stat_diagnostic(root: Path, path: Path, error: OSError, *, is_root: bool) ->
 
 def traversal_diagnostic(root: Path, path: Path, error: OSError) -> CollectorDiagnostic:
     return CollectorDiagnostic(
-        code="filesystem_concurrent_mutation" if isinstance(error, DirectorySafetyError) else "filesystem_traversal_error",
+        code="filesystem_concurrent_mutation"
+        if isinstance(error, DirectorySafetyError)
+        else "filesystem_traversal_error",
         stage="filesystem_traversal",
         target=os.fspath(root),
         message=f"directory could not be fully enumerated: {error}",
@@ -180,17 +182,19 @@ def traversal_diagnostic(root: Path, path: Path, error: OSError) -> CollectorDia
 
 def ignore_diagnostic(root: Path, error: Exception, *, warning: bool) -> CollectorDiagnostic:
     code = getattr(error, "code", "git_ignore_unavailable")
-    hint = "Install/repair Git or use --include-ignored to request an unfiltered scan."
-    if code == "git_filesystem_inventory_incomplete":
-        hint = "Check the reported path permissions; the unreadable scope was not treated as complete."
+    incomplete_inventory = code == "git_filesystem_inventory_incomplete"
+    hint = (
+        None if incomplete_inventory else "Install/repair Git or use --include-ignored to request an unfiltered scan."
+    )
     return CollectorDiagnostic(
         code=code,
         stage="filesystem_ignore_discovery",
         target=os.fspath(root),
         message=str(error),
-        severity=DiagnosticSeverity.WARNING if warning else DiagnosticSeverity.ERROR,
+        severity=DiagnosticSeverity.WARNING if warning or incomplete_inventory else DiagnosticSeverity.ERROR,
         path=os.fspath(root),
         hint=hint,
+        affects_completeness=incomplete_inventory,
     )
 
 

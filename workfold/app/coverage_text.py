@@ -55,8 +55,24 @@ def coverage_status_label(
     """Summarize whether enabled collectors completed their requested scope."""
 
     error_count = sum(item.severity is DiagnosticSeverity.ERROR for item in collection.diagnostics)
-    if error_count or ledger.has_operational_errors:
-        label = f"partial ({error_count} collection error(s))"
+    filesystem_inventory_incomplete = any(
+        item.code == "git_filesystem_inventory_incomplete" for item in collection.diagnostics
+    )
+    other_partial_warning_count = sum(
+        item.affects_completeness and item.code != "git_filesystem_inventory_incomplete"
+        for item in collection.diagnostics
+    )
+    if error_count or filesystem_inventory_incomplete or other_partial_warning_count or ledger.has_operational_errors:
+        reasons: list[str] = []
+        if filesystem_inventory_incomplete:
+            reasons.append("filesystem inventory incomplete")
+        if error_count:
+            reasons.append(_counted(error_count, "collection error"))
+        if other_partial_warning_count:
+            reasons.append(_counted(other_partial_warning_count, "collection warning"))
+        if not reasons:
+            reasons.append("collection incomplete")
+        label = "partial · " + " · ".join(reasons)
     else:
         label = COMPLETE_COVERAGE_STATUS
     qualifiers: list[str] = []
@@ -76,6 +92,10 @@ def coverage_status_label(
     if qualifiers:
         label += "; " + "; ".join(qualifiers)
     return label
+
+
+def _counted(count: int, singular: str) -> str:
+    return f"{count:,} {singular if count == 1 else singular + 's'}"
 
 
 def coverage_details(

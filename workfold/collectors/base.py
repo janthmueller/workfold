@@ -26,6 +26,10 @@ class CollectorDiagnostic:
     are stable fields that orchestration can use without matching prose.
     Repository-controlled values are intentionally kept in separate fields so
     the terminal renderer can sanitize them at its boundary.
+
+    ``affects_completeness`` distinguishes a usable but incomplete collection
+    from an informational warning. Application policy may then decide whether
+    that condition should make the command fail.
     """
 
     code: str
@@ -36,6 +40,7 @@ class CollectorDiagnostic:
     path: str | None = None
     provenance_id: str | None = None
     hint: str | None = None
+    affects_completeness: bool = False
 
 
 class DiagnosticBuffer(list[CollectorDiagnostic]):
@@ -48,6 +53,7 @@ class DiagnosticBuffer(list[CollectorDiagnostic]):
         self._limit = limit
         self._omitted = 0
         self._omitted_by_severity = {severity: 0 for severity in DiagnosticSeverity}
+        self._omitted_completeness_failures = 0
         self._first_omitted_target: str | None = None
 
     def append(self, diagnostic: CollectorDiagnostic) -> None:
@@ -56,6 +62,7 @@ class DiagnosticBuffer(list[CollectorDiagnostic]):
             return
         self._omitted += 1
         self._omitted_by_severity[diagnostic.severity] += 1
+        self._omitted_completeness_failures += diagnostic.affects_completeness
         if self._first_omitted_target is None:
             self._first_omitted_target = diagnostic.target
 
@@ -93,6 +100,7 @@ class DiagnosticBuffer(list[CollectorDiagnostic]):
                 f"(errors={errors:,}, warnings={warnings:,}, info={infos:,})"
             ),
             hint="Use narrower paths or repair the first reported failures before retrying.",
+            affects_completeness=bool(self._omitted_completeness_failures),
         )
         return (*self, summary)
 

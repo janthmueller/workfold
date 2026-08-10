@@ -78,7 +78,7 @@ def run(
         filesystem_collector=filesystem_collector,
     )
     if not collection.any_collector_succeeded:
-        _write_diagnostics(collection.diagnostics, errors)
+        _write_diagnostics(collection.diagnostics, errors, strict=options.strict)
         return _failed_collection_exit_status(collection.diagnostics)
 
     aggregation = pipeline.build()
@@ -117,18 +117,32 @@ def run(
     )
     write_terminal(report, output, options=presentation)
     if collection.diagnostics:
-        _write_diagnostics(collection.diagnostics, errors)
+        _write_diagnostics(
+            collection.diagnostics,
+            errors,
+            strict=options.strict,
+            leading_blank_line=True,
+        )
     is_partial = bool(error_diagnostics) or ledger.has_operational_errors
     return 1 if options.strict and is_partial else 0
 
 
-def _write_diagnostics(diagnostics: Sequence[CollectorDiagnostic], stream: TextIO) -> None:
+def _write_diagnostics(
+    diagnostics: Sequence[CollectorDiagnostic],
+    stream: TextIO,
+    *,
+    strict: bool,
+    leading_blank_line: bool = False,
+) -> None:
+    if diagnostics and leading_blank_line:
+        stream.write("\n")
     for diagnostic in diagnostics:
         message = sanitize_terminal_text(diagnostic.message)
         target = sanitize_terminal_text(diagnostic.target)
-        stream.write(f"workfold: {diagnostic.severity.value}: {message} [{target}]\n")
+        severity = DiagnosticSeverity.ERROR if strict and diagnostic.affects_completeness else diagnostic.severity
+        stream.write(f"{severity.value}: {message} [{target}]\n")
         if diagnostic.hint:
-            stream.write(f"workfold: hint: {sanitize_terminal_text(diagnostic.hint)}\n")
+            stream.write(f"hint: {sanitize_terminal_text(diagnostic.hint)}\n")
 
 
 def _failed_collection_exit_status(diagnostics: Sequence[CollectorDiagnostic]) -> int:

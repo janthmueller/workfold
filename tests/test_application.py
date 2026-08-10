@@ -330,7 +330,7 @@ def test_multiple_targets_continue_but_strict_mode_returns_nonzero(tmp_path: Pat
     assert status == 1
     _assert_summary_count(output.getvalue(), "Events", 1)
     assert re.search(
-        r"^Coverage\s+partial \(1 collection error\(s\)\)",
+        r"^Coverage\s+partial · 1 collection error",
         output.getvalue(),
         re.MULTILINE,
     )
@@ -349,6 +349,7 @@ def test_no_usable_git_target_fails_with_actionable_hint(tmp_path: Path) -> None
 
     assert status == 2
     assert not output.getvalue()
+    assert not errors.getvalue().startswith("\n")
     assert "not a Git repository" in errors.getvalue()
     assert "Use --mode fs" in errors.getvalue()
 
@@ -367,7 +368,7 @@ def test_empty_repository_plus_failed_target_renders_an_honest_partial_run(
     assert status == 0
     _assert_summary_count(output.getvalue(), "Events", 0)
     assert re.search(
-        r"^Coverage\s+partial \(1 collection error\(s\)\)",
+        r"^Coverage\s+partial · 1 collection error",
         output.getvalue(),
         re.MULTILINE,
     )
@@ -542,7 +543,7 @@ def test_file_change_failure_accounts_for_commits_without_inventing_change_recor
     _assert_summary_count(rendered, "Events", 0)
     assert "Git file changes discovered: 0" in rendered
     assert re.search(
-        r"^Coverage\s+partial \(1 collection error\(s\)\)",
+        r"^Coverage\s+partial · 1 collection error",
         rendered,
         re.MULTILINE,
     )

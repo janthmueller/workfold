@@ -150,9 +150,7 @@ def visit_inventory(
                     connection.execute("SELECT COUNT(*) FROM inventory WHERE category = 1").fetchone()[0]
                 )
                 delivering_callbacks = True
-                for (raw_path,) in connection.execute(
-                    "SELECT path FROM inventory WHERE category = 0 ORDER BY ordinal"
-                ):
+                for (raw_path,) in connection.execute("SELECT path FROM inventory WHERE category = 0 ORDER BY ordinal"):
                     included_consumer(os.fsdecode(raw_path))
                 for raw_path, is_directory in connection.execute(
                     """
@@ -310,10 +308,13 @@ def _validate_inventory_relationships(connection: sqlite3.Connection) -> None:
             parts = normalized_path.split(b"/")
             for size in range(1, len(parts) + 1):
                 candidate = b"/".join(parts[:size])
-                if connection.execute(
-                    "SELECT 1 FROM ignored_directories WHERE normalized_path = ?",
-                    (candidate,),
-                ).fetchone() is not None:
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM ignored_directories WHERE normalized_path = ?",
+                        (candidate,),
+                    ).fetchone()
+                    is not None
+                ):
                     conflict = (raw_path,)
                     break
             if conflict is not None:
@@ -381,14 +382,22 @@ def _merge_inventory_stderr(values: Sequence[bytes]) -> bytes:
 
 def _inventory_stderr_error(root: Path, command: tuple[str, ...], stderr: bytes) -> GitIgnoreCommandError:
     bounded = stderr[:MAX_INVENTORY_STDERR_BYTES]
-    detail = bounded.decode("utf-8", errors="surrogateescape").rstrip()
+    lines = bounded.decode("utf-8", errors="surrogateescape").splitlines()
+    detail = "; ".join(_without_git_severity_prefix(line) for line in lines)
     return GitIgnoreCommandError(
         code="git_filesystem_inventory_incomplete",
-        message=f"Git reported an incomplete filesystem inventory: {detail}",
+        message=detail,
         cwd=root,
         command=command,
         stderr=bounded,
     )
+
+
+def _without_git_severity_prefix(message: str) -> str:
+    for prefix in ("warning: ", "error: ", "fatal: "):
+        if message.casefold().startswith(prefix):
+            return message[len(prefix) :]
+    return message
 
 
 def _unavailable_error(repository: GitIgnoreRepository) -> GitIgnoreCommandError:

@@ -375,11 +375,11 @@ def test_long_scope_facts_wrap_between_words() -> None:
 
 def test_partial_coverage_status_remains_intact_in_default_summary() -> None:
     report = _report()
-    context = replace(report.context, coverage_status="partial (1 collection error); explicit exclusions active")
+    context = replace(report.context, coverage_status="partial · 1 collection error; explicit exclusions active")
 
     rendered = render_terminal(replace(report, context=context), options=TerminalOptions(width=80))
 
-    assert "Coverage  partial (1 collection error); explicit exclusions active" in rendered
+    assert "Coverage  partial · 1 collection error; explicit exclusions active" in rendered
 
 
 def test_sanitization_and_width_helpers_keep_untrusted_text_single_line() -> None:

@@ -32,7 +32,7 @@ class SafeArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         self.print_usage(sys.stderr)
         safe_message = sanitize_terminal_text(message)
-        self.exit(2, f"{self.prog}: error: {safe_message}\n")
+        self.exit(2, f"error: {safe_message}\n")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -208,7 +208,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return run(options)
     except UsageError as error:
-        print(f"workfold: error: {sanitize_terminal_text(error)}", file=sys.stderr)
+        print(f"error: {sanitize_terminal_text(error)}", file=sys.stderr)
         return 2
     except BrokenPipeError:
         return 0

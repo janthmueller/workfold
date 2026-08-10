@@ -391,7 +391,7 @@ def test_git_filesystem_inventory_keeps_partial_paths_with_a_warning(tmp_path: P
     assert inventory.error is None
     assert inventory.warning is not None
     assert inventory.warning.code == "git_filesystem_inventory_incomplete"
-    assert "Permission denied" in str(inventory.warning)
+    assert str(inventory.warning) == "could not open directory 'private/': Permission denied"
     assert inventory.included_relative_paths == ("visible.txt",)
     assert inventory.ignored_relative_paths == ("ignored.log",)
 

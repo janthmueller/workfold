@@ -10,6 +10,14 @@ from pathlib import Path
 
 from workfold.application import run
 from workfold.cli import parse_options
+from workfold.collectors.filesystem import FilesystemCollector
+from workfold.collectors.ignores import (
+    GitFilesystemInventory,
+    GitIgnoreCommandError,
+    GitIgnoreProbe,
+    GitIgnoreRepository,
+    GitIgnoreService,
+)
 
 from support.git_repo import GitRepo
 
@@ -38,6 +46,30 @@ def _assert_lean_success_output(rendered: str) -> None:
     assert not re.search(r"^(?:Scope|Period|Breakdown)\b", rendered, re.MULTILINE)
     assert not re.search(r"^Coverage\s{2,}", rendered, re.MULTILINE)
     assert "complete for all discoverable timestamps" not in rendered
+
+
+class _IncompleteInventoryService(GitIgnoreService):
+    def __init__(self, repository: GitIgnoreRepository) -> None:
+        super().__init__()
+        self._repository = repository
+
+    def probe(self, path: Path, *, is_directory: bool) -> GitIgnoreProbe:
+        del path, is_directory
+        return GitIgnoreProbe(self._repository, True, "test repository")
+
+    def inventory(
+        self,
+        repository: GitIgnoreRepository,
+        selected_root: Path,
+    ) -> GitFilesystemInventory:
+        assert repository == self._repository
+        warning = GitIgnoreCommandError(
+            code="git_filesystem_inventory_incomplete",
+            message="could not open directory 'private/': Permission denied",
+            cwd=selected_root,
+            command=("ls-files",),
+        )
+        return GitFilesystemInventory(included_relative_paths=("work.txt",), warning=warning)
 
 
 def test_standard_uses_local_branches_while_all_refs_includes_remote_tracking(tmp_path: Path) -> None:
@@ -122,6 +154,54 @@ def test_filesystem_mode_flows_through_the_shared_pipeline(tmp_path: Path) -> No
     assert "filesystem modified captured: 1" in rendered
     assert "Coverage details:" in rendered
     assert "Details\n" not in rendered
+
+
+def test_incomplete_filesystem_inventory_is_a_clean_warning_unless_strict(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    (repo.path / "work.txt").write_text("work", encoding="utf-8")
+    repository = GitIgnoreRepository(repo.path.resolve(), False)
+    collector = FilesystemCollector(ignore_service=_IncompleteInventoryService(repository))
+    arguments = [
+        str(repo.path),
+        "--mode",
+        "fs",
+        "--fs-times",
+        "modified",
+        "--time",
+        "all",
+        "--timezone",
+        "UTC",
+        "--no-color",
+    ]
+
+    output = StringIO()
+    diagnostics = StringIO()
+    status = run(
+        parse_options(arguments),
+        stdout=output,
+        stderr=diagnostics,
+        terminal_width=80,
+        filesystem_collector=collector,
+    )
+
+    assert status == 0
+    assert re.search(r"^Coverage\s+partial · filesystem inventory incomplete$", output.getvalue(), re.MULTILINE)
+    assert diagnostics.getvalue().startswith("\nwarning: could not open directory 'private/': Permission denied")
+    assert "\nworkfold:" not in diagnostics.getvalue()
+    assert "warning: warning:" not in diagnostics.getvalue()
+    assert "\nhint:" not in diagnostics.getvalue()
+
+    strict_diagnostics = StringIO()
+    strict_status = run(
+        parse_options([*arguments, "--strict"]),
+        stdout=StringIO(),
+        stderr=strict_diagnostics,
+        terminal_width=80,
+        filesystem_collector=collector,
+    )
+
+    assert strict_status == 1
+    assert strict_diagnostics.getvalue().startswith("\nerror: could not open directory 'private/': Permission denied")
 
 
 def test_filesystem_entry_selection_is_honored_by_the_application(tmp_path: Path) -> None:
@@ -389,7 +469,7 @@ def test_strict_filesystem_partial_run_renders_useful_data_then_fails(
     assert status == 1
     _assert_summary_count(output.getvalue(), "Events", 1)
     assert re.search(
-        r"^Coverage\s+partial \(1 collection error\(s\)\)",
+        r"^Coverage\s+partial · 1 collection error",
         output.getvalue(),
         re.MULTILINE,
     )
