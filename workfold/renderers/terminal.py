@@ -11,8 +11,8 @@ from io import StringIO
 from rich.console import Console
 from rich.text import Text
 
-from workfold.aggregation import NANOSECONDS_PER_MINUTE, NANOSECONDS_PER_SECOND, ClusterCell, TimeCluster
-from workfold.models import ClassifiedMarker, Source, Weekday
+from workfold.aggregation import NANOSECONDS_PER_MINUTE, NANOSECONDS_PER_SECOND, ClusterCell, MarkerRun, TimeCluster
+from workfold.models import Source, Weekday
 from workfold.reports import COMPLETE_COVERAGE_STATUS, OutsideEvent, Report
 from workfold.sanitization import display_width, pad_right, sanitize_terminal_text, truncate_end, truncate_middle
 
@@ -117,9 +117,9 @@ def _render_legend(report: Report, width: int) -> tuple[Text, ...]:
     outside_sources: set[Source] = set()
     for cluster in report.aggregation.clusters:
         for cell in cluster.cells:
-            for marker in cell.markers:
-                target = inside_sources if marker.within_schedule else outside_sources
-                target.add(_marker_source(marker))
+            for run in cell.runs:
+                target = inside_sources if run.within_schedule else outside_sources
+                target.add(run.source)
 
     items: list[Text] = []
     for source in (Source.GIT, Source.FILESYSTEM):
@@ -227,21 +227,24 @@ def _cluster_lines(
 def _cell_lines(cell: ClusterCell | None, width: int) -> tuple[Text, ...]:
     if cell is None:
         return (Text(),)
-    if cell.event_count <= width * _MAX_LITERAL_EVENT_LINES:
-        return tuple(_marker_run(cell.markers[index : index + width]) for index in range(0, cell.event_count, width))
-    return _compact_cell_lines(cell.markers, width)
+    if not cell.compacted and cell.event_count <= width * _MAX_LITERAL_EVENT_LINES:
+        visuals = tuple((run.source, run.within_schedule) for run in cell.runs for _event_index in range(run.count))
+        return tuple(_marker_run(visuals[index : index + width]) for index in range(0, cell.event_count, width))
+    return _compact_cell_lines(cell.runs, width)
 
 
-def _marker_run(markers: tuple[ClassifiedMarker, ...]) -> Text:
+def _marker_run(visuals: tuple[tuple[Source, bool], ...]) -> Text:
     line = Text()
-    for marker in markers:
-        symbol, style = _event_visual(marker)
+    for visual in visuals:
+        symbol, style = _EVENT_VISUALS[visual]
         line.append(symbol, style=style)
     return line
 
 
-def _compact_cell_lines(markers: tuple[ClassifiedMarker, ...], width: int) -> tuple[Text, ...]:
-    counts = Counter((_marker_source(marker), marker.within_schedule) for marker in markers)
+def _compact_cell_lines(runs: tuple[MarkerRun, ...], width: int) -> tuple[Text, ...]:
+    counts: Counter[tuple[Source, bool]] = Counter()
+    for run in runs:
+        counts[(run.source, run.within_schedule)] += run.count
     ordered_keys = (
         (Source.GIT, True),
         (Source.FILESYSTEM, True),
@@ -275,14 +278,6 @@ def _compact_cell_lines(markers: tuple[ClassifiedMarker, ...], width: int) -> tu
     if current:
         lines.append(current)
     return tuple(lines)
-
-
-def _event_visual(marker: ClassifiedMarker) -> tuple[str, str]:
-    return _EVENT_VISUALS[(_marker_source(marker), marker.within_schedule)]
-
-
-def _marker_source(marker: ClassifiedMarker) -> Source:
-    return marker.marker.origin.source
 
 
 def _cluster_label(cluster: TimeCluster) -> str:

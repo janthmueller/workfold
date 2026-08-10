@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import re
 import stat
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -158,6 +158,13 @@ class GitReflogCollectionResult:
     captured_entries: int
     unavailable_entries: int
     parse_errors: int
+    records_retained: bool = True
+
+    def __post_init__(self) -> None:
+        if self.records_retained and len(self.entries) != self.captured_entries:
+            raise ValueError("retained reflog entries do not match captured entry accounting")
+        if len(self.entries) > self.captured_entries:
+            raise ValueError("retained reflog entries exceed captured entry accounting")
 
     @property
     def is_partial(self) -> bool:
@@ -498,7 +505,13 @@ class GitReflogCollector:
     def __init__(self, runner: GitRunner | None = None) -> None:
         self._runner = runner or GitRunner()
 
-    def collect(self, repositories: Sequence[GitRepository]) -> GitReflogCollectionResult:
+    def collect(
+        self,
+        repositories: Sequence[GitRepository],
+        *,
+        entry_consumer: Callable[[tuple[CollectedGitReflog, ...]], None] | None = None,
+        retain_entries: bool = True,
+    ) -> GitReflogCollectionResult:
         """Collect reflogs independently of commit ref scope and identity filters."""
 
         collected: list[CollectedGitReflog] = []
@@ -508,6 +521,7 @@ class GitReflogCollector:
         successful = 0
         discovered_ref_count = 0
         unavailable_entry_count = 0
+        captured_entry_count = 0
         parse_errors = 0
         seen_inventory: set[tuple[str, str]] = set()
 
@@ -614,7 +628,14 @@ class GitReflogCollector:
                         )
                     )
                 available_statuses.append(ReflogRef(repository, ref_name, raw_record_count, len(parsed_entries)))
-                collected.extend(CollectedGitReflog(repository=repository, entry=entry) for entry in parsed_entries)
+                collected_batch = tuple(
+                    CollectedGitReflog(repository=repository, entry=entry) for entry in parsed_entries
+                )
+                captured_entry_count += len(collected_batch)
+                if retain_entries:
+                    collected.extend(collected_batch)
+                if collected_batch and entry_consumer is not None:
+                    entry_consumer(collected_batch)
             if not repository_failed:
                 successful += 1
 
@@ -626,9 +647,10 @@ class GitReflogCollector:
             requested_repositories=len(repositories),
             successful_repositories=successful,
             discovered_refs=discovered_ref_count,
-            captured_entries=len(collected),
+            captured_entries=captured_entry_count,
             unavailable_entries=unavailable_entry_count,
             parse_errors=parse_errors,
+            records_retained=retain_entries,
         )
 
 

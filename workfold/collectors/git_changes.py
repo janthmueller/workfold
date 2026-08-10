@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -17,6 +17,7 @@ from workfold.collectors.git import (
     GitRepository,
     GitRunner,
 )
+from workfold.iterables import batched
 from workfold.models import (
     GitChangeKind,
     RecordKind,
@@ -163,6 +164,7 @@ class GitFileChangeCollectionResult:
     parse_errors: int
     subprocess_errors: int
     repository_accounting: tuple[GitFileChangeRepositoryAccounting, ...] = ()
+    records_retained: bool = True
 
     def __post_init__(self) -> None:
         counters = (
@@ -177,8 +179,10 @@ class GitFileChangeCollectionResult:
         terminal_commits = self.successful_commits + self.parse_errors + self.subprocess_errors
         if self.requested_commits != terminal_commits:
             raise ValueError("Git file-change commit accounting does not reconcile")
-        if self.discovered_changes != len(self.changes):
+        if self.records_retained and self.discovered_changes != len(self.changes):
             raise ValueError("Git file-change discovery count does not match captured records")
+        if len(self.changes) > self.discovered_changes:
+            raise ValueError("retained Git file changes exceed discovered records")
         if self.repository_accounting:
             aggregate = (
                 sum(item.requested_commits for item in self.repository_accounting),
@@ -362,14 +366,19 @@ def _diagnostic(
 class GitFileChangeCollector:
     """Derive first-parent file changes in one Git process per repository."""
 
-    def __init__(self, runner: GitRunner | None = None) -> None:
+    def __init__(self, runner: GitRunner | None = None, *, commit_batch_size: int = 256) -> None:
+        if commit_batch_size < 1:
+            raise ValueError("commit_batch_size must be positive")
         self._runner = runner or GitRunner()
+        self._commit_batch_size = commit_batch_size
 
     def collect(
         self,
         commits: Sequence[CollectedGitCommit],
         *,
         repositories: Sequence[GitRepository] = (),
+        change_consumer: Callable[[tuple[CollectedGitFileChange, ...]], None] | None = None,
+        retain_changes: bool = True,
     ) -> GitFileChangeCollectionResult:
         """Collect changes for the exact supplied commit set without traversal."""
 
@@ -390,7 +399,7 @@ class GitFileChangeCollector:
             successful_for_repository = 0
             parse_errors_for_repository = 0
             subprocess_errors_for_repository = 0
-            change_start = len(changes)
+            discovered_for_repository = 0
             if not commit_group:
                 repository_accounting.append(
                     GitFileChangeRepositoryAccounting(
@@ -403,60 +412,68 @@ class GitFileChangeCollector:
                     )
                 )
                 continue
-            expected_ids = tuple(item.commit.object_id for item in commit_group)
-            input_lines: list[bytes] = []
-            for item in commit_group:
-                parent = item.commit.parent_ids[0] if item.commit.parent_ids else None
-                line = item.commit.object_id if parent is None else f"{item.commit.object_id} {parent}"
-                input_lines.append(line.encode("ascii") + b"\n")
-            try:
-                output = self._runner.run(
-                    (
-                        "diff-tree",
-                        "--stdin",
-                        "--root",
-                        "-r",
-                        "--find-renames=50%",
-                        "--name-status",
-                        "-z",
-                        "--format=%H%x00",
-                        "--always",
-                    ),
-                    cwd=repository.root,
-                    input_data=b"".join(input_lines),
-                ).stdout
-                parsed = parse_diff_tree_name_status(output, expected_ids)
-            except GitCommandError as error:
-                diagnostics.append(_diagnostic(error, repository=repository))
-                subprocess_errors_for_repository += len(commit_group)
-            except GitChangeParseError as error:
-                parse_errors_for_repository += len(commit_group)
-                diagnostics.append(
-                    CollectorDiagnostic(
-                        code=error.code,
-                        stage="git_file_change_parse",
-                        target=os.fspath(repository.root),
-                        provenance_id=error.commit_id,
-                        message=str(error),
-                        hint="The repository may be corrupt or may have changed during collection.",
-                    )
-                )
-            else:
-                by_id = {item.commit.object_id: item for item in commit_group}
-                for change in parsed:
-                    commit_record = by_id[change.commit_id]
-                    diff_basis = (
-                        commit_record.commit.parent_ids[0] if commit_record.commit.parent_ids else _EMPTY_TREE_BASIS
-                    )
-                    changes.append(
-                        CollectedGitFileChange(
-                            repository=repository,
-                            commit_record=commit_record,
-                            change=change,
-                            diff_basis=diff_basis,
+            for commit_batch in batched(commit_group, self._commit_batch_size):
+                batch = tuple(commit_batch)
+                expected_ids = tuple(item.commit.object_id for item in batch)
+                input_lines: list[bytes] = []
+                for item in batch:
+                    parent = item.commit.parent_ids[0] if item.commit.parent_ids else None
+                    line = item.commit.object_id if parent is None else f"{item.commit.object_id} {parent}"
+                    input_lines.append(line.encode("ascii") + b"\n")
+                try:
+                    output = self._runner.run(
+                        (
+                            "diff-tree",
+                            "--stdin",
+                            "--root",
+                            "-r",
+                            "--find-renames=50%",
+                            "--name-status",
+                            "-z",
+                            "--format=%H%x00",
+                            "--always",
+                        ),
+                        cwd=repository.root,
+                        input_data=b"".join(input_lines),
+                    ).stdout
+                    parsed = parse_diff_tree_name_status(output, expected_ids)
+                except GitCommandError as error:
+                    diagnostics.append(_diagnostic(error, repository=repository))
+                    subprocess_errors_for_repository += len(batch)
+                except GitChangeParseError as error:
+                    parse_errors_for_repository += len(batch)
+                    diagnostics.append(
+                        CollectorDiagnostic(
+                            code=error.code,
+                            stage="git_file_change_parse",
+                            target=os.fspath(repository.root),
+                            provenance_id=error.commit_id,
+                            message=str(error),
+                            hint="The repository may be corrupt or may have changed during collection.",
                         )
                     )
-                successful_for_repository += len(commit_group)
+                else:
+                    by_id = {item.commit.object_id: item for item in batch}
+                    collected_batch: list[CollectedGitFileChange] = []
+                    for change in parsed:
+                        commit_record = by_id[change.commit_id]
+                        diff_basis = (
+                            commit_record.commit.parent_ids[0] if commit_record.commit.parent_ids else _EMPTY_TREE_BASIS
+                        )
+                        collected_batch.append(
+                            CollectedGitFileChange(
+                                repository=repository,
+                                commit_record=commit_record,
+                                change=change,
+                                diff_basis=diff_basis,
+                            )
+                        )
+                    discovered_for_repository += len(collected_batch)
+                    if retain_changes:
+                        changes.extend(collected_batch)
+                    if collected_batch and change_consumer is not None:
+                        change_consumer(tuple(collected_batch))
+                    successful_for_repository += len(batch)
             repository_accounting.append(
                 GitFileChangeRepositoryAccounting(
                     repository=repository,
@@ -464,7 +481,7 @@ class GitFileChangeCollector:
                     successful_commits=successful_for_repository,
                     parse_errors=parse_errors_for_repository,
                     subprocess_errors=subprocess_errors_for_repository,
-                    discovered_changes=len(changes) - change_start,
+                    discovered_changes=discovered_for_repository,
                 )
             )
 
@@ -472,15 +489,17 @@ class GitFileChangeCollector:
         parse_errors = sum(item.parse_errors for item in repository_accounting)
         subprocess_errors = sum(item.subprocess_errors for item in repository_accounting)
 
+        discovered_changes = sum(item.discovered_changes for item in repository_accounting)
         return GitFileChangeCollectionResult(
             changes=tuple(changes),
             diagnostics=tuple(diagnostics),
             requested_commits=len(commits),
             successful_commits=successful_commits,
-            discovered_changes=len(changes),
+            discovered_changes=discovered_changes,
             parse_errors=parse_errors,
             subprocess_errors=subprocess_errors,
             repository_accounting=tuple(repository_accounting),
+            records_retained=retain_changes,
         )
 
 

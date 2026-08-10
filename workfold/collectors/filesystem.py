@@ -63,6 +63,7 @@ class TimestampExtractionCoverage:
     unsupported: int
     errors: int
     observation_ids: tuple[str, ...]
+    observation_ids_complete: bool = True
 
     def __post_init__(self) -> None:
         values = (self.requested, self.captured, self.unavailable, self.unsupported, self.errors)
@@ -70,8 +71,10 @@ class TimestampExtractionCoverage:
             raise ValueError("filesystem extraction counts must be non-negative")
         if self.requested != self.captured + self.unavailable + self.unsupported + self.errors:
             raise ValueError("filesystem extraction accounting does not reconcile")
-        if self.captured != len(self.observation_ids):
+        if self.observation_ids_complete and self.captured != len(self.observation_ids):
             raise ValueError("captured count must match the retained observation identities")
+        if len(self.observation_ids) > self.captured:
+            raise ValueError("retained observation identities cannot exceed captured timestamps")
         if len(set(self.observation_ids)) != len(self.observation_ids):
             raise ValueError("filesystem extraction accounting contains duplicate observations")
 
@@ -120,6 +123,8 @@ class FilesystemAccounting:
         omit or invent an observation at the collector/application boundary.
         """
 
+        if any(not item.observation_ids_complete for item in self.timestamps):
+            raise ValueError("observation-ID coverage is unavailable for a non-retaining collection")
         expected = {observation_id for item in self.timestamps for observation_id in item.observation_ids}
         supplied = set(selection_by_observation_id)
         if supplied != expected:
@@ -155,6 +160,36 @@ class FilesystemAccounting:
                 builder.selection_outcome(item.key, selection)
                 if selection is SelectionDisposition.INCLUDED:
                     builder.plotting_outcome(item.key, plotting_by_observation_id[observation_id])
+        return builder.build()
+
+    def build_coverage_counts(
+        self,
+        selection_counts: Mapping[tuple[TimestampCoverageKey, SelectionDisposition], int],
+        plotting_counts: Mapping[tuple[TimestampCoverageKey, PlottingDisposition], int],
+    ) -> CoverageLedger:
+        """Complete coverage from partition counts without retaining observation IDs."""
+
+        builder = CoverageLedgerBuilder()
+        for item in self.records:
+            builder.discover_record(item.key, item.discovered)
+            for disposition in RecordDisposition:
+                builder.record_outcome(item.key, disposition, item.count(disposition))
+        for item in self.timestamps:
+            builder.request_slot(item.key, item.requested)
+            for disposition in ExtractionDisposition:
+                builder.extraction_outcome(item.key, disposition, item.count(disposition))
+            for disposition in SelectionDisposition:
+                builder.selection_outcome(
+                    item.key,
+                    disposition,
+                    selection_counts.get((item.key, disposition), 0),
+                )
+            for disposition in PlottingDisposition:
+                builder.plotting_outcome(
+                    item.key,
+                    disposition,
+                    plotting_counts.get((item.key, disposition), 0),
+                )
         return builder.build()
 
 
@@ -212,6 +247,15 @@ class FilesystemCollectionResult:
 
         return self.accounting.build_coverage(selection_by_observation_id, plotting_by_observation_id)
 
+    def build_coverage_counts(
+        self,
+        selection_counts: Mapping[tuple[TimestampCoverageKey, SelectionDisposition], int],
+        plotting_counts: Mapping[tuple[TimestampCoverageKey, PlottingDisposition], int],
+    ) -> CoverageLedger:
+        """Complete the ledger from bounded-memory pipeline counters."""
+
+        return self.accounting.build_coverage_counts(selection_counts, plotting_counts)
+
 
 @dataclass(frozen=True, slots=True)
 class _RootSnapshot:
@@ -234,6 +278,7 @@ class _PendingEntry:
 
 @dataclass(slots=True)
 class _AccountingBuilder:
+    retain_observation_ids: bool = True
     _discovered: dict[RecordCoverageKey, int] = field(default_factory=lambda: {})
     _records: dict[tuple[RecordCoverageKey, RecordDisposition], int] = field(default_factory=lambda: {})
     _requested: dict[TimestampCoverageKey, int] = field(default_factory=lambda: {})
@@ -274,7 +319,7 @@ class _AccountingBuilder:
         key = _timestamp_key(root, kind)
         outcome = (key, disposition)
         self._extractions[outcome] = self._extractions.get(outcome, 0) + 1
-        if observation_id is not None:
+        if observation_id is not None and self.retain_observation_ids:
             if disposition is not ExtractionDisposition.CAPTURED:
                 raise ValueError("only captured outcomes may retain observation identities")
             self._observation_ids.setdefault(key, []).append(observation_id)
@@ -306,6 +351,7 @@ class _AccountingBuilder:
                 unsupported=self._extractions.get((key, ExtractionDisposition.UNSUPPORTED), 0),
                 errors=self._extractions.get((key, ExtractionDisposition.ERROR), 0),
                 observation_ids=tuple(self._observation_ids.get(key, ())),
+                observation_ids_complete=self.retain_observation_ids,
             )
             for key in sorted(timestamp_keys, key=lambda item: (item.target, item.timestamp_kind.value))
         )
@@ -315,6 +361,7 @@ class _AccountingBuilder:
 LstatReader = Callable[[Path], os.stat_result]
 ScandirContext = AbstractContextManager[Iterator[os.DirEntry[str]]]
 ScandirReader = Callable[[Path], ScandirContext]
+FilesystemObservationConsumer = Callable[[tuple[TimestampObservation, ...]], None]
 
 
 def _lstat(path: Path) -> os.stat_result:
@@ -413,6 +460,9 @@ class FilesystemCollector:
         include_ignored: bool = False,
         exclusions: Sequence[str] = (),
         cwd: Path | None = None,
+        observation_consumer: FilesystemObservationConsumer | None = None,
+        retain_entries: bool = True,
+        retain_observations: bool = True,
     ) -> FilesystemCollectionResult:
         """Collect all requested metadata slots without applying date filters."""
 
@@ -431,10 +481,10 @@ class FilesystemCollector:
 
         diagnostics: list[CollectorDiagnostic] = []
         roots, scan_roots, overlap_count = self._prepare_roots(requested, diagnostics)
-        entries: list[CollectedFilesystemEntry] = []
-        observations: list[TimestampObservation] = []
+        entries: list[CollectedFilesystemEntry] | None = [] if retain_entries else None
+        observations: list[TimestampObservation] | None = [] if retain_observations else None
         capabilities: list[Capability] = []
-        accounting = _AccountingBuilder()
+        accounting = _AccountingBuilder(retain_observation_ids=retain_observations)
 
         for root_snapshot in roots:
             root = root_snapshot.path
@@ -453,11 +503,12 @@ class FilesystemCollector:
                 observations=observations,
                 capabilities=capabilities,
                 diagnostics=diagnostics,
+                observation_consumer=observation_consumer,
             )
 
         return FilesystemCollectionResult(
-            entries=tuple(entries),
-            observations=tuple(observations),
+            entries=tuple(entries or ()),
+            observations=tuple(observations or ()),
             accounting=accounting.build(),
             capabilities=tuple(capabilities),
             diagnostics=tuple(diagnostics),
@@ -515,10 +566,11 @@ class FilesystemCollector:
         respect_gitignore: bool,
         excluder: ExplicitExcluder,
         accounting: _AccountingBuilder,
-        entries: list[CollectedFilesystemEntry],
-        observations: list[TimestampObservation],
+        entries: list[CollectedFilesystemEntry] | None,
+        observations: list[TimestampObservation] | None,
         capabilities: list[Capability],
         diagnostics: list[CollectorDiagnostic],
+        observation_consumer: FilesystemObservationConsumer | None,
     ) -> None:
         root = root_snapshot.path
         root_type = _entry_type(root_snapshot.snapshot.st_mode)
@@ -526,7 +578,7 @@ class FilesystemCollector:
             accounting.discover(root)
             origin = _origin(root, root, root_type)
             accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
-            entries.append(CollectedFilesystemEntry(origin, RecordDisposition.SEMANTIC_GIT_ADMIN))
+            _retain_entry(entries, origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
             capabilities.append(
                 _ignore_capability(
                     root,
@@ -541,7 +593,7 @@ class FilesystemCollector:
             accounting.discover(root)
             origin = _origin(root, root, root_type)
             accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
-            entries.append(CollectedFilesystemEntry(origin, RecordDisposition.SEMANTIC_GIT_ADMIN))
+            _retain_entry(entries, origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
             capabilities.append(_ignore_capability(root, respect_gitignore, probe, error=None))
             return
 
@@ -565,11 +617,37 @@ class FilesystemCollector:
                         entries=entries,
                         observations=observations,
                         diagnostics=diagnostics,
+                        observation_consumer=observation_consumer,
                     )
                     return
                 inventory = candidate_inventory
 
         inventory_ignored_seen: set[str] = set()
+        defer_ignore_evaluation = respect_gitignore and probe.repository is not None and inventory is None
+
+        def process_visible_entry(item: _PendingEntry) -> None:
+            disposition = (
+                RecordDisposition.ELIGIBLE
+                if _entry_is_in_scope(
+                    item.entry_type,
+                    include_regular_files=include_regular_files,
+                    include_directories=include_directories,
+                    include_symlinks=include_symlinks,
+                )
+                else RecordDisposition.EXCLUDED_ENTRY_TYPE
+            )
+            accounting.record(root, disposition)
+            _retain_entry(entries, item.origin, disposition)
+            if disposition is RecordDisposition.ELIGIBLE:
+                self._extract_entry(
+                    item,
+                    kinds,
+                    accounting,
+                    observations,
+                    diagnostics,
+                    observation_consumer,
+                )
+
         pending = self._discover_entries(
             root_snapshot,
             excluder=excluder,
@@ -579,6 +657,7 @@ class FilesystemCollector:
             repository=probe.repository,
             inventory=inventory,
             inventory_ignored_seen=inventory_ignored_seen,
+            pending_consumer=None if defer_ignore_evaluation else process_visible_entry,
         )
         ignored: frozenset[Path] = frozenset()
         ignore_error = None
@@ -621,19 +700,11 @@ class FilesystemCollector:
         for item in pending:
             if item.path in ignored:
                 disposition = RecordDisposition.IGNORED
-            elif _entry_is_in_scope(
-                item.entry_type,
-                include_regular_files=include_regular_files,
-                include_directories=include_directories,
-                include_symlinks=include_symlinks,
-            ):
-                disposition = RecordDisposition.ELIGIBLE
             else:
-                disposition = RecordDisposition.EXCLUDED_ENTRY_TYPE
+                process_visible_entry(item)
+                continue
             accounting.record(root, disposition)
-            entries.append(CollectedFilesystemEntry(item.origin, disposition))
-            if disposition is RecordDisposition.ELIGIBLE:
-                self._extract_entry(item, kinds, accounting, observations, diagnostics)
+            _retain_entry(entries, item.origin, disposition)
 
     def _collect_git_inventory(
         self,
@@ -646,9 +717,10 @@ class FilesystemCollector:
         include_symlinks: bool,
         excluder: ExplicitExcluder,
         accounting: _AccountingBuilder,
-        entries: list[CollectedFilesystemEntry],
-        observations: list[TimestampObservation],
+        entries: list[CollectedFilesystemEntry] | None,
+        observations: list[TimestampObservation] | None,
         diagnostics: list[CollectorDiagnostic],
+        observation_consumer: FilesystemObservationConsumer | None,
     ) -> None:
         """Validate Git path candidates against the current filesystem snapshot."""
 
@@ -657,7 +729,7 @@ class FilesystemCollector:
         accounting.discover(root)
         root_origin = _origin(root, root, root_type)
         accounting.record(root, RecordDisposition.EXCLUDED_ENTRY_TYPE)
-        entries.append(CollectedFilesystemEntry(root_origin, RecordDisposition.EXCLUDED_ENTRY_TYPE))
+        _retain_entry(entries, root_origin, RecordDisposition.EXCLUDED_ENTRY_TYPE)
 
         _account_inventory_warning(root, inventory, accounting=accounting, diagnostics=diagnostics)
 
@@ -679,7 +751,7 @@ class FilesystemCollector:
                 accounting.discover(root)
                 admin_origin = _origin(root, admin_path, _entry_type(admin_snapshot.st_mode))
                 accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
-                entries.append(CollectedFilesystemEntry(admin_origin, RecordDisposition.SEMANTIC_GIT_ADMIN))
+                _retain_entry(entries, admin_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
 
         for relative_path in inventory.included_relative_paths:
             path = root if relative_path == "." else root / relative_path
@@ -715,7 +787,7 @@ class FilesystemCollector:
             else:
                 disposition = RecordDisposition.EXCLUDED_ENTRY_TYPE
             accounting.record(root, disposition)
-            entries.append(CollectedFilesystemEntry(origin, disposition))
+            _retain_entry(entries, origin, disposition)
             if disposition is RecordDisposition.ELIGIBLE:
                 self._extract_entry(
                     _PendingEntry(root, path, snapshot, origin, entry_type),
@@ -723,6 +795,7 @@ class FilesystemCollector:
                     accounting,
                     observations,
                     diagnostics,
+                    observation_consumer,
                 )
 
         _account_inventory_ignored(
@@ -739,11 +812,12 @@ class FilesystemCollector:
         *,
         excluder: ExplicitExcluder,
         accounting: _AccountingBuilder,
-        entries: list[CollectedFilesystemEntry],
+        entries: list[CollectedFilesystemEntry] | None,
         diagnostics: list[CollectorDiagnostic],
         repository: GitIgnoreRepository | None,
         inventory: GitFilesystemInventory | None,
         inventory_ignored_seen: set[str],
+        pending_consumer: Callable[[_PendingEntry], None] | None,
     ) -> list[_PendingEntry]:
         root = root_snapshot.path
         pending: list[_PendingEntry] = []
@@ -756,13 +830,17 @@ class FilesystemCollector:
         )
         if _is_semantic_git_admin(root, repository):
             accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
-            entries.append(CollectedFilesystemEntry(root_origin, RecordDisposition.SEMANTIC_GIT_ADMIN))
+            _retain_entry(entries, root_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
             return pending
         if root_explicit:
             accounting.record(root, RecordDisposition.EXPLICITLY_EXCLUDED)
-            entries.append(CollectedFilesystemEntry(root_origin, RecordDisposition.EXPLICITLY_EXCLUDED))
+            _retain_entry(entries, root_origin, RecordDisposition.EXPLICITLY_EXCLUDED)
             return pending
-        pending.append(_PendingEntry(root, root, root_snapshot.snapshot, root_origin, root_type))
+        _queue_or_consume(
+            _PendingEntry(root, root, root_snapshot.snapshot, root_origin, root_type),
+            pending,
+            pending_consumer,
+        )
         if root_type is not EntryType.DIRECTORY:
             return pending
 
@@ -814,25 +892,29 @@ class FilesystemCollector:
                     admin_relative_parts=admin_relative_parts,
                 ):
                     accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
-                    entries.append(CollectedFilesystemEntry(origin, RecordDisposition.SEMANTIC_GIT_ADMIN))
+                    _retain_entry(entries, origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
                     continue
                 if excluder.matches(relative, is_directory=entry_type is EntryType.DIRECTORY):
                     accounting.record(root, RecordDisposition.EXPLICITLY_EXCLUDED)
-                    entries.append(CollectedFilesystemEntry(origin, RecordDisposition.EXPLICITLY_EXCLUDED))
+                    _retain_entry(entries, origin, RecordDisposition.EXPLICITLY_EXCLUDED)
                     # Explicitly excluded directories define scope boundaries:
                     # record the matching directory once and prune its subtree.
                     continue
                 if entry_type is EntryType.DIRECTORY and is_nested_repository_boundary(path, selected_root=root):
                     accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
-                    entries.append(CollectedFilesystemEntry(origin, RecordDisposition.SEMANTIC_GIT_ADMIN))
+                    _retain_entry(entries, origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
                     continue
                 if inventory_ignored or (
                     entry_type is EntryType.DIRECTORY and relative_text in inventory_directory_paths
                 ):
                     accounting.record(root, RecordDisposition.IGNORED)
-                    entries.append(CollectedFilesystemEntry(origin, RecordDisposition.IGNORED))
+                    _retain_entry(entries, origin, RecordDisposition.IGNORED)
                     continue
-                pending.append(_PendingEntry(root, path, snapshot, origin, entry_type))
+                _queue_or_consume(
+                    _PendingEntry(root, path, snapshot, origin, entry_type),
+                    pending,
+                    pending_consumer,
+                )
                 if entry_type is EntryType.DIRECTORY:
                     directories.append(path)
         return pending
@@ -842,9 +924,11 @@ class FilesystemCollector:
         item: _PendingEntry,
         kinds: tuple[TimestampKind, ...],
         accounting: _AccountingBuilder,
-        observations: list[TimestampObservation],
+        observations: list[TimestampObservation] | None,
         diagnostics: list[CollectorDiagnostic],
+        observation_consumer: FilesystemObservationConsumer | None,
     ) -> None:
+        captured: list[TimestampObservation] = []
         for kind in kinds:
             accounting.request(item.root, kind)
             extraction = self._timestamp_adapter.extract(item.snapshot, kind, path=item.path)
@@ -857,7 +941,9 @@ class FilesystemCollector:
                     extraction.instant_utc_ns,
                     extraction.raw_timestamp,
                 )
-                observations.append(observation)
+                captured.append(observation)
+                if observations is not None:
+                    observations.append(observation)
                 accounting.extraction(
                     item.root,
                     kind,
@@ -877,6 +963,28 @@ class FilesystemCollector:
                             provenance_id=item.origin.record_id,
                         )
                     )
+        if captured and observation_consumer is not None:
+            observation_consumer(tuple(captured))
+
+
+def _retain_entry(
+    entries: list[CollectedFilesystemEntry] | None,
+    origin: RecordOrigin,
+    disposition: RecordDisposition,
+) -> None:
+    if entries is not None:
+        entries.append(CollectedFilesystemEntry(origin, disposition))
+
+
+def _queue_or_consume(
+    item: _PendingEntry,
+    pending: list[_PendingEntry],
+    consumer: Callable[[_PendingEntry], None] | None,
+) -> None:
+    if consumer is None:
+        pending.append(item)
+    else:
+        consumer(item)
 
 
 def _account_inventory_warning(
@@ -1093,6 +1201,7 @@ __all__ = [
     "FilesystemAccounting",
     "FilesystemCollectionResult",
     "FilesystemCollector",
+    "FilesystemObservationConsumer",
     "TimestampExtractionCoverage",
     "scandir_no_follow",
 ]

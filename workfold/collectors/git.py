@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from collections.abc import Callable, Collection, Mapping, Sequence
+import tempfile
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -14,6 +15,7 @@ from workfold.collectors.base import CollectorDiagnostic, CollectorResult
 from workfold.collectors.git_objects import GitObjectParseError, ParsedCommit, parse_cat_file_batch, parse_commit_object
 from workfold.config import RefScope
 from workfold.coverage import DiagnosticSeverity
+from workfold.iterables import batched
 from workfold.models import RecordKind, RecordOrigin, Source, TimestampKind, TimestampObservation
 from workfold.provenance import git_commit_id
 
@@ -150,36 +152,7 @@ class GitRunner:
     ) -> subprocess.CompletedProcess[bytes]:
         """Run one local command with prompts, pagers, protocols and lazy fetch disabled."""
 
-        if not arguments or arguments[0] not in _LOCAL_READ_COMMANDS:
-            command_name = arguments[0] if arguments else "<empty>"
-            raise GitCommandError(
-                code="unsafe_git_command",
-                message=f"Git command is not allowed for local collection: {command_name}",
-                command=tuple(arguments),
-                cwd=cwd,
-                hint="Workfold only invokes allow-listed, read-only Git commands.",
-            )
-        if any("\0" in argument for argument in arguments):
-            raise GitCommandError(
-                code="unsafe_git_argument",
-                message="Git command argument contains a NUL byte",
-                command=tuple(arguments),
-                cwd=cwd,
-            )
-
-        command = (
-            self._executable,
-            "--no-pager",
-            "-c",
-            "color.ui=false",
-            "-c",
-            "core.pager=cat",
-            "-c",
-            "credential.helper=",
-            "-c",
-            "protocol.allow=never",
-            *arguments,
-        )
+        command = self._command(arguments, cwd=cwd)
         try:
             completed = self._process_runner(
                 command,
@@ -231,6 +204,121 @@ class GitRunner:
                 stderr_truncated=truncated,
             )
         return completed
+
+    def iter_stdout_lines(
+        self,
+        arguments: Sequence[str],
+        *,
+        cwd: Path,
+        allowed_returncodes: Collection[int] = (0,),
+    ) -> Iterator[bytes]:
+        """Yield stdout records without retaining an unbounded Git response.
+
+        Injected process runners, subclasses, and timeout-enabled runners keep
+        using :meth:`run`, preserving their interception semantics. The normal
+        production runner streams stdout while stderr is spooled separately so
+        neither pipe can deadlock the other.
+        """
+
+        if (
+            self._process_runner is not subprocess.run
+            or type(self).run is not GitRunner.run
+            or self._timeout is not None
+        ):
+            yield from self.run(arguments, cwd=cwd, allowed_returncodes=allowed_returncodes).stdout.splitlines(
+                keepends=True
+            )
+            return
+
+        command = self._command(arguments, cwd=cwd)
+        with tempfile.TemporaryFile() as stderr_file:
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=os.fspath(cwd),
+                    env=self._environment(),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=stderr_file,
+                    shell=False,
+                )
+            except FileNotFoundError as error:
+                raise GitCommandError(
+                    code="git_not_found",
+                    message=f"Git executable was not found: {self._executable}",
+                    command=command,
+                    cwd=cwd,
+                    hint="Install Git or use --mode fs.",
+                ) from error
+            except OSError as error:
+                raise GitCommandError(
+                    code="git_spawn_error",
+                    message=f"Git command could not be started: {error}",
+                    command=command,
+                    cwd=cwd,
+                ) from error
+
+            completed = False
+            try:
+                if process.stdout is None:
+                    raise RuntimeError("streaming Git process omitted stdout")
+                yield from process.stdout
+                process.stdout.close()
+                returncode = process.wait()
+                completed = True
+            finally:
+                if not completed and process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+
+            if returncode not in allowed_returncodes:
+                stderr_file.seek(0)
+                stderr = stderr_file.read(self._stderr_limit + 1)
+                bounded, truncated = self._bounded_stderr(stderr)
+                raise GitCommandError(
+                    code="git_command_failed",
+                    message=f"Git command failed with exit status {returncode}",
+                    command=command,
+                    cwd=cwd,
+                    returncode=returncode,
+                    stderr=bounded,
+                    stderr_truncated=truncated,
+                )
+
+    def _command(self, arguments: Sequence[str], *, cwd: Path) -> tuple[str, ...]:
+        if not arguments or arguments[0] not in _LOCAL_READ_COMMANDS:
+            command_name = arguments[0] if arguments else "<empty>"
+            raise GitCommandError(
+                code="unsafe_git_command",
+                message=f"Git command is not allowed for local collection: {command_name}",
+                command=tuple(arguments),
+                cwd=cwd,
+                hint="Workfold only invokes allow-listed, read-only Git commands.",
+            )
+        if any("\0" in argument for argument in arguments):
+            raise GitCommandError(
+                code="unsafe_git_argument",
+                message="Git command argument contains a NUL byte",
+                command=tuple(arguments),
+                cwd=cwd,
+            )
+        return (
+            self._executable,
+            "--no-pager",
+            "-c",
+            "color.ui=false",
+            "-c",
+            "core.pager=cat",
+            "-c",
+            "credential.helper=",
+            "-c",
+            "protocol.allow=never",
+            *arguments,
+        )
 
     def _bounded_stderr(self, stderr: bytes) -> tuple[bytes, bool]:
         if len(stderr) <= self._stderr_limit:
@@ -389,6 +477,15 @@ class GitCollectionResult:
     parse_errors: int
     repository_accounting: tuple[GitCommitRepositoryAccounting, ...] = ()
     duplicate_targets: int = 0
+    records_retained: bool = True
+
+    def __post_init__(self) -> None:
+        captured = sum(item.captured_commits for item in self.repository_accounting)
+        if self.repository_accounting:
+            if self.records_retained and len(self.commits) != captured:
+                raise ValueError("retained Git commits do not match repository accounting")
+            if len(self.commits) > captured:
+                raise ValueError("retained Git commits exceed captured repository accounting")
 
     @property
     def is_partial(self) -> bool:
@@ -574,6 +671,51 @@ def enumerate_commit_ids(
     return parse_commit_ids(output, repository=repository)
 
 
+def iter_commit_ids(
+    repository: GitRepository,
+    runner: GitRunner,
+    ref_scope: RefScope,
+) -> Iterator[str]:
+    """Stream the unique commit IDs emitted by one Git revision walk."""
+
+    if ref_scope is RefScope.ALL_REFS:
+        revisions = ("rev-list", "--all")
+    else:
+        head = runner.run(
+            ("rev-parse", "--verify", "--quiet", "HEAD^{commit}"),
+            cwd=repository.root,
+            allowed_returncodes=(0, 1),
+        )
+        if ref_scope is RefScope.HEAD:
+            if head.returncode == 1:
+                return
+            revisions = ("rev-list", "HEAD")
+        else:
+            revisions = ("rev-list", "--branches", "HEAD") if head.returncode == 0 else ("rev-list", "--branches")
+
+    # A single revision walk deduplicates commits reachable through multiple
+    # refs itself. Avoid rebuilding the entire object-ID set in Python.
+    for raw_line in runner.iter_stdout_lines(revisions, cwd=repository.root):
+        raw_object_id = raw_line.rstrip(b"\r\n")
+        try:
+            object_id = raw_object_id.decode("ascii")
+        except UnicodeDecodeError as error:
+            raise GitCommandError(
+                code="invalid_git_output",
+                message="git rev-list returned a non-ASCII object ID",
+                command=revisions,
+                cwd=repository.root,
+            ) from error
+        if not _OID_TEXT_RE.fullmatch(object_id):
+            raise GitCommandError(
+                code="invalid_git_output",
+                message="git rev-list returned an invalid object ID",
+                command=revisions,
+                cwd=repository.root,
+            )
+        yield object_id
+
+
 def unique_semantic_repositories(repositories: Sequence[GitRepository]) -> tuple[GitRepository, ...]:
     """Keep one traversal context for each shared Git object/ref database."""
 
@@ -632,10 +774,20 @@ class GitRepositoryResolver:
 class GitCollector:
     """Collect unique raw commit records from one or more selected paths."""
 
-    def __init__(self, runner: GitRunner | None = None) -> None:
+    def __init__(self, runner: GitRunner | None = None, *, object_batch_size: int = 2_048) -> None:
+        if object_batch_size < 1:
+            raise ValueError("object_batch_size must be positive")
         self._runner = runner or GitRunner()
+        self._object_batch_size = object_batch_size
 
-    def collect(self, paths: Sequence[Path], *, ref_scope: RefScope = RefScope.ALL_REFS) -> GitCollectionResult:
+    def collect(
+        self,
+        paths: Sequence[Path],
+        *,
+        ref_scope: RefScope = RefScope.ALL_REFS,
+        commit_consumer: Callable[[tuple[CollectedGitCommit, ...]], None] | None = None,
+        retain_commits: bool = True,
+    ) -> GitCollectionResult:
         """Collect whole repositories, continuing across independent target failures."""
 
         resolution = GitRepositoryResolver(self._runner).resolve(paths)
@@ -653,92 +805,101 @@ class GitCollector:
             unavailable_for_repository = 0
             parse_errors_for_repository = 0
             successful_for_repository = False
+            object_read_failed = False
             try:
                 try:
-                    object_ids, duplicates_for_repository = enumerate_commit_ids(
-                        repository,
-                        self._runner,
-                        ref_scope,
+                    object_id_batches = batched(
+                        iter_commit_ids(repository, self._runner, ref_scope),
+                        self._object_batch_size,
                     )
+                    for object_id_batch in object_id_batches:
+                        object_ids = tuple(object_id_batch)
+                        discovered_for_repository += len(object_ids)
+                        input_data = b"".join(object_id.encode("ascii") + b"\n" for object_id in object_ids)
+                        try:
+                            batch_output = self._runner.run(
+                                ("cat-file", "--batch"),
+                                cwd=repository.root,
+                                input_data=input_data,
+                            ).stdout
+                            batch = parse_cat_file_batch(batch_output, object_ids)
+                        except GitCommandError as error:
+                            diagnostics.append(
+                                _command_diagnostic(error, stage="git_object_read", target=repository.root)
+                            )
+                            object_read_failed = True
+                            continue
+                        except GitObjectParseError as error:
+                            diagnostics.append(
+                                CollectorDiagnostic(
+                                    code=error.code,
+                                    stage="git_object_read",
+                                    target=os.fspath(repository.root),
+                                    provenance_id=error.object_id,
+                                    message=str(error),
+                                    hint="The repository may be corrupt or may have changed during collection.",
+                                )
+                            )
+                            parse_errors_for_repository += len(object_ids)
+                            object_read_failed = True
+                            continue
+
+                        for unavailable in batch.unavailable:
+                            unavailable_for_repository += 1
+                            diagnostics.append(
+                                CollectorDiagnostic(
+                                    code="git_object_unavailable",
+                                    stage="git_object_read",
+                                    target=os.fspath(repository.root),
+                                    provenance_id=unavailable.requested_id,
+                                    message=f"Git object is unavailable ({unavailable.reason})",
+                                    hint=(
+                                        "The repository may be shallow or partial; "
+                                        "Workfold will not fetch missing objects."
+                                    ),
+                                )
+                            )
+
+                        captured_batch: list[CollectedGitCommit] = []
+                        for batch_object in batch.objects:
+                            if batch_object.object_type != "commit":
+                                parse_errors_for_repository += 1
+                                diagnostics.append(
+                                    CollectorDiagnostic(
+                                        code="git_object_not_commit",
+                                        stage="git_object_parse",
+                                        target=os.fspath(repository.root),
+                                        provenance_id=batch_object.object_id,
+                                        message=(f"rev-list object has unexpected type {batch_object.object_type!r}"),
+                                    )
+                                )
+                                continue
+                            try:
+                                parsed = parse_commit_object(batch_object.object_id, batch_object.data)
+                            except GitObjectParseError as error:
+                                parse_errors_for_repository += 1
+                                diagnostics.append(
+                                    CollectorDiagnostic(
+                                        code=error.code,
+                                        stage="git_object_parse",
+                                        target=os.fspath(repository.root),
+                                        provenance_id=error.object_id,
+                                        message=str(error),
+                                        hint="The commit object is malformed and was not plotted.",
+                                    )
+                                )
+                                continue
+                            collected = CollectedGitCommit(repository=repository, commit=parsed)
+                            captured_batch.append(collected)
+                            if retain_commits:
+                                commits.append(collected)
+                            captured_for_repository += 1
+                        if captured_batch and commit_consumer is not None:
+                            commit_consumer(tuple(captured_batch))
                 except GitCommandError as error:
                     diagnostics.append(_command_diagnostic(error, stage="git_commit_discovery", target=repository.root))
                     continue
-                discovered_for_repository = len(object_ids)
-                if not object_ids:
-                    successful_for_repository = True
-                    continue
-
-                input_data = b"".join(object_id.encode("ascii") + b"\n" for object_id in object_ids)
-                try:
-                    batch_output = self._runner.run(
-                        ("cat-file", "--batch"),
-                        cwd=repository.root,
-                        input_data=input_data,
-                    ).stdout
-                    batch = parse_cat_file_batch(batch_output, object_ids)
-                except GitCommandError as error:
-                    diagnostics.append(_command_diagnostic(error, stage="git_object_read", target=repository.root))
-                    continue
-                except GitObjectParseError as error:
-                    diagnostics.append(
-                        CollectorDiagnostic(
-                            code=error.code,
-                            stage="git_object_read",
-                            target=os.fspath(repository.root),
-                            provenance_id=error.object_id,
-                            message=str(error),
-                            hint="The repository may be corrupt or may have changed during collection.",
-                        )
-                    )
-                    # A malformed batch envelope prevents assigning any response
-                    # to a requested object safely, so every object in this batch
-                    # has an accounted parse failure.
-                    parse_errors_for_repository += len(object_ids)
-                    continue
-
-                for unavailable in batch.unavailable:
-                    unavailable_for_repository += 1
-                    diagnostics.append(
-                        CollectorDiagnostic(
-                            code="git_object_unavailable",
-                            stage="git_object_read",
-                            target=os.fspath(repository.root),
-                            provenance_id=unavailable.requested_id,
-                            message=f"Git object is unavailable ({unavailable.reason})",
-                            hint="The repository may be shallow or partial; Workfold will not fetch missing objects.",
-                        )
-                    )
-                for batch_object in batch.objects:
-                    if batch_object.object_type != "commit":
-                        parse_errors_for_repository += 1
-                        diagnostics.append(
-                            CollectorDiagnostic(
-                                code="git_object_not_commit",
-                                stage="git_object_parse",
-                                target=os.fspath(repository.root),
-                                provenance_id=batch_object.object_id,
-                                message=f"rev-list object has unexpected type {batch_object.object_type!r}",
-                            )
-                        )
-                        continue
-                    try:
-                        parsed = parse_commit_object(batch_object.object_id, batch_object.data)
-                    except GitObjectParseError as error:
-                        parse_errors_for_repository += 1
-                        diagnostics.append(
-                            CollectorDiagnostic(
-                                code=error.code,
-                                stage="git_object_parse",
-                                target=os.fspath(repository.root),
-                                provenance_id=error.object_id,
-                                message=str(error),
-                                hint="The commit object is malformed and was not plotted.",
-                            )
-                        )
-                        continue
-                    commits.append(CollectedGitCommit(repository=repository, commit=parsed))
-                    captured_for_repository += 1
-                successful_for_repository = True
+                successful_for_repository = not object_read_failed
             finally:
                 operational_errors = sum(
                     item.severity is DiagnosticSeverity.ERROR for item in diagnostics[diagnostic_start:]
@@ -775,6 +936,7 @@ class GitCollector:
             parse_errors=parse_error_count,
             repository_accounting=tuple(repository_accounting),
             duplicate_targets=resolution.duplicate_targets,
+            records_retained=retain_commits,
         )
 
 

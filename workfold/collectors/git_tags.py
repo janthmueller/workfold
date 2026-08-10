@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -192,6 +192,15 @@ class GitTagCollectionResult:
     unavailable_objects: int
     parse_errors: int
     repository_accounting: tuple[GitTagRepositoryAccounting, ...] = ()
+    records_retained: bool = True
+
+    def __post_init__(self) -> None:
+        captured_tags = sum(item.captured_tags for item in self.repository_accounting)
+        if self.repository_accounting:
+            if self.records_retained and len(self.tags) != captured_tags:
+                raise ValueError("retained Git tags do not match repository accounting")
+            if len(self.tags) > captured_tags:
+                raise ValueError("retained Git tags exceed captured repository accounting")
 
     @property
     def is_partial(self) -> bool:
@@ -339,7 +348,13 @@ class GitTagCollector:
     def __init__(self, runner: GitRunner | None = None) -> None:
         self._runner = runner or GitRunner()
 
-    def collect(self, repositories: Sequence[GitRepository]) -> GitTagCollectionResult:
+    def collect(
+        self,
+        repositories: Sequence[GitRepository],
+        *,
+        tag_consumer: Callable[[tuple[CollectedGitTag, ...]], None] | None = None,
+        retain_tags: bool = True,
+    ) -> GitTagCollectionResult:
         """Collect all local tag refs independently of commit reachability scope."""
 
         semantic_repositories = unique_semantic_repositories(repositories)
@@ -391,7 +406,7 @@ class GitTagCollector:
                 lightweight_for_repository = len(lightweight_refs)
                 captured_tags_for_repository += len(lightweight_refs)
                 unavailable_timestamps_for_repository += len(lightweight_refs)
-                tags.extend(
+                lightweight_batch = tuple(
                     CollectedGitTag(
                         repository=repository,
                         ref=item,
@@ -400,6 +415,10 @@ class GitTagCollector:
                     )
                     for item in lightweight_refs
                 )
+                if retain_tags:
+                    tags.extend(lightweight_batch)
+                if lightweight_batch and tag_consumer is not None:
+                    tag_consumer(lightweight_batch)
                 if not annotated_refs:
                     successful_for_repository = True
                     continue
@@ -479,7 +498,7 @@ class GitTagCollector:
                         unavailable_timestamps_for_repository += len(affected)
                     else:
                         captured_timestamps_for_repository += len(affected)
-                    tags.extend(
+                    collected_batch = tuple(
                         CollectedGitTag(
                             repository=repository,
                             ref=ref,
@@ -489,6 +508,10 @@ class GitTagCollector:
                         )
                         for ref in affected
                     )
+                    if retain_tags:
+                        tags.extend(collected_batch)
+                    if collected_batch and tag_consumer is not None:
+                        tag_consumer(collected_batch)
                 successful_for_repository = True
             finally:
                 operational_errors = sum(
@@ -533,6 +556,7 @@ class GitTagCollector:
             unavailable_objects=unavailable_objects,
             parse_errors=parse_errors,
             repository_accounting=tuple(repository_accounting),
+            records_retained=retain_tags,
         )
 
 

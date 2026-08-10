@@ -55,11 +55,19 @@ Records, timestamp observations, and plotted events are different totals. For
 example, one commit with identical author and committer instants can produce two
 captured observations but one marker, with both roles preserved.
 
+Internal streaming and batches do not define scope. Every record from one batch
+is fully accounted before the next batch is read, and the final conservation
+checks span the complete run. Crossing the chart sorter's in-memory threshold
+changes only temporary storage, not event order, clustering, totals, or
+coverage.
+
 Sparse chart layout does not change this accounting. Empty wall-clock bands are
 omitted because they contain no selected markers, not because collection skipped
 them. Ordinary cells show one symbol per activity marker. If the terminal is too
 narrow for that representation, a cell switches to exact per-symbol `×N` counts;
-the underlying markers, source/schedule totals, and coverage ledger are unchanged.
+very busy cells may make that same exact-count switch before rendering so their
+visual sequence cannot grow memory without bound. The underlying event,
+source/schedule, and coverage totals are unchanged.
 Chart band labels deliberately use minute-only `HH:MM` endpoints, including for
 second-level events and cluster windows. This display choice does not round or
 overwrite the normalized instant: exact seconds and available nanoseconds remain

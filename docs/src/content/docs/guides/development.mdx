@@ -90,7 +90,16 @@ browser renderer while those remain outside the MVP.
 
 ## Implementation boundaries
 
-Collectors emit normalized, provenance-preserving timestamp observations.
+Collectors emit normalized, provenance-preserving timestamp observations in
+record-local batches. The application immediately applies selection, updates
+partition coverage, coalesces only timestamps from that record, classifies the
+result, and releases the full provenance unless it belongs to the bounded
+outside-event list. Git revision output is streamed; commit objects and
+file-change derivation use bounded internal batches. Filesystem observations
+flow through one entry at a time, and production runs do not retain the full
+entry or observation inventory after its counters have been updated. Batch
+sizes are memory controls, never collection, filtering, or chart semantics.
+
 Configuration resolves time, mode, and the evidence profile as three independent
 axes. The profile defaults to `standard`; neither portable nor full expansion
 may rewrite time or mode.
@@ -112,8 +121,13 @@ resolution for repository/admin containment.
 
 Schedule classification, display cropping, anchored globally aligned time
 clustering, renderer-neutral report construction, and terminal rendering remain
-separate stages. The clusterer emits half-open semantic bands and literal event
-data; only the renderer creates Rich objects or assigns green/blue/red styles.
+separate stages. The clusterer emits half-open semantic bands and ordered visual
+runs for ordinary cells. Pathologically busy cells retain exact counts per
+visual kind instead of an unbounded alternating sequence. Chart sorting stays
+in memory for normal runs and transparently spills to an ephemeral local
+disk-backed sorter above its fixed threshold; the temporary data is removed
+when aggregation finishes. Only the renderer creates Rich objects or assigns
+green/blue/red styles.
 Repository-controlled values must be sanitized and added as literal Rich text,
 never parsed as markup.
 
@@ -137,8 +151,8 @@ collection, explicit narrowing, unsupported capabilities, and nonzero cropping.
 Keep record counts, timestamp observations, and plotted activity markers
 distinct: they intentionally answer different accounting questions. Ordinary
 cells draw one symbol per activity marker. Exact `×N` compaction is a
-width-driven renderer fallback and must not alter event, summary, or coverage
-counts.
+width- or volume-driven renderer fallback and must not alter event, summary, or
+coverage counts.
 
 Before changing behavior, inspect the CLI help, usage and accuracy documentation,
 and the tests covering the affected pipeline stage.

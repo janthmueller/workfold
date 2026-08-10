@@ -36,7 +36,7 @@ from workfold.coverage import (
     SelectionDisposition,
     TimestampCoverageKey,
 )
-from workfold.models import EntryType, RecordKind, Source, TimestampKind
+from workfold.models import EntryType, RecordKind, Source, TimestampKind, TimestampObservation
 
 from support.git_repo import GitRepo
 
@@ -888,3 +888,30 @@ def test_queued_directory_replaced_by_symlink_cannot_escape_scan_root(tmp_path: 
     assert all(item.origin.path != escape / secret.name for item in result.entries)
     assert result.is_partial
     assert any(item.code == "filesystem_concurrent_mutation" for item in result.diagnostics)
+
+
+def test_non_retaining_collection_streams_one_entry_batch_at_a_time(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    for name in ("one.txt", "two.txt", "three.txt"):
+        (root / name).write_text(name, encoding="utf-8")
+    received: list[tuple[TimestampObservation, ...]] = []
+
+    result = FilesystemCollector().collect(
+        (root,),
+        timestamp_kinds=(TimestampKind.FS_MODIFIED, TimestampKind.FS_ACCESSED),
+        respect_gitignore=False,
+        include_ignored=True,
+        observation_consumer=received.append,
+        retain_entries=False,
+        retain_observations=False,
+    )
+
+    assert result.entries == result.observations == ()
+    assert len(received) == 3
+    assert all(len(batch) == 2 for batch in received)
+    assert all(len({item.origin.record_id for item in batch}) == 1 for batch in received)
+    assert all(not item.observation_ids_complete for item in result.accounting.timestamps)
+    assert sum(item.captured for item in result.accounting.timestamps) == 6
+    with pytest.raises(ValueError, match="non-retaining"):
+        result.build_coverage({}, {})

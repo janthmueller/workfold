@@ -413,3 +413,34 @@ def test_parse_failure_accounts_for_every_commit_in_repository_batch(tmp_path: P
     assert accounting.discovered_changes == 0
     assert result.diagnostics[0].code == "unexpected_git_change_commit"
     assert result.diagnostics[0].provenance_id is not None
+
+
+def test_non_retaining_file_change_collection_streams_batches(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    repo.commit(
+        "one.txt",
+        "one",
+        "one",
+        author_date="1700000000 +0000",
+        committer_date="1700000000 +0000",
+    )
+    repo.commit(
+        "two.txt",
+        "two",
+        "two",
+        author_date="1700000001 +0000",
+        committer_date="1700000001 +0000",
+    )
+    commits = GitCollector().collect((repo.path,)).commits
+    received: list[tuple[CollectedGitFileChange, ...]] = []
+
+    result = GitFileChangeCollector(commit_batch_size=1).collect(
+        commits,
+        change_consumer=received.append,
+        retain_changes=False,
+    )
+
+    assert result.records_retained is False
+    assert result.changes == ()
+    assert result.discovered_changes == 2
+    assert sum(len(batch) for batch in received) == 2

@@ -5,7 +5,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from workfold.aggregation import NANOSECONDS_PER_MINUTE, aggregate_markers
+from workfold.aggregation import NANOSECONDS_PER_MINUTE, AggregationBuilder, MarkerRun, aggregate_markers
 from workfold.models import (
     ActivityMarker,
     ClassifiedMarker,
@@ -66,7 +66,10 @@ def test_sparse_aggregation_preserves_exact_events_and_summary_dimensions() -> N
     assert len(result.clusters) == 2
     monday_cell = result.clusters[0].cell(Weekday.MONDAY)
     assert monday_cell is not None
-    assert monday_cell.markers == tuple(markers[:2])
+    assert monday_cell.runs == (
+        MarkerRun(Source.GIT, True, 1),
+        MarkerRun(Source.FILESYSTEM, False, 1),
+    )
     assert monday_cell.event_count == 2
     assert result.event_count == result.displayed_event_count == 3
     assert result.within_schedule_count == 1
@@ -124,7 +127,7 @@ def test_cluster_window_supports_sub_minute_precision() -> None:
     assert [cluster.event_count for cluster in result.clusters] == [2, 1]
 
 
-def test_event_order_is_exact_and_independent_of_input_order() -> None:
+def test_visual_runs_are_exact_and_independent_of_input_order() -> None:
     later_week = _classified(
         "later-week",
         datetime(2026, 8, 10, 8, 0, 0, 123456, tzinfo=timezone.utc),
@@ -153,7 +156,7 @@ def test_event_order_is_exact_and_independent_of_input_order() -> None:
     forward_markers = forward.clusters[0].cell(Weekday.MONDAY)
     reverse_markers = reverse.clusters[0].cell(Weekday.MONDAY)
     assert forward_markers is not None and reverse_markers is not None
-    assert forward_markers.markers == reverse_markers.markers == (earlier_week, later_week, exact_later)
+    assert forward_markers.runs == reverse_markers.runs == (MarkerRun(Source.GIT, True, 3),)
     assert exact_later.time_of_day_ns == earlier_week.time_of_day_ns + 1
 
 
@@ -166,7 +169,10 @@ def test_simultaneous_mixed_sources_have_a_stable_git_first_tie_break() -> None:
 
     cell = result.clusters[0].cell(Weekday.MONDAY)
     assert cell is not None
-    assert cell.markers == (git, filesystem)
+    assert cell.runs == (
+        MarkerRun(Source.GIT, True, 1),
+        MarkerRun(Source.FILESYSTEM, True, 1),
+    )
 
 
 def test_fall_back_duplicate_wall_times_remain_two_events_in_one_cell() -> None:
@@ -178,7 +184,7 @@ def test_fall_back_duplicate_wall_times_remain_two_events_in_one_cell() -> None:
 
     cell = result.clusters[0].cell(Weekday.SUNDAY)
     assert cell is not None
-    assert cell.markers == (first, second)
+    assert cell.runs == (MarkerRun(Source.GIT, True, 2),)
     assert cell.event_count == 2
 
 
@@ -203,7 +209,10 @@ def test_explicit_display_crop_is_exact_and_does_not_change_full_summary() -> No
     assert result.hidden_after.total == 1
     assert result.hidden_after.count_for_source(Source.GIT) == 1
     assert (result.display_start_minute, result.display_end_minute) == (6 * 60, 22 * 60)
-    assert [cell.markers for cluster in result.clusters for cell in cluster.cells] == [(markers[1],), (markers[2],)]
+    assert [cell.runs for cluster in result.clusters for cell in cluster.cells] == [
+        (MarkerRun(Source.FILESYSTEM, True, 1),),
+        (MarkerRun(Source.GIT, True, 1),),
+    ]
 
 
 def test_cropping_happens_before_clustering() -> None:
@@ -272,3 +281,51 @@ def test_empty_aggregation_has_no_rows_and_uses_full_day_without_schedule_bounds
     assert result.clusters == ()
     assert result.retained_outside_markers == ()
     assert (result.display_start_minute, result.display_end_minute) == (0, 24 * 60)
+
+
+def test_spilled_sort_matches_in_memory_sort_and_cleans_up() -> None:
+    markers = [
+        _classified(
+            str(index),
+            datetime(1960, 8, 1, 8, 0, tzinfo=timezone.utc) + timedelta(minutes=index),
+            source=Source.FILESYSTEM if index % 2 else Source.GIT,
+            within_schedule=index % 3 != 0,
+        )
+        for index in range(8)
+    ]
+    expected = aggregate_markers(reversed(markers), cluster_window=timedelta(minutes=5))
+    builder = AggregationBuilder(cluster_window=timedelta(minutes=5), spill_threshold=2)
+    for marker in reversed(markers):
+        builder.add(marker)
+
+    actual = builder.build()
+
+    assert builder.did_spill
+    assert actual == expected
+    with pytest.raises(RuntimeError, match="only be built once"):
+        builder.build()
+    with pytest.raises(RuntimeError, match="cannot be reused"):
+        builder.add(markers[0])
+
+
+def test_pathologically_alternating_cell_is_compacted_to_bounded_counts() -> None:
+    base = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
+    markers = tuple(
+        _classified(
+            str(index),
+            base + timedelta(microseconds=index),
+            source=Source.FILESYSTEM if index % 2 else Source.GIT,
+        )
+        for index in range(300)
+    )
+
+    result = aggregate_markers(markers, cluster_window=timedelta(hours=1))
+
+    cell = result.clusters[0].cell(Weekday.MONDAY)
+    assert cell is not None
+    assert cell.compacted
+    assert cell.event_count == 300
+    assert cell.runs == (
+        MarkerRun(Source.GIT, True, 150),
+        MarkerRun(Source.FILESYSTEM, True, 150),
+    )

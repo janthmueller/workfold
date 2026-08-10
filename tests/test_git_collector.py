@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from workfold.collectors.git import (
+    CollectedGitCommit,
     GitCollector,
     GitCommandError,
     GitCommitRepositoryAccounting,
@@ -670,3 +671,28 @@ def test_collector_accounts_for_discovery_and_object_failures(
         assert result.unavailable_objects == 1
     elif fault in {"batch-envelope", "wrong-type", "malformed-commit"}:
         assert result.parse_errors == 1
+
+
+def test_non_retaining_commit_collection_streams_bounded_batches(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    for index in range(3):
+        repo.commit(
+            f"{index}.txt",
+            str(index),
+            f"commit {index}",
+            author_date=f"170000000{index} +0000",
+            committer_date=f"170000000{index} +0000",
+        )
+    received: list[tuple[CollectedGitCommit, ...]] = []
+
+    result = GitCollector(object_batch_size=1).collect(
+        (repo.path,),
+        commit_consumer=received.append,
+        retain_commits=False,
+    )
+
+    assert result.records_retained is False
+    assert result.commits == ()
+    assert result.discovered_commit_ids == 3
+    assert sum(len(batch) for batch in received) == 3
+    assert all(len(batch) == 1 for batch in received)
