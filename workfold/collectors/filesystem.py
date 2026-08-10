@@ -626,6 +626,10 @@ class FilesystemCollector:
         defer_ignore_evaluation = respect_gitignore and probe.repository is not None and inventory is None
 
         def process_visible_entry(item: _PendingEntry) -> None:
+            if item.entry_type is EntryType.DIRECTORY and not include_directories:
+                # Directories needed only to reach requested leaves are
+                # traversal structure, not discovered metadata records.
+                return
             disposition = (
                 RecordDisposition.ELIGIBLE
                 if _entry_is_in_scope(
@@ -636,6 +640,7 @@ class FilesystemCollector:
                 )
                 else RecordDisposition.EXCLUDED_ENTRY_TYPE
             )
+            accounting.discover(root)
             accounting.record(root, disposition)
             _retain_entry(entries, item.origin, disposition)
             if disposition is RecordDisposition.ELIGIBLE:
@@ -658,6 +663,7 @@ class FilesystemCollector:
             inventory=inventory,
             inventory_ignored_seen=inventory_ignored_seen,
             pending_consumer=None if defer_ignore_evaluation else process_visible_entry,
+            include_directories=include_directories,
         )
         ignored: frozenset[Path] = frozenset()
         ignore_error = None
@@ -699,10 +705,13 @@ class FilesystemCollector:
 
         for item in pending:
             if item.path in ignored:
+                if item.entry_type is EntryType.DIRECTORY and not include_directories:
+                    continue
                 disposition = RecordDisposition.IGNORED
             else:
                 process_visible_entry(item)
                 continue
+            accounting.discover(root)
             accounting.record(root, disposition)
             _retain_entry(entries, item.origin, disposition)
 
@@ -725,12 +734,6 @@ class FilesystemCollector:
         """Validate Git path candidates against the current filesystem snapshot."""
 
         root = root_snapshot.path
-        root_type = _entry_type(root_snapshot.snapshot.st_mode)
-        accounting.discover(root)
-        root_origin = _origin(root, root, root_type)
-        accounting.record(root, RecordDisposition.EXCLUDED_ENTRY_TYPE)
-        _retain_entry(entries, root_origin, RecordDisposition.EXCLUDED_ENTRY_TYPE)
-
         _account_inventory_warning(root, inventory, accounting=accounting, diagnostics=diagnostics)
 
         try:
@@ -818,21 +821,23 @@ class FilesystemCollector:
         inventory: GitFilesystemInventory | None,
         inventory_ignored_seen: set[str],
         pending_consumer: Callable[[_PendingEntry], None] | None,
+        include_directories: bool,
     ) -> list[_PendingEntry]:
         root = root_snapshot.path
         pending: list[_PendingEntry] = []
         root_type = _entry_type(root_snapshot.snapshot.st_mode)
-        accounting.discover(root)
         root_origin = _origin(root, root, root_type)
         root_explicit = root_type is not EntryType.DIRECTORY and excluder.matches(
             PurePosixPath(root.name),
             is_directory=False,
         )
         if _is_semantic_git_admin(root, repository):
+            accounting.discover(root)
             accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
             _retain_entry(entries, root_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
             return pending
         if root_explicit:
+            accounting.discover(root)
             accounting.record(root, RecordDisposition.EXPLICITLY_EXCLUDED)
             _retain_entry(entries, root_origin, RecordDisposition.EXPLICITLY_EXCLUDED)
             return pending
@@ -871,8 +876,8 @@ class FilesystemCollector:
 
             for name, snapshot, stat_error in sorted(discovered_entries, key=lambda item: os.fsencode(item[0])):
                 path = directory / name
-                accounting.discover(root)
                 if stat_error is not None:
+                    accounting.discover(root)
                     accounting.record(root, RecordDisposition.RECORD_ERROR)
                     diagnostics.append(_stat_diagnostic(root, path, stat_error, is_root=False))
                     continue
@@ -891,24 +896,29 @@ class FilesystemCollector:
                     relative_parts=relative.parts,
                     admin_relative_parts=admin_relative_parts,
                 ):
+                    accounting.discover(root)
                     accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
                     _retain_entry(entries, origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
                     continue
                 if excluder.matches(relative, is_directory=entry_type is EntryType.DIRECTORY):
+                    accounting.discover(root)
                     accounting.record(root, RecordDisposition.EXPLICITLY_EXCLUDED)
                     _retain_entry(entries, origin, RecordDisposition.EXPLICITLY_EXCLUDED)
                     # Explicitly excluded directories define scope boundaries:
                     # record the matching directory once and prune its subtree.
                     continue
                 if entry_type is EntryType.DIRECTORY and is_nested_repository_boundary(path, selected_root=root):
+                    accounting.discover(root)
                     accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
                     _retain_entry(entries, origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
                     continue
                 if inventory_ignored or (
                     entry_type is EntryType.DIRECTORY and relative_text in inventory_directory_paths
                 ):
-                    accounting.record(root, RecordDisposition.IGNORED)
-                    _retain_entry(entries, origin, RecordDisposition.IGNORED)
+                    if entry_type is not EntryType.DIRECTORY or include_directories:
+                        accounting.discover(root)
+                        accounting.record(root, RecordDisposition.IGNORED)
+                        _retain_entry(entries, origin, RecordDisposition.IGNORED)
                     continue
                 _queue_or_consume(
                     _PendingEntry(root, path, snapshot, origin, entry_type),

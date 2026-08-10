@@ -101,6 +101,10 @@ in provenance and exact outside-event listings.
 - Ignored leaf candidates are counted without reading their metadata. The full
   profile and `--include-ignored` instead traverse and stat those entries because
   their timestamps are explicitly in scope.
+- A directory visited only so a file-only scan can reach descendant files is
+  traversal structure, not a discovered metadata record. It enters record and
+  timestamp coverage when directories are requested; explicit exclusion and
+  Git-administration boundaries remain accounted separately.
 - Copying, checkout, archive extraction, formatting, and builds may alter times.
 - Creation/birth time is not exposed by every operating system or filesystem.
   On Linux, Workfold requests `STATX_BTIME` through libc `statx`; the individual

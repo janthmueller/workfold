@@ -119,6 +119,15 @@ native walker alone. Keep the fast inventory and native reference behavior
 equivalent for requested regular files, and never reintroduce per-entry path
 resolution for repository/admin containment.
 
+Filesystem record discovery is defined by requested metadata-bearing entry
+kinds, not by walker implementation details. A directory used only to reach
+requested files is traversal structure and must not appear as an excluded
+record merely because the native fallback visited it. Explicitly excluded
+boundaries, semantic Git administration, and unreadable candidates remain
+accounted terminal outcomes. Fast Git inventory and native ignore fallback
+must therefore produce the same eligible-file and coverage counters for the
+same stable tree.
+
 Schedule classification, display cropping, anchored globally aligned time
 clustering, renderer-neutral report construction, and terminal rendering remain
 separate stages. The clusterer emits half-open semantic bands and ordered visual

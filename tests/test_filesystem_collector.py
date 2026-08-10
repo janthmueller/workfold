@@ -270,6 +270,14 @@ def test_git_inventory_and_native_scan_select_the_same_regular_files(tmp_path: P
 
     native_regular = {item.path for item in native.eligible_origins}
     assert {item.path for item in fast.eligible_origins} == native_regular == visible
+    assert fast.accounting.records == native.accounting.records
+    assert [
+        (item.key, item.requested, item.captured, item.unavailable, item.unsupported, item.errors)
+        for item in fast.accounting.timestamps
+    ] == [
+        (item.key, item.requested, item.captured, item.unavailable, item.unsupported, item.errors)
+        for item in native.accounting.timestamps
+    ]
 
 
 def test_explicitly_excluded_directory_is_recorded_once_and_never_opened(tmp_path: Path) -> None:
@@ -463,7 +471,7 @@ def test_missing_roots_and_traversal_failures_are_structured_partial_results(tmp
     )
     assert traversal.is_partial
     assert traversal.diagnostics[0].code == "filesystem_traversal_error"
-    assert traversal.accounting.records[0].discovered == 1
+    assert traversal.accounting.records[0].discovered == 0
 
 
 def test_descendant_stat_failures_receive_record_error_accounting(tmp_path: Path) -> None:
@@ -491,7 +499,7 @@ def test_descendant_stat_failures_receive_record_error_accounting(tmp_path: Path
     )
 
     coverage = result.accounting.records[0]
-    assert coverage.discovered == 2
+    assert coverage.discovered == 1
     assert coverage.record_errors == 1
     assert result.is_partial
     assert result.diagnostics[0].code == "filesystem_stat_error"
