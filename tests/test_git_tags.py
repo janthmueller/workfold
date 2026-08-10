@@ -188,6 +188,35 @@ def test_aliases_share_one_batched_tag_object_read(tmp_path: Path) -> None:
     assert runner.cat_file_inputs == [object_id.encode() + b"\n"]
 
 
+def test_tag_collector_emits_bounded_ref_batches_without_retaining_records(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "batched-tags")
+    commit_id = repo.commit(
+        "one.txt",
+        "one",
+        "one",
+        author_date="1700000000 +0000",
+        committer_date="1700000000 +0000",
+    )
+    for index in range(5):
+        repo.point_ref(f"refs/tags/tag-{index}", commit_id)
+    repositories = GitCollector().collect((repo.path,)).repositories
+    batches: list[tuple[str, ...]] = []
+
+    result = GitTagCollector(ref_batch_size=2).collect(
+        repositories,
+        tag_consumer=lambda tags: batches.append(tuple(item.ref.ref_name for item in tags)),
+        retain_tags=False,
+    )
+
+    assert result.discovered_tags == 5
+    assert result.captured_tagger_timestamps == 0
+    assert result.unavailable_tagger_timestamps == 5
+    assert result.tags == ()
+    assert result.records_retained is False
+    assert [len(batch) for batch in batches] == [2, 2, 1]
+    assert {ref for batch in batches for ref in batch} == {f"refs/tags/tag-{index}" for index in range(5)}
+
+
 def test_linked_worktree_contexts_share_one_tag_traversal(tmp_path: Path) -> None:
     primary = GitRepo.create(tmp_path / "primary")
     commit_id = primary.commit(

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from workfold.collectors.base import CollectorDiagnostic
+from workfold.collectors.base import CollectorDiagnostic, DiagnosticBuffer
 from workfold.collectors.git import (
     CollectedGitCommit,
     GitCommandError,
@@ -370,7 +370,7 @@ class GitFileChangeCollector:
             repositories_by_identity.setdefault(identity, commit.repository)
 
         changes: list[CollectedGitFileChange] = []
-        diagnostics: list[CollectorDiagnostic] = []
+        diagnostics = DiagnosticBuffer()
         repository_accounting: list[GitFileChangeRepositoryAccounting] = []
         for identity, repository in repositories_by_identity.items():
             commit_group = grouped[identity]
@@ -470,7 +470,7 @@ class GitFileChangeCollector:
         discovered_changes = sum(item.discovered_changes for item in repository_accounting)
         return GitFileChangeCollectionResult(
             changes=tuple(changes),
-            diagnostics=tuple(diagnostics),
+            diagnostics=diagnostics.snapshot(),
             requested_commits=len(commits),
             successful_commits=successful_commits,
             discovered_changes=discovered_changes,

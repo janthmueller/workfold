@@ -19,6 +19,7 @@ from workfold.collectors.git_reflogs import (
     parse_reflog_list,
     parse_reflog_selectors,
     read_semantic_reflog,
+    visit_semantic_reflog,
 )
 from workfold.models import RecordKind, TimestampKind
 
@@ -368,6 +369,57 @@ def test_raw_parser_accepts_empty_log_and_message_without_tab() -> None:
     assert entry.message == ""
     assert entry.raw_message == b""
     assert entry.offset_seconds == -3_600
+
+
+def test_semantic_reflog_visitor_preserves_exact_order_and_emits_bounded_batches(tmp_path: Path) -> None:
+    metadata = tmp_path / ".git"
+    metadata.mkdir()
+    repository = GitRepository(tmp_path, metadata, metadata, False)
+    old_id = b"0" * 40
+    new_id = b"a" * 40
+    line = old_id + b" " + new_id + b" Person <person@example.test> 1700000000 +0000\tmessage\n"
+    payload = line * 5
+    reflog = metadata / "log"
+    reflog.write_bytes(payload)
+    batches: list[tuple[reflog_module.ParsedReflogEntry, ...]] = []
+
+    result = visit_semantic_reflog(
+        reflog,
+        repository=repository,
+        ref_name="refs/custom/activity",
+        entry_consumer=batches.append,
+        batch_size=2,
+    )
+
+    assert result.entry_count == result.captured_entry_count == 5
+    assert not result.changed_during_read
+    assert [len(batch) for batch in batches] == [2, 2, 1]
+    assert tuple(entry for batch in batches for entry in batch) == parse_reflog_entries(
+        payload,
+        ref_name="refs/custom/activity",
+    )
+
+
+def test_semantic_reflog_visitor_validates_the_snapshot_before_callbacks(tmp_path: Path) -> None:
+    metadata = tmp_path / ".git"
+    metadata.mkdir()
+    repository = GitRepository(tmp_path, metadata, metadata, False)
+    valid = b"0" * 40 + b" " + b"a" * 40 + b" Person <person@example.test> 1700000000 +0000\tok\n"
+    reflog = metadata / "log"
+    reflog.write_bytes(valid + b"malformed\n")
+    consumed: list[tuple[reflog_module.ParsedReflogEntry, ...]] = []
+
+    with pytest.raises(GitReflogParseError) as error:
+        visit_semantic_reflog(
+            reflog,
+            repository=repository,
+            ref_name="HEAD",
+            entry_consumer=consumed.append,
+            batch_size=1,
+        )
+
+    assert error.value.record_count == 2
+    assert consumed == []
 
 
 @pytest.mark.parametrize(

@@ -5,11 +5,12 @@ from __future__ import annotations
 import heapq
 import sqlite3
 import tempfile
+from array import array
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import TypeVar
+from typing import TypeVar, cast, overload
 
 from workfold.models import ClassifiedMarker, RecordKind, Source, Weekday
 
@@ -21,6 +22,7 @@ _CountKey = TypeVar("_CountKey", Source, RecordKind)
 _DEFAULT_SPILL_THRESHOLD = 100_000
 _SPILL_INSERT_BATCH = 4_096
 _RUN_COMPACTION_THRESHOLD = 256
+_CLUSTER_MATERIALIZATION_THRESHOLD = 4_096
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +102,126 @@ class TimeCluster:
         return next((cell for cell in self.cells if cell.weekday is weekday), None)
 
 
+class _CompactClusterSequence(Sequence[TimeCluster]):
+    """Primitive-array storage with lazy immutable cluster decoding."""
+
+    __slots__ = (
+        "_cell_compacted",
+        "_cell_run_offsets",
+        "_cell_weekdays",
+        "_cluster_cell_offsets",
+        "_ends",
+        "_run_codes",
+        "_run_counts",
+        "_starts",
+    )
+
+    def __init__(self) -> None:
+        self._starts = array("Q")
+        self._ends = array("Q")
+        self._cluster_cell_offsets = array("Q", (0,))
+        self._cell_weekdays = array("B")
+        self._cell_compacted = bytearray()
+        self._cell_run_offsets = array("Q", (0,))
+        self._run_codes = array("B")
+        self._run_counts = array("Q")
+
+    def append(
+        self,
+        start_time_ns: int,
+        end_time_ns: int,
+        cells: Iterable[ClusterCell],
+    ) -> int:
+        """Append one cluster and return its largest cell event count."""
+
+        self._starts.append(start_time_ns)
+        self._ends.append(end_time_ns)
+        largest_cell = 0
+        for cell in cells:
+            self._cell_weekdays.append(int(cell.weekday))
+            self._cell_compacted.append(int(cell.compacted))
+            largest_cell = max(largest_cell, cell.event_count)
+            for run in cell.runs:
+                self._run_codes.append(_VISUAL_ORDER.index((run.source, run.within_schedule)))
+                self._run_counts.append(run.count)
+            self._cell_run_offsets.append(len(self._run_codes))
+        self._cluster_cell_offsets.append(len(self._cell_weekdays))
+        return largest_cell
+
+    def __len__(self) -> int:
+        return len(self._starts)
+
+    @overload
+    def __getitem__(self, index: int) -> TimeCluster: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> tuple[TimeCluster, ...]: ...
+
+    def __getitem__(self, index: int | slice) -> TimeCluster | tuple[TimeCluster, ...]:
+        if isinstance(index, slice):
+            return tuple(self[position] for position in range(*index.indices(len(self))))
+        if index < 0:
+            index += len(self)
+        if not 0 <= index < len(self):
+            raise IndexError("cluster index out of range")
+
+        cells: list[ClusterCell] = []
+        cell_start = self._cluster_cell_offsets[index]
+        cell_end = self._cluster_cell_offsets[index + 1]
+        for cell_index in range(cell_start, cell_end):
+            runs = tuple(
+                MarkerRun(
+                    *_VISUAL_ORDER[self._run_codes[run_index]],
+                    self._run_counts[run_index],
+                )
+                for run_index in range(
+                    self._cell_run_offsets[cell_index],
+                    self._cell_run_offsets[cell_index + 1],
+                )
+            )
+            cells.append(
+                ClusterCell(
+                    Weekday(self._cell_weekdays[cell_index]),
+                    runs,
+                    bool(self._cell_compacted[cell_index]),
+                )
+            )
+        return TimeCluster(self._starts[index], self._ends[index], tuple(cells))
+
+    def __iter__(self) -> Iterator[TimeCluster]:
+        return (self[index] for index in range(len(self)))
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, _CompactClusterSequence):
+            return all(
+                first == second
+                for first, second in (
+                    (self._starts, other._starts),
+                    (self._ends, other._ends),
+                    (self._cluster_cell_offsets, other._cluster_cell_offsets),
+                    (self._cell_weekdays, other._cell_weekdays),
+                    (self._cell_compacted, other._cell_compacted),
+                    (self._cell_run_offsets, other._cell_run_offsets),
+                    (self._run_codes, other._run_codes),
+                    (self._run_counts, other._run_counts),
+                )
+            )
+        if isinstance(other, Sequence):
+            candidates = cast(Sequence[object], other)
+            return len(self) == len(candidates) and all(
+                cluster == candidate for cluster, candidate in zip(self, candidates, strict=True)
+            )
+        return NotImplemented
+
+
+@dataclass(frozen=True, slots=True)
+class _ClusteredLayout:
+    clusters: Sequence[TimeCluster]
+    displayed_event_count: int
+    max_cell_event_count: int
+    has_multi_minute_cluster: bool
+
+
 @dataclass(frozen=True, slots=True)
 class HiddenMarkers:
     """Markers hidden on one side of an explicit display crop."""
@@ -121,13 +243,17 @@ class Aggregation:
     display_start_minute: int
     display_end_minute: int
     display_is_explicit: bool
-    clusters: tuple[TimeCluster, ...]
+    clusters: Sequence[TimeCluster]
     event_count: int
+    _displayed_event_count: int
     within_schedule_count: int
     outside_schedule_count: int
     weekend_count: int
     source_counts: tuple[tuple[Source, int], ...]
     record_kind_counts: tuple[tuple[RecordKind, int], ...]
+    visual_counts: tuple[tuple[tuple[Source, bool], int], ...]
+    max_cell_event_count: int
+    has_multi_minute_cluster: bool
     hidden_before: HiddenMarkers
     hidden_after: HiddenMarkers
     retained_outside_markers: tuple[ClassifiedMarker, ...]
@@ -143,7 +269,7 @@ class Aggregation:
     def displayed_event_count(self) -> int:
         """Return the count represented by the sparse chart rows."""
 
-        return sum(cluster.event_count for cluster in self.clusters)
+        return self._displayed_event_count
 
     def count_for_source(self, source: Source) -> int:
         """Return the total marker count for *source*."""
@@ -154,6 +280,18 @@ class Aggregation:
         """Return the total marker count for *record_kind*."""
 
         return _lookup_count(self.record_kind_counts, record_kind)
+
+    def count_for_visual(self, source: Source, within_schedule: bool) -> int:
+        """Return the number of markers sharing one rendered visual role."""
+
+        return next(
+            (
+                count
+                for (candidate_source, candidate_schedule), count in self.visual_counts
+                if candidate_source is source and candidate_schedule == within_schedule
+            ),
+            0,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +363,7 @@ class AggregationBuilder:
         display_range: tuple[int, int] | None = None,
         outside_limit: int = 50,
         spill_threshold: int = _DEFAULT_SPILL_THRESHOLD,
+        cluster_materialization_threshold: int = _CLUSTER_MATERIALIZATION_THRESHOLD,
     ) -> None:
         self._cluster_window = cluster_window
         self._cluster_window_ns = _cluster_window_ns(cluster_window)
@@ -234,10 +373,13 @@ class AggregationBuilder:
             raise ValueError("outside_limit must not be negative")
         if spill_threshold < 1:
             raise ValueError("spill_threshold must be positive")
+        if cluster_materialization_threshold < 0:
+            raise ValueError("cluster_materialization_threshold must be non-negative")
         self._schedule_bounds = schedule_bounds
         self._display_range = display_range
         self._outside_limit = outside_limit
         self._spill_threshold = spill_threshold
+        self._cluster_materialization_threshold = cluster_materialization_threshold
         self._visible_markers: list[_ChartMarker] = []
         self._spill_directory: tempfile.TemporaryDirectory[str] | None = None
         self._spill_connection: sqlite3.Connection | None = None
@@ -245,6 +387,7 @@ class AggregationBuilder:
         self._finished = False
         self._source_counts: Counter[Source] = Counter()
         self._record_kind_counts: Counter[RecordKind] = Counter()
+        self._visual_counts: Counter[tuple[Source, bool]] = Counter()
         self._hidden_before_sources: Counter[Source] = Counter()
         self._hidden_after_sources: Counter[Source] = Counter()
         self._hidden_before_total = 0
@@ -289,6 +432,7 @@ class AggregationBuilder:
         display_start_ns = self._display_range[0] * NANOSECONDS_PER_MINUTE if self._display_range is not None else None
         display_end_ns = self._display_range[1] * NANOSECONDS_PER_MINUTE if self._display_range is not None else None
         if display_start_ns is None or display_end_ns is None or display_start_ns <= time_of_day_ns < display_end_ns:
+            self._visual_counts[(source, classified.within_schedule)] += 1
             self._add_visible_marker(
                 _ChartMarker(
                     marker_id=classified.marker.marker_id,
@@ -319,22 +463,33 @@ class AggregationBuilder:
             occupied_end_ns=self._occupied_end_ns,
         )
         try:
-            clusters = _cluster_ordered_markers(self._ordered_visible_markers(), self._cluster_window_ns)
+            layout = _cluster_ordered_markers(
+                self._ordered_visible_markers(),
+                self._cluster_window_ns,
+                materialization_threshold=self._cluster_materialization_threshold,
+            )
         finally:
             self._cleanup_spill()
+            self._visible_markers.clear()
         retained_outside = tuple(item[2] for item in sorted(self._outside_heap, key=lambda item: (item[0], item[1])))
         aggregation = Aggregation(
             cluster_window=self._cluster_window,
             display_start_minute=display_start,
             display_end_minute=display_end,
             display_is_explicit=self._display_range is not None,
-            clusters=clusters,
+            clusters=layout.clusters,
             event_count=self._event_count,
+            _displayed_event_count=layout.displayed_event_count,
             within_schedule_count=self._within_schedule_count,
             outside_schedule_count=self._outside_schedule_count,
             weekend_count=self._weekend_count,
             source_counts=_freeze_counter(self._source_counts),
             record_kind_counts=_freeze_counter(self._record_kind_counts),
+            visual_counts=tuple(
+                (visual, self._visual_counts[visual]) for visual in _VISUAL_ORDER if self._visual_counts[visual]
+            ),
+            max_cell_event_count=layout.max_cell_event_count,
+            has_multi_minute_cluster=layout.has_multi_minute_cluster,
             hidden_before=HiddenMarkers(
                 self._hidden_before_total,
                 _freeze_counter(self._hidden_before_sources),
@@ -408,7 +563,8 @@ class AggregationBuilder:
     def _ordered_visible_markers(self) -> Iterable[_ChartMarker]:
         connection = self._spill_connection
         if connection is None:
-            return iter(sorted(self._visible_markers, key=_chart_marker_order_key))
+            self._visible_markers.sort(key=_chart_marker_order_key)
+            return iter(self._visible_markers)
         self._flush_spill_buffer()
         connection.commit()
         connection.execute(
@@ -479,25 +635,37 @@ def aggregate_markers(
     return builder.build()
 
 
-def _cluster_ordered_markers(markers: Iterable[_ChartMarker], window_ns: int) -> tuple[TimeCluster, ...]:
-    """Cluster a pre-sorted stream while retaining only compact cell runs."""
+def _cluster_ordered_markers(
+    markers: Iterable[_ChartMarker],
+    window_ns: int,
+    *,
+    materialization_threshold: int,
+) -> _ClusteredLayout:
+    """Cluster a sorted stream into compact storage and small tuple snapshots."""
 
-    clusters: list[TimeCluster] = []
+    compact = _CompactClusterSequence()
     anchor: int | None = None
     end_time = 0
     by_weekday: dict[Weekday, _CellRunBuilder] = {}
+    displayed_event_count = 0
+    max_cell_event_count = 0
+    has_multi_minute_cluster = False
 
     def finish_cluster() -> None:
+        nonlocal displayed_event_count, has_multi_minute_cluster, max_cell_event_count
         if anchor is None:
             return
         cells = tuple(by_weekday[weekday].build(weekday) for weekday in sorted(by_weekday))
-        clusters.append(
-            TimeCluster(
+        displayed_event_count += sum(cell.event_count for cell in cells)
+        max_cell_event_count = max(
+            max_cell_event_count,
+            compact.append(
                 start_time_ns=anchor,
                 end_time_ns=end_time,
                 cells=cells,
-            )
+            ),
         )
+        has_multi_minute_cluster |= anchor // NANOSECONDS_PER_MINUTE != end_time // NANOSECONDS_PER_MINUTE
 
     for marker in markers:
         if anchor is None or marker.time_of_day_ns >= anchor + window_ns:
@@ -507,7 +675,17 @@ def _cluster_ordered_markers(markers: Iterable[_ChartMarker], window_ns: int) ->
         end_time = marker.time_of_day_ns
         by_weekday.setdefault(marker.weekday, _CellRunBuilder()).add(marker)
     finish_cluster()
-    return tuple(clusters)
+    clusters: Sequence[TimeCluster]
+    if len(compact) <= materialization_threshold:
+        clusters = tuple(compact)
+    else:
+        clusters = compact
+    return _ClusteredLayout(
+        clusters=clusters,
+        displayed_event_count=displayed_event_count,
+        max_cell_event_count=max_cell_event_count,
+        has_multi_minute_cluster=has_multi_minute_cluster,
+    )
 
 
 def _same_visual(run: MarkerRun, marker: _ChartMarker) -> bool:

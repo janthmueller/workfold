@@ -280,6 +280,11 @@ def test_aggregation_validates_other_public_options() -> None:
         aggregate_markers((), cluster_window=timedelta(minutes=10), display_range=(0, 1500))
     with pytest.raises(ValueError, match="outside_limit"):
         aggregate_markers((), cluster_window=timedelta(minutes=10), outside_limit=-1)
+    with pytest.raises(ValueError, match="cluster_materialization_threshold"):
+        AggregationBuilder(
+            cluster_window=timedelta(minutes=10),
+            cluster_materialization_threshold=-1,
+        )
 
 
 def test_empty_aggregation_has_no_rows_and_uses_full_day_without_schedule_bounds() -> None:
@@ -302,13 +307,19 @@ def test_spilled_sort_matches_in_memory_sort_and_cleans_up() -> None:
         for index in range(8)
     ]
     expected = aggregate_markers(reversed(markers), cluster_window=timedelta(minutes=5))
-    builder = AggregationBuilder(cluster_window=timedelta(minutes=5), spill_threshold=2)
+    builder = AggregationBuilder(
+        cluster_window=timedelta(minutes=5),
+        spill_threshold=2,
+        cluster_materialization_threshold=0,
+    )
     for marker in reversed(markers):
         builder.add(marker)
 
     actual = builder.build()
 
     assert builder.did_spill
+    assert not isinstance(actual.clusters, tuple)
+    assert tuple(actual.clusters) == expected.clusters
     assert actual == expected
     with pytest.raises(RuntimeError, match="only be built once"):
         builder.build()

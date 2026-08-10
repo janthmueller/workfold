@@ -15,7 +15,14 @@ from workfold.coverage import (
     SelectionDisposition,
     TimestampCoverageKey,
 )
-from workfold.models import Source, TimestampObservation, coalesce_observations
+from workfold.models import (
+    ActivityMarker,
+    RecordKind,
+    Source,
+    TimestampKind,
+    TimestampObservation,
+    coalesce_observations,
+)
 from workfold.schedule import Schedule, classify_marker
 from workfold.time_ranges import InstantRangeUnion
 
@@ -44,6 +51,7 @@ class ActivityPipeline:
         self._schedule = schedule
         self._selection_counts: Counter[SelectionCountKey] = Counter()
         self._plotting_counts: Counter[PlottingCountKey] = Counter()
+        self._coverage_keys: dict[tuple[Source, str, RecordKind, TimestampKind], TimestampCoverageKey] = {}
         self._aggregation = AggregationBuilder(
             cluster_window=cluster_window,
             schedule_bounds=schedule.bounds,
@@ -72,7 +80,10 @@ class ActivityPipeline:
             raise RuntimeError("an observation batch contains duplicate identities")
 
         included: list[TimestampObservation] = []
+        coverage_keys: dict[str, TimestampCoverageKey] = {}
         for observation in batch:
+            coverage_key = self._coverage_key(observation)
+            coverage_keys[observation.observation_id] = coverage_key
             if not self._selected_range.contains(observation.instant_utc_ns):
                 disposition = SelectionDisposition.OUTSIDE_DATE
             elif (
@@ -84,28 +95,38 @@ class ActivityPipeline:
             else:
                 disposition = SelectionDisposition.INCLUDED
                 included.append(observation)
-            self._selection_counts[(_coverage_key(observation), disposition)] += 1
+            self._selection_counts[(coverage_key, disposition)] += 1
 
-        for marker in coalesce_observations(included):
+        markers = (
+            tuple(ActivityMarker.create((observation,)) for observation in included)
+            if batch[0].origin.source is Source.FILESYSTEM
+            else coalesce_observations(included)
+        )
+        for marker in markers:
             for index, observation in enumerate(marker.observations):
                 plotting = PlottingDisposition.MARKER if index == 0 else PlottingDisposition.COALESCED_INTO_MARKER
-                self._plotting_counts[(_coverage_key(observation), plotting)] += 1
+                self._plotting_counts[(coverage_keys[observation.observation_id], plotting)] += 1
             self._aggregation.add(classify_marker(marker, self._timezone, self._schedule))
+
+    def _coverage_key(self, observation: TimestampObservation) -> TimestampCoverageKey:
+        origin = observation.origin
+        target = os.fspath(origin.repository_or_root)
+        partition = (origin.source, target, origin.record_kind, observation.kind)
+        key = self._coverage_keys.get(partition)
+        if key is None:
+            key = TimestampCoverageKey(
+                origin.source,
+                target,
+                origin.record_kind,
+                observation.kind,
+            )
+            self._coverage_keys[partition] = key
+        return key
 
     def build(self) -> Aggregation:
         """Finish the bounded chart aggregation."""
 
         return self._aggregation.build()
-
-
-def _coverage_key(observation: TimestampObservation) -> TimestampCoverageKey:
-    origin = observation.origin
-    return TimestampCoverageKey(
-        origin.source,
-        os.fspath(origin.repository_or_root),
-        origin.record_kind,
-        observation.kind,
-    )
 
 
 def _matches_git_identity(observation: TimestampObservation, filters: tuple[str, ...]) -> bool:

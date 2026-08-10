@@ -306,6 +306,71 @@ def test_git_filesystem_inventory_is_nul_safe_and_literal_subdirectory_scoped(tm
     )
 
 
+def test_streamed_git_inventory_is_deduplicated_and_callback_driven(tmp_path: Path) -> None:
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    runner = QueueRunner(
+        (
+            completed(0, b"tracked.txt\0tracked.txt\0line\nbreak.txt\0"),
+            completed(0, b"generated.log\0ignored-dir/file.txt\0"),
+            completed(0, b"ignored-dir/\0"),
+        )
+    )
+    included: list[str] = []
+    ignored: list[tuple[str, bool]] = []
+
+    result = GitIgnoreService(runner).visit_inventory(
+        GitIgnoreRepository(repository_root.resolve(), False),
+        repository_root,
+        included_consumer=included.append,
+        ignored_consumer=lambda path, is_directory: ignored.append((path, is_directory)),
+    )
+
+    assert result.error is None
+    assert result.included_paths == 2
+    assert result.ignored_paths == 2
+    assert included == ["tracked.txt", "line\nbreak.txt"]
+    assert ignored == [("generated.log", False), ("ignored-dir/file.txt", False)]
+
+
+@pytest.mark.parametrize(
+    ("included_output", "ignored_output", "directory_output"),
+    [
+        (b"tracked.txt\0", b"ignored.log\0", b"unterminated"),
+        (b"ignored-dir/child.txt\0", b"ignored.log\0", b"ignored-dir/\0"),
+    ],
+)
+def test_streamed_git_inventory_never_exposes_a_partial_invalid_snapshot(
+    tmp_path: Path,
+    included_output: bytes,
+    ignored_output: bytes,
+    directory_output: bytes,
+) -> None:
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    consumed: list[str] = []
+    service = GitIgnoreService(
+        QueueRunner(
+            (
+                completed(0, included_output),
+                completed(0, ignored_output),
+                completed(0, directory_output),
+            )
+        )
+    )
+
+    result = service.visit_inventory(
+        GitIgnoreRepository(repository_root.resolve(), False),
+        repository_root,
+        included_consumer=consumed.append,
+        ignored_consumer=lambda path, _is_directory: consumed.append(path),
+    )
+
+    assert result.error is not None
+    assert result.error.code == "git_filesystem_inventory_parse_error"
+    assert consumed == []
+
+
 def test_git_filesystem_inventory_keeps_partial_paths_with_a_warning(tmp_path: Path) -> None:
     repository_root = tmp_path / "repo"
     repository_root.mkdir()

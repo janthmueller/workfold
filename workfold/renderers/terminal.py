@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from io import StringIO
+from typing import TextIO
 
 from rich.console import Console
 from rich.text import Text
@@ -55,18 +56,20 @@ def terminal_color_enabled(
 def render_terminal(report: Report, *, options: TerminalOptions | None = None) -> str:
     """Render *report* as terminal text ending in exactly one newline."""
 
-    resolved = options or TerminalOptions()
-    sections: list[tuple[Text, ...]] = [
-        _render_chart(report, resolved),
-        _render_legend(report, resolved.width),
-        _plain_section(_render_summary(report, resolved.width)),
-    ]
-    if resolved.verbose:
-        sections.append(_plain_section(_render_details(report, resolved.width), heading=True))
-    if resolved.list_outside:
-        sections.append(_plain_section(_render_outside(report, resolved.width), heading=True))
-
     stream = StringIO()
+    write_terminal(report, stream, options=options)
+    return stream.getvalue().rstrip("\n") + "\n"
+
+
+def write_terminal(
+    report: Report,
+    stream: TextIO,
+    *,
+    options: TerminalOptions | None = None,
+) -> None:
+    """Write *report* incrementally without retaining the complete output."""
+
+    resolved = options or TerminalOptions()
     console = Console(
         file=stream,
         width=resolved.width,
@@ -76,50 +79,70 @@ def render_terminal(report: Report, *, options: TerminalOptions | None = None) -
         highlight=False,
         legacy_windows=False,
     )
-    populated = tuple(section for section in sections if section)
-    for section_index, section in enumerate(populated):
-        if section_index:
+    sections: list[Iterable[Text]] = [
+        _render_chart(report, resolved),
+        _render_legend(report, resolved.width),
+        _plain_section(_render_summary(report, resolved.width)),
+    ]
+    if resolved.verbose:
+        sections.append(_plain_section(_render_details(report, resolved.width), heading=True))
+    if resolved.list_outside:
+        sections.append(_plain_section(_render_outside(report, resolved.width), heading=True))
+
+    wrote_section = False
+    for section in sections:
+        iterator = iter(section)
+        first = next(iterator, None)
+        if first is None:
+            continue
+        if wrote_section:
             console.print()
-        for line in section:
+        console.print(first, soft_wrap=False)
+        for line in iterator:
             console.print(line, soft_wrap=False)
-    return stream.getvalue().rstrip("\n") + "\n"
+        wrote_section = True
 
 
-def _render_chart(report: Report, options: TerminalOptions) -> tuple[Text, ...]:
+def _render_chart(report: Report, options: TerminalOptions) -> Iterable[Text]:
     aggregation = report.aggregation
-    labels, time_width, day_width = _chart_layout(report, options.width)
+    time_width, day_width = _chart_layout(report, options.width)
 
     header = Text(pad_right("Time band", time_width), style="bold")
     for weekday, width in zip(_WEEKDAYS, (day_width,) * len(_WEEKDAYS), strict=True):
         header.append(" ")
         header.append(_center(weekday, width), style="bold")
+    yield header
 
     if not aggregation.clusters:
         message = (
             "No events in the displayed time range." if aggregation.event_count else "No events in selected scope."
         )
-        return (header, Text(message, style="dim"))
+        yield Text(message, style="dim")
+        return
 
-    lines = [header]
     previous: TimeCluster | None = None
-    for cluster, label in zip(aggregation.clusters, labels, strict=True):
+    for cluster in aggregation.clusters:
         if previous is not None:
             gap_ns = cluster.start_time_ns - previous.end_time_ns
             if gap_ns >= _GAP_THRESHOLD_NS:
-                lines.append(Text(pad_right(f"⋮ {_format_ns_duration(gap_ns)}", time_width), style="dim"))
-        lines.extend(_cluster_lines(cluster, label=label, time_width=time_width, day_width=day_width))
+                yield Text(pad_right(f"⋮ {_format_ns_duration(gap_ns)}", time_width), style="dim")
+        yield from _cluster_lines(
+            cluster,
+            label=_cluster_label(cluster),
+            time_width=time_width,
+            day_width=day_width,
+        )
         previous = cluster
-    return tuple(lines)
 
 
 def _render_legend(report: Report, width: int) -> tuple[Text, ...]:
-    inside_sources: set[Source] = set()
-    outside_sources: set[Source] = set()
-    for cluster in report.aggregation.clusters:
-        for cell in cluster.cells:
-            for run in cell.runs:
-                target = inside_sources if run.within_schedule else outside_sources
-                target.add(run.source)
+    aggregation = report.aggregation
+    inside_sources = {
+        source for source in (Source.GIT, Source.FILESYSTEM) if aggregation.count_for_visual(source, True)
+    }
+    outside_sources = {
+        source for source in (Source.GIT, Source.FILESYSTEM) if aggregation.count_for_visual(source, False)
+    }
 
     items: list[Text] = []
     for source in (Source.GIT, Source.FILESYSTEM):
@@ -133,12 +156,8 @@ def _render_legend(report: Report, width: int) -> tuple[Text, ...]:
         if source in outside_sources - inside_sources:
             items.append(_outside_only_legend_item(source))
 
-    _labels, _time_width, day_width = _chart_layout(report, width)
-    if any(
-        cell.event_count > day_width * _MAX_LITERAL_EVENT_LINES
-        for cluster in report.aggregation.clusters
-        for cell in cluster.cells
-    ):
+    _time_width, day_width = _chart_layout(report, width)
+    if aggregation.max_cell_event_count > day_width * _MAX_LITERAL_EVENT_LINES:
         items.append(Text("×N exact count", style="dim"))
 
     lines = list(_pack_legend_items(items, width))
@@ -147,11 +166,11 @@ def _render_legend(report: Report, width: int) -> tuple[Text, ...]:
     return tuple(lines)
 
 
-def _chart_layout(report: Report, width: int) -> tuple[tuple[str, ...], int, int]:
-    labels = tuple(_cluster_label(cluster) for cluster in report.aggregation.clusters)
-    time_width = max((display_width("Time band"), *(display_width(label) for label in labels)))
+def _chart_layout(report: Report, width: int) -> tuple[int, int]:
+    label_width = 11 if report.aggregation.has_multi_minute_cluster else 5
+    time_width = max(label_width, display_width("Time band"))
     day_width = max(3, (width - time_width - len(_WEEKDAYS)) // len(_WEEKDAYS))
-    return labels, time_width, day_width
+    return time_width, day_width
 
 
 def _source_legend_item(source: Source, *, within_schedule: bool) -> Text:

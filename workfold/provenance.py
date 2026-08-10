@@ -132,10 +132,34 @@ def filesystem_entry_id(
     return canonical_id("filesystem-entry", absolute_root, absolute_path, entry_type)
 
 
+def absolute_filesystem_entry_id(
+    absolute_root: PurePath,
+    absolute_path: PurePath,
+    entry_type: str,
+) -> str:
+    """Identify an entry whose lexical absolute paths are already normalized.
+
+    Filesystem traversal establishes this invariant once for each selected
+    root. Avoiding two redundant ``abspath`` conversions for every discovered
+    entry materially reduces exhaustive-scan CPU without changing the encoded
+    provenance dimensions.
+    """
+
+    if not absolute_root.is_absolute() or not absolute_path.is_absolute():
+        raise ValueError("absolute filesystem provenance requires absolute paths")
+    return canonical_id("filesystem-entry", absolute_root, absolute_path, entry_type)
+
+
 def timestamp_slot_id(record_id: str, timestamp_kind: str) -> str:
     """Identify a requested timestamp slot and its eventual observation."""
 
-    return canonical_id("timestamp-slot", record_id, timestamp_kind)
+    role = _TIMESTAMP_ROLE_CODES.get(timestamp_kind)
+    if role is None:
+        return canonical_id("timestamp-slot", record_id, timestamp_kind)
+    # Record IDs already provide a stable, domain-separated digest. Prefixing
+    # the exact timestamp role is injective and avoids hashing that digest a
+    # second time for every observation in large filesystem scans.
+    return role + record_id
 
 
 def observation_id(record_id: str, timestamp_kind: str) -> str:
@@ -151,7 +175,23 @@ def activity_marker_id(observation_ids: tuple[str, ...]) -> str:
         raise ValueError("an activity marker needs at least one observation")
     if len(set(observation_ids)) != len(observation_ids):
         raise ValueError("an activity marker cannot contain duplicate observations")
+    if len(observation_ids) == 1:
+        # A singleton marker has exactly the identity of its one observation;
+        # the prefix keeps the marker namespace explicit without another hash.
+        return "m" + observation_ids[0]
     return canonical_id("activity-marker", *sorted(observation_ids))
+
+
+_TIMESTAMP_ROLE_CODES = {
+    "git_author": "A",
+    "git_committer": "C",
+    "git_tagger": "T",
+    "git_reflog": "R",
+    "fs_created": "b",
+    "fs_modified": "m",
+    "fs_metadata_changed": "c",
+    "fs_accessed": "a",
+}
 
 
 def _encode_part(part: object) -> tuple[bytes, bytes]:
@@ -172,6 +212,7 @@ def _encode_part(part: object) -> tuple[bytes, bytes]:
 
 __all__ = [
     "CanonicalPart",
+    "absolute_filesystem_entry_id",
     "activity_marker_id",
     "canonical_bytes",
     "canonical_id",

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from workfold.collectors.base import CollectorDiagnostic, DiagnosticSeverity
+from workfold.collectors.base import CollectorDiagnostic, DiagnosticBuffer
 from workfold.collectors.git_objects import GitObjectParseError, ParsedCommit, parse_cat_file_batch, parse_commit_object
 from workfold.config import RefScope
 from workfold.iterables import batched
@@ -718,7 +718,7 @@ class GitRepositoryResolver:
     def resolve(self, paths: Sequence[Path]) -> GitRepositoryResolutionResult:
         """Resolve every path independently and retain target-level accounting."""
 
-        diagnostics: list[CollectorDiagnostic] = []
+        diagnostics = DiagnosticBuffer()
         repositories: list[GitRepository] = []
         seen_repositories: set[str] = set()
         successful_targets = 0
@@ -739,7 +739,7 @@ class GitRepositoryResolver:
 
         return GitRepositoryResolutionResult(
             repositories=tuple(repositories),
-            diagnostics=tuple(diagnostics),
+            diagnostics=diagnostics.snapshot(),
             requested_targets=len(paths),
             successful_targets=successful_targets,
             duplicate_targets=duplicate_targets,
@@ -766,14 +766,15 @@ class GitCollector:
         """Collect whole repositories, continuing across independent target failures."""
 
         resolution = GitRepositoryResolver(self._runner).resolve(paths)
-        diagnostics = list(resolution.diagnostics)
+        diagnostics = DiagnosticBuffer()
+        diagnostics.extend(resolution.diagnostics)
         repositories = list(resolution.repositories)
 
         commits: list[CollectedGitCommit] = []
         repository_accounting: list[GitCommitRepositoryAccounting] = []
 
         for repository in unique_semantic_repositories(repositories):
-            diagnostic_start = len(diagnostics)
+            error_count_start = diagnostics.error_count
             discovered_for_repository = 0
             captured_for_repository = 0
             duplicates_for_repository = 0
@@ -876,9 +877,7 @@ class GitCollector:
                     continue
                 successful_for_repository = not object_read_failed
             finally:
-                operational_errors = sum(
-                    item.severity is DiagnosticSeverity.ERROR for item in diagnostics[diagnostic_start:]
-                )
+                operational_errors = diagnostics.error_count - error_count_start
                 repository_accounting.append(
                     GitCommitRepositoryAccounting(
                         repository=repository,
@@ -902,7 +901,7 @@ class GitCollector:
         return GitCollectionResult(
             repositories=tuple(repositories),
             commits=tuple(commits),
-            diagnostics=tuple(diagnostics),
+            diagnostics=diagnostics.snapshot(),
             requested_targets=len(paths),
             successful_repositories=successful_count,
             discovered_commit_ids=discovered_count,

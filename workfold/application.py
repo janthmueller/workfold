@@ -56,7 +56,7 @@ from workfold.coverage import (
 )
 from workfold.models import RecordKind, Source, TimestampKind
 from workfold.pipeline import ActivityPipeline, ObservationConsumer, PlottingCountKey, SelectionCountKey
-from workfold.renderers.terminal import TerminalOptions, render_terminal, terminal_color_enabled
+from workfold.renderers.terminal import TerminalOptions, terminal_color_enabled, write_terminal
 from workfold.reports import COMPLETE_COVERAGE_STATUS, ReportContext, build_report
 from workfold.sanitization import sanitize_terminal_text
 from workfold.schedule import Schedule, parse_schedule
@@ -185,7 +185,7 @@ def run(
         list_outside=options.list_outside,
         verbose=options.verbose,
     )
-    output.write(render_terminal(report, options=presentation))
+    write_terminal(report, output, options=presentation)
     if collection.diagnostics:
         _write_diagnostics(collection.diagnostics, errors)
     is_partial = bool(error_diagnostics) or ledger.has_operational_errors

@@ -18,6 +18,7 @@ from workfold.models import (
     coalesce_observations,
 )
 from workfold.provenance import (
+    absolute_filesystem_entry_id,
     activity_marker_id,
     canonical_bytes,
     canonical_id,
@@ -29,6 +30,7 @@ from workfold.provenance import (
     lexical_absolute,
     observation_id,
     repository_id,
+    timestamp_slot_id,
 )
 
 
@@ -86,6 +88,16 @@ def test_specialized_provenance_includes_every_identity_dimension(tmp_path: Path
     assert filesystem_entry_id(repository, "linked", "symlink") != filesystem_entry_id(
         repository, "linked", "regular_file"
     )
+    absolute_root = repository.absolute()
+    absolute_path = absolute_root / "linked"
+    assert absolute_filesystem_entry_id(
+        absolute_root,
+        absolute_path,
+        "symlink",
+    ) == filesystem_entry_id(absolute_root, absolute_path, "symlink")
+    assert len({timestamp_slot_id("record", kind.value) for kind in TimestampKind}) == len(TimestampKind)
+    singleton = timestamp_slot_id("record", TimestampKind.FS_MODIFIED.value)
+    assert activity_marker_id((singleton,)) == "m" + singleton
 
 
 def test_provenance_rejects_invalid_inputs() -> None:
@@ -99,6 +111,8 @@ def test_provenance_rejects_invalid_inputs() -> None:
         activity_marker_id(())
     with pytest.raises(ValueError, match="duplicate"):
         activity_marker_id(("same", "same"))
+    with pytest.raises(ValueError, match="absolute"):
+        absolute_filesystem_entry_id(Path("relative"), Path("relative/file"), "regular_file")
 
 
 def test_origin_and_observation_factories_preserve_roles() -> None:

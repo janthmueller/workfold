@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import stat
 import subprocess
+import tempfile
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -28,6 +30,7 @@ _GIT_SAFETY_OPTIONS: Final[tuple[str, ...]] = (
 _GIT_IGNORE_COMMANDS: Final[frozenset[str]] = frozenset({"check-ignore", "ls-files", "rev-parse"})
 _MAX_GITDIR_POINTER_BYTES: Final[int] = 4096
 _MAX_INVENTORY_STDERR_BYTES: Final[int] = 16_384
+_INVENTORY_PATHS_NEED_NORMALIZATION: Final[bool] = os.path.normcase("A/B") != "A/B"
 
 
 class ExclusionPatternError(ValueError):
@@ -170,6 +173,22 @@ class GitFilesystemInventory:
             raise ValueError("Git filesystem inventory cannot carry both a warning and a fatal error")
 
 
+@dataclass(frozen=True, slots=True)
+class GitFilesystemInventoryVisit:
+    """Outcome of a disk-backed, callback-driven Git path inventory."""
+
+    included_paths: int = 0
+    ignored_paths: int = 0
+    warning: GitIgnoreCommandError | None = None
+    error: GitIgnoreCommandError | None = None
+
+    def __post_init__(self) -> None:
+        if self.included_paths < 0 or self.ignored_paths < 0:
+            raise ValueError("streamed inventory counts must be non-negative")
+        if self.warning is not None and self.error is not None:
+            raise ValueError("a streamed inventory cannot carry both a warning and an error")
+
+
 ProcessRunner = Callable[..., subprocess.CompletedProcess[bytes]]
 
 
@@ -208,57 +227,8 @@ class GitIgnoreRunner:
     ) -> subprocess.CompletedProcess[bytes]:
         """Run a validated read-only Git ignore command without a shell."""
 
-        if not arguments or arguments[0] not in _GIT_IGNORE_COMMANDS:
-            raise GitIgnoreCommandError(
-                code="unsafe_git_ignore_command",
-                message="only rev-parse, check-ignore, and ls-files are allowed for filesystem ignores",
-                cwd=cwd,
-                command=tuple(arguments),
-            )
-        if any("\0" in argument for argument in arguments):
-            raise GitIgnoreCommandError(
-                code="unsafe_git_ignore_argument",
-                message="Git ignore command arguments cannot contain NUL bytes",
-                cwd=cwd,
-                command=tuple(arguments),
-            )
-        command = (self._executable, *_GIT_SAFETY_OPTIONS, *arguments)
-        environment = dict(self._base_environment)
-        for name in tuple(environment):
-            if (
-                name
-                in {
-                    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-                    "GIT_CEILING_DIRECTORIES",
-                    "GIT_COMMON_DIR",
-                    "GIT_CONFIG",
-                    "GIT_CONFIG_COUNT",
-                    "GIT_CONFIG_PARAMETERS",
-                    "GIT_DIR",
-                    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
-                    "GIT_INDEX_FILE",
-                    "GIT_NAMESPACE",
-                    "GIT_OBJECT_DIRECTORY",
-                    "GIT_PREFIX",
-                    "GIT_WORK_TREE",
-                }
-                or name.startswith("GIT_CONFIG_KEY_")
-                or name.startswith("GIT_CONFIG_VALUE_")
-                or name.startswith("GIT_TRACE")
-            ):
-                environment.pop(name, None)
-        environment.update(
-            {
-                "GIT_ASKPASS": "",
-                "GIT_NO_LAZY_FETCH": "1",
-                "GIT_OPTIONAL_LOCKS": "0",
-                "GIT_PAGER": "cat",
-                "GIT_TERMINAL_PROMPT": "0",
-                "LANG": "C",
-                "LC_ALL": "C",
-                "PAGER": "cat",
-            }
-        )
+        command = self._command(arguments, cwd=cwd)
+        environment = self._environment()
         try:
             completed = self._process_runner(
                 command,
@@ -305,6 +275,145 @@ class GitIgnoreRunner:
                 stderr=completed.stderr[: self._stderr_limit],
             )
         return completed
+
+    def consume_stdout(
+        self,
+        arguments: Sequence[str],
+        *,
+        cwd: Path,
+        consumer: Callable[[bytes], None],
+        allowed_returncodes: Collection[int] = (0,),
+    ) -> bytes:
+        """Feed bounded stdout chunks to *consumer* and return bounded stderr.
+
+        The production path never retains the complete Git response. Injected
+        runners, subclasses, and timeout-enabled runners keep using ``run`` so
+        tests and custom integrations preserve their interception semantics.
+        """
+
+        if (
+            self._process_runner is not subprocess.run
+            or type(self).run is not GitIgnoreRunner.run
+            or self._timeout is not None
+        ):
+            completed = self.run(arguments, cwd=cwd, allowed_returncodes=allowed_returncodes)
+            consumer(completed.stdout)
+            return completed.stderr[: self._stderr_limit]
+
+        command = self._command(arguments, cwd=cwd)
+        with tempfile.TemporaryFile() as stderr_file:
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=os.fspath(cwd),
+                    env=self._environment(),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=stderr_file,
+                    shell=False,
+                )
+            except FileNotFoundError as error:
+                raise GitIgnoreCommandError(
+                    code="git_not_found_for_ignores",
+                    message=f"Git executable was not found: {self._executable}",
+                    cwd=cwd,
+                    command=command,
+                    unavailable=True,
+                ) from error
+            except OSError as error:
+                raise GitIgnoreCommandError(
+                    code="git_ignore_spawn_error",
+                    message=f"Git ignore evaluation could not start: {error}",
+                    cwd=cwd,
+                    command=command,
+                ) from error
+
+            completed = False
+            try:
+                if process.stdout is None:
+                    raise RuntimeError("streaming Git ignore process omitted stdout")
+                while chunk := process.stdout.read(64 * 1024):
+                    consumer(chunk)
+                process.stdout.close()
+                returncode = process.wait()
+                completed = True
+            finally:
+                if not completed and process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+
+            stderr_file.seek(0)
+            stderr = stderr_file.read(self._stderr_limit + 1)
+            if returncode not in allowed_returncodes:
+                raise GitIgnoreCommandError(
+                    code="git_ignore_command_failed",
+                    message=f"Git ignore command failed with exit status {returncode}",
+                    cwd=cwd,
+                    command=command,
+                    returncode=returncode,
+                    stderr=stderr[: self._stderr_limit],
+                )
+            return stderr[: self._stderr_limit]
+
+    def _command(self, arguments: Sequence[str], *, cwd: Path) -> tuple[str, ...]:
+        if not arguments or arguments[0] not in _GIT_IGNORE_COMMANDS:
+            raise GitIgnoreCommandError(
+                code="unsafe_git_ignore_command",
+                message="only rev-parse, check-ignore, and ls-files are allowed for filesystem ignores",
+                cwd=cwd,
+                command=tuple(arguments),
+            )
+        if any("\0" in argument for argument in arguments):
+            raise GitIgnoreCommandError(
+                code="unsafe_git_ignore_argument",
+                message="Git ignore command arguments cannot contain NUL bytes",
+                cwd=cwd,
+                command=tuple(arguments),
+            )
+        return (self._executable, *_GIT_SAFETY_OPTIONS, *arguments)
+
+    def _environment(self) -> dict[str, str]:
+        environment = dict(self._base_environment)
+        for name in tuple(environment):
+            if (
+                name
+                in {
+                    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                    "GIT_CEILING_DIRECTORIES",
+                    "GIT_COMMON_DIR",
+                    "GIT_CONFIG",
+                    "GIT_CONFIG_COUNT",
+                    "GIT_CONFIG_PARAMETERS",
+                    "GIT_DIR",
+                    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+                    "GIT_INDEX_FILE",
+                    "GIT_NAMESPACE",
+                    "GIT_OBJECT_DIRECTORY",
+                    "GIT_PREFIX",
+                    "GIT_WORK_TREE",
+                }
+                or name.startswith("GIT_CONFIG_KEY_")
+                or name.startswith("GIT_CONFIG_VALUE_")
+                or name.startswith("GIT_TRACE")
+            ):
+                environment.pop(name, None)
+        environment.update(
+            {
+                "GIT_ASKPASS": "",
+                "GIT_NO_LAZY_FETCH": "1",
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_PAGER": "cat",
+                "GIT_TERMINAL_PROMPT": "0",
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PAGER": "cat",
+            }
+        )
+        return environment
 
 
 class GitIgnoreService:
@@ -523,17 +632,8 @@ class GitIgnoreService:
                 ignored_directory_result.stdout,
                 selected_prefix=selected_prefix,
             )
-            stderr = b"\n".join(
-                dict.fromkeys(
-                    line
-                    for output in (
-                        included_result.stderr,
-                        ignored_result.stderr,
-                        ignored_directory_result.stderr,
-                    )
-                    for line in output.splitlines()
-                    if line
-                )
+            stderr = _merge_inventory_stderr(
+                (included_result.stderr, ignored_result.stderr, ignored_directory_result.stderr)
             )
             warning = _inventory_stderr_error(physical_repository_root, ("ls-files",), stderr) if stderr else None
             return GitFilesystemInventory(
@@ -553,6 +653,199 @@ class GitIgnoreService:
                     command=("ls-files",),
                 )
             )
+
+    def visit_inventory(
+        self,
+        repository: GitIgnoreRepository,
+        selected_root: Path,
+        *,
+        included_consumer: Callable[[str], None],
+        ignored_consumer: Callable[[str, bool], None],
+    ) -> GitFilesystemInventoryVisit:
+        """Visit a complete Git inventory without retaining every path in RAM.
+
+        Git output is parsed into an ephemeral SQLite spool first. Consumers
+        run only after all three commands and every path validate, so a late
+        command or parse failure can fall back without duplicating records.
+        Subclasses overriding :meth:`inventory` retain their interception
+        behavior through the materialized compatibility path.
+        """
+
+        if type(self).inventory is not GitIgnoreService.inventory:
+            inventory = self.inventory(repository, selected_root)
+            if inventory.error is not None:
+                return GitFilesystemInventoryVisit(error=inventory.error)
+            for path in inventory.included_relative_paths:
+                included_consumer(path)
+            for path in inventory.ignored_relative_paths:
+                ignored_consumer(path, path in inventory.ignored_directory_paths)
+            return GitFilesystemInventoryVisit(
+                included_paths=len(inventory.included_relative_paths),
+                ignored_paths=len(inventory.ignored_relative_paths),
+                warning=inventory.warning,
+            )
+
+        if repository.is_bare:
+            return GitFilesystemInventoryVisit(
+                error=GitIgnoreCommandError(
+                    code="git_filesystem_inventory_unavailable",
+                    message="a bare repository has no filesystem worktree inventory",
+                    cwd=repository.root,
+                    command=("ls-files",),
+                )
+            )
+        try:
+            physical_repository_root = repository.root.resolve(strict=True)
+            physical_selected_root = selected_root.resolve(strict=True)
+            selected_prefix = physical_selected_root.relative_to(physical_repository_root)
+        except (OSError, RuntimeError, ValueError) as error:
+            return GitFilesystemInventoryVisit(
+                error=GitIgnoreCommandError(
+                    code="git_filesystem_inventory_path_mapping_error",
+                    message=f"could not map the selected filesystem root into the Git worktree: {error}",
+                    cwd=repository.root,
+                    command=("ls-files",),
+                )
+            )
+
+        included_arguments = _inventory_arguments(
+            ("--cached", "--others", "--exclude-standard"),
+            selected_prefix=selected_prefix,
+        )
+        ignored_arguments = _inventory_arguments(
+            ("--others", "--ignored", "--exclude-standard"),
+            selected_prefix=selected_prefix,
+        )
+        ignored_directory_arguments = _inventory_arguments(
+            ("--others", "--ignored", "--exclude-standard", "--directory"),
+            selected_prefix=selected_prefix,
+        )
+
+        stderr_values: list[bytes] = []
+        delivering_callbacks = False
+        try:
+            with tempfile.TemporaryDirectory(prefix="workfold-ignore-inventory-") as directory:
+                connection = sqlite3.connect(f"{directory}/inventory.sqlite3")
+                try:
+                    connection.execute("PRAGMA journal_mode=OFF")
+                    connection.execute("PRAGMA synchronous=OFF")
+                    connection.execute("PRAGMA temp_store=FILE")
+                    connection.execute("PRAGMA cache_size=-2048")
+                    connection.execute(
+                        """
+                        CREATE TABLE inventory (
+                            ordinal INTEGER PRIMARY KEY,
+                            path BLOB NOT NULL,
+                            normalized_path BLOB NOT NULL UNIQUE,
+                            category INTEGER NOT NULL CHECK (category IN (0, 1))
+                        )
+                        """
+                    )
+                    connection.execute(
+                        """
+                        CREATE TABLE ignored_directories (
+                            path BLOB PRIMARY KEY,
+                            normalized_path BLOB NOT NULL UNIQUE
+                        )
+                        """
+                    )
+                    ordinal = 0
+
+                    def insert_path(category: int) -> Callable[[bytes, bool], None]:
+                        def insert(raw_path: bytes, directory_hint: bool) -> None:
+                            nonlocal ordinal
+                            normalized_path = _normalized_inventory_path(raw_path)
+                            inserted = connection.execute(
+                                "INSERT OR IGNORE INTO inventory VALUES (?, ?, ?, ?)",
+                                (ordinal, raw_path, normalized_path, category),
+                            ).rowcount
+                            if inserted:
+                                ordinal += 1
+                            else:
+                                existing = connection.execute(
+                                    "SELECT path, category FROM inventory WHERE normalized_path = ?",
+                                    (normalized_path,),
+                                ).fetchone()
+                                if existing != (raw_path, category):
+                                    raise ValueError(
+                                        f"Git filesystem inventory contains a duplicate or overlapping path: "
+                                        f"{os.fsdecode(raw_path)!r}"
+                                    )
+                            if category == 1 and directory_hint:
+                                connection.execute(
+                                    "INSERT OR IGNORE INTO ignored_directories VALUES (?, ?)",
+                                    (raw_path, normalized_path),
+                                )
+
+                        return insert
+
+                    def insert_directory(raw_path: bytes, _directory_hint: bool) -> None:
+                        connection.execute(
+                            "INSERT OR IGNORE INTO ignored_directories VALUES (?, ?)",
+                            (raw_path, _normalized_inventory_path(raw_path)),
+                        )
+
+                    for arguments, consumer in (
+                        (included_arguments, insert_path(0)),
+                        (ignored_arguments, insert_path(1)),
+                        (ignored_directory_arguments, insert_directory),
+                    ):
+                        decoder = _InventoryStreamDecoder(selected_prefix, consumer)
+                        stderr_values.append(
+                            self._runner.consume_stdout(
+                                arguments,
+                                cwd=physical_repository_root,
+                                consumer=decoder.feed,
+                            )
+                        )
+                        decoder.finish()
+                    _validate_inventory_relationships(connection)
+                    connection.commit()
+
+                    included_count = connection.execute("SELECT COUNT(*) FROM inventory WHERE category = 0").fetchone()[
+                        0
+                    ]
+                    ignored_count = connection.execute("SELECT COUNT(*) FROM inventory WHERE category = 1").fetchone()[
+                        0
+                    ]
+                    delivering_callbacks = True
+                    for (raw_path,) in connection.execute(
+                        "SELECT path FROM inventory WHERE category = 0 ORDER BY ordinal"
+                    ):
+                        included_consumer(os.fsdecode(raw_path))
+                    for raw_path, is_directory in connection.execute(
+                        """
+                        SELECT inventory.path, ignored_directories.path IS NOT NULL
+                          FROM inventory
+                          LEFT JOIN ignored_directories USING (path)
+                         WHERE category = 1
+                         ORDER BY ordinal
+                        """
+                    ):
+                        ignored_consumer(os.fsdecode(raw_path), bool(is_directory))
+                finally:
+                    connection.close()
+        except GitIgnoreCommandError as error:
+            return GitFilesystemInventoryVisit(error=error)
+        except (OSError, sqlite3.Error, ValueError) as error:
+            if delivering_callbacks:
+                raise
+            return GitFilesystemInventoryVisit(
+                error=GitIgnoreCommandError(
+                    code="git_filesystem_inventory_parse_error",
+                    message=f"could not parse Git filesystem inventory: {error}",
+                    cwd=physical_repository_root,
+                    command=("ls-files",),
+                )
+            )
+
+        stderr = _merge_inventory_stderr(stderr_values)
+        warning = _inventory_stderr_error(physical_repository_root, ("ls-files",), stderr) if stderr else None
+        return GitFilesystemInventoryVisit(
+            included_paths=int(included_count),
+            ignored_paths=int(ignored_count),
+            warning=warning,
+        )
 
 
 def is_git_admin_name(path: Path) -> bool:
@@ -703,6 +996,59 @@ def _inventory_arguments(options: tuple[str, ...], *, selected_prefix: Path) -> 
     return (*arguments, "--", pathspec)
 
 
+def _normalized_inventory_path(raw_path: bytes) -> bytes:
+    """Return a separator-stable platform-normalized inventory key."""
+
+    if not _INVENTORY_PATHS_NEED_NORMALIZATION:
+        return raw_path
+    return b"/".join(os.fsencode(os.path.normcase(os.fsdecode(part))) for part in raw_path.split(b"/"))
+
+
+def _validate_inventory_relationships(connection: sqlite3.Connection) -> None:
+    """Reject included leaves at or below a Git-reported ignored directory."""
+
+    included_count = int(connection.execute("SELECT COUNT(*) FROM inventory WHERE category = 0").fetchone()[0])
+    directory_count = int(connection.execute("SELECT COUNT(*) FROM ignored_directories").fetchone()[0])
+    conflict: tuple[bytes] | None = None
+    if directory_count <= included_count:
+        for (directory,) in connection.execute("SELECT normalized_path FROM ignored_directories"):
+            prefix = directory.rstrip(b"/") + b"/"
+            upper_bound = directory.rstrip(b"/") + b"0"
+            conflict = connection.execute(
+                """
+                SELECT path FROM inventory
+                 WHERE category = 0
+                   AND (normalized_path = ? OR (normalized_path >= ? AND normalized_path < ?))
+                 LIMIT 1
+                """,
+                (directory, prefix, upper_bound),
+            ).fetchone()
+            if conflict is not None:
+                break
+    else:
+        for raw_path, normalized_path in connection.execute(
+            "SELECT path, normalized_path FROM inventory WHERE category = 0"
+        ):
+            parts = normalized_path.split(b"/")
+            for size in range(1, len(parts) + 1):
+                candidate = b"/".join(parts[:size])
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM ignored_directories WHERE normalized_path = ?",
+                        (candidate,),
+                    ).fetchone()
+                    is not None
+                ):
+                    conflict = (raw_path,)
+                    break
+            if conflict is not None:
+                break
+    if conflict is not None:
+        raise ValueError(
+            f"Git filesystem inventory places an included path below an ignored directory: {os.fsdecode(conflict[0])!r}"
+        )
+
+
 def _parse_inventory_output(
     output: bytes,
     *,
@@ -711,38 +1057,12 @@ def _parse_inventory_output(
     if output and not output.endswith(b"\0"):
         raise ValueError("NUL-delimited Git output has no final terminator")
     raw_paths = output[:-1].split(b"\0") if output else ()
-    prefix_parts = (
-        None
-        if selected_prefix == Path(".")
-        else tuple(os.fsencode(part) for part in PurePosixPath(selected_prefix.as_posix()).parts)
-    )
+    prefix_parts = _inventory_prefix_parts(selected_prefix)
     paths: list[str] = []
     directory_hints: set[str] = set()
     seen: set[bytes] = set()
     for raw_path in raw_paths:
-        if not raw_path:
-            raise ValueError("Git returned an empty inventory path")
-        # Git represents an untracked nested repository as one directory
-        # boundary even without ``--directory``. It is still one candidate;
-        # the collector's lstat decides its actual current type.
-        directory_hint = raw_path.endswith(b"/")
-        if directory_hint:
-            raw_path = raw_path[:-1]
-            if not raw_path:
-                raise ValueError("Git returned an empty inventory directory")
-        parts = raw_path.split(b"/")
-        if raw_path.startswith(b"/") or any(part in {b"", b".", b".."} for part in parts):
-            raise ValueError(f"Git returned an unsafe inventory path: {os.fsdecode(raw_path)!r}")
-        if prefix_parts is None:
-            selected_relative = raw_path
-        elif len(parts) >= len(prefix_parts) and all(
-            os.path.normcase(os.fsdecode(actual)) == os.path.normcase(os.fsdecode(expected))
-            for actual, expected in zip(parts[: len(prefix_parts)], prefix_parts, strict=True)
-        ):
-            remainder = parts[len(prefix_parts) :]
-            selected_relative = b"/".join(remainder) if remainder else b"."
-        else:
-            raise ValueError(f"Git returned a path outside the selected root: {os.fsdecode(raw_path)!r}")
+        selected_relative, directory_hint = _parse_inventory_record(raw_path, prefix_parts=prefix_parts)
         if selected_relative not in seen:
             decoded = os.fsdecode(selected_relative)
             paths.append(decoded)
@@ -752,6 +1072,79 @@ def _parse_inventory_output(
         if directory_hint:
             directory_hints.add(decoded)
     return tuple(paths), frozenset(directory_hints)
+
+
+class _InventoryStreamDecoder:
+    """Turn arbitrary stdout chunks into validated NUL-delimited paths."""
+
+    def __init__(self, selected_prefix: Path, consumer: Callable[[bytes, bool], None]) -> None:
+        self._prefix_parts = _inventory_prefix_parts(selected_prefix)
+        self._consumer = consumer
+        self._buffer = bytearray()
+
+    def feed(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        self._buffer.extend(chunk)
+        start = 0
+        while True:
+            end = self._buffer.find(0, start)
+            if end < 0:
+                break
+            raw_path = bytes(self._buffer[start:end])
+            selected_relative, directory_hint = _parse_inventory_record(
+                raw_path,
+                prefix_parts=self._prefix_parts,
+            )
+            self._consumer(selected_relative, directory_hint)
+            start = end + 1
+        if start:
+            del self._buffer[:start]
+
+    def finish(self) -> None:
+        if self._buffer:
+            raise ValueError("NUL-delimited Git output has no final terminator")
+
+
+def _inventory_prefix_parts(selected_prefix: Path) -> tuple[bytes, ...] | None:
+    if selected_prefix == Path("."):
+        return None
+    return tuple(os.fsencode(part) for part in PurePosixPath(selected_prefix.as_posix()).parts)
+
+
+def _parse_inventory_record(
+    raw_path: bytes,
+    *,
+    prefix_parts: tuple[bytes, ...] | None,
+) -> tuple[bytes, bool]:
+    if not raw_path:
+        raise ValueError("Git returned an empty inventory path")
+    # Git represents an untracked nested repository as one directory boundary
+    # even without ``--directory``. The collector's lstat remains authoritative
+    # for the entry's current type.
+    directory_hint = raw_path.endswith(b"/")
+    if directory_hint:
+        raw_path = raw_path[:-1]
+        if not raw_path:
+            raise ValueError("Git returned an empty inventory directory")
+    parts = raw_path.split(b"/")
+    if raw_path.startswith(b"/") or any(part in {b"", b".", b".."} for part in parts):
+        raise ValueError(f"Git returned an unsafe inventory path: {os.fsdecode(raw_path)!r}")
+    if prefix_parts is None:
+        return raw_path, directory_hint
+    if len(parts) >= len(prefix_parts) and all(
+        os.path.normcase(os.fsdecode(actual)) == os.path.normcase(os.fsdecode(expected))
+        for actual, expected in zip(parts[: len(prefix_parts)], prefix_parts, strict=True)
+    ):
+        remainder = parts[len(prefix_parts) :]
+        return (b"/".join(remainder) if remainder else b"."), directory_hint
+    raise ValueError(f"Git returned a path outside the selected root: {os.fsdecode(raw_path)!r}")
+
+
+def _merge_inventory_stderr(values: Sequence[bytes]) -> bytes:
+    return b"\n".join(dict.fromkeys(line for output in values for line in output.splitlines() if line))[
+        :_MAX_INVENTORY_STDERR_BYTES
+    ]
 
 
 def _inventory_stderr_error(root: Path, command: tuple[str, ...], stderr: bytes) -> GitIgnoreCommandError:
@@ -833,6 +1226,7 @@ __all__ = [
     "ExclusionPatternError",
     "ExplicitExcluder",
     "GitFilesystemInventory",
+    "GitFilesystemInventoryVisit",
     "GitIgnoreCommandError",
     "GitIgnoreMatches",
     "GitIgnoreProbe",

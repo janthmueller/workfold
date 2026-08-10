@@ -11,13 +11,15 @@ from __future__ import annotations
 
 import os
 import re
+import sqlite3
 import stat
+import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from workfold.collectors.base import CollectorDiagnostic, DiagnosticSeverity
+from workfold.collectors.base import CollectorDiagnostic, DiagnosticBuffer, DiagnosticSeverity
 from workfold.collectors.git import GitCommandError, GitRepository, GitRunner
 from workfold.models import RecordKind, RecordOrigin, Source, TimestampKind, TimestampObservation
 from workfold.provenance import git_reflog_id
@@ -37,10 +39,18 @@ _PER_WORKTREE_REF_PREFIXES: Final[tuple[str, ...]] = (
 class GitReflogParseError(ValueError):
     """A structured failure to parse reflog discovery or semantic records."""
 
-    def __init__(self, code: str, message: str, *, ref_name: str | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        ref_name: str | None = None,
+        record_count: int = 0,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.ref_name = ref_name
+        self.record_count = record_count
 
 
 class GitReflogReadError(OSError):
@@ -95,6 +105,71 @@ class ParsedReflogEntry:
     @property
     def epoch_nanoseconds(self) -> int:
         return self.epoch_seconds * 1_000_000_000
+
+
+@dataclass(frozen=True, slots=True)
+class ReflogVisit:
+    """Counts and snapshot state from one bounded semantic reflog visit."""
+
+    entry_count: int
+    captured_entry_count: int
+    changed_during_read: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedReflogLine:
+    old_id: bytes
+    new_id: bytes
+    identity: bytes
+    epoch: bytes
+    offset: bytes
+    actor_name: bytes
+    actor_email: bytes
+    message: bytes
+    epoch_seconds: int
+    offset_seconds: int
+
+    @property
+    def duplicate_key(self) -> tuple[bytes, bytes, bytes, bytes, bytes]:
+        return (
+            self.old_id,
+            self.new_id,
+            self.identity,
+            self.epoch + b" " + self.offset,
+            self.message,
+        )
+
+    def to_entry(
+        self,
+        *,
+        ref_name: str,
+        raw_ref_name: bytes,
+        selector_index: int,
+        duplicate_ordinal: int,
+    ) -> ParsedReflogEntry:
+        raw_timestamp = self.epoch + b" " + self.offset
+        raw_selector = raw_ref_name + b"@{" + str(selector_index).encode("ascii") + b"}"
+        return ParsedReflogEntry(
+            ref_name=ref_name,
+            raw_ref_name=raw_ref_name,
+            raw_selector=raw_selector.decode("utf-8", errors="surrogateescape"),
+            raw_selector_bytes=raw_selector,
+            new_id=self.new_id.decode("ascii"),
+            old_id=self.old_id.decode("ascii"),
+            epoch_seconds=self.epoch_seconds,
+            offset_seconds=self.offset_seconds,
+            raw_timestamp=raw_timestamp.decode("ascii"),
+            raw_timestamp_bytes=raw_timestamp,
+            actor_name=self.actor_name.decode("utf-8", errors="surrogateescape"),
+            raw_actor_name=self.actor_name,
+            actor_email=self.actor_email.decode("utf-8", errors="surrogateescape"),
+            raw_actor_email=self.actor_email,
+            raw_actor=self.identity.decode("utf-8", errors="surrogateescape"),
+            raw_actor_bytes=self.identity,
+            message=self.message.decode("utf-8", errors="surrogateescape"),
+            raw_message=self.message,
+            duplicate_ordinal=duplicate_ordinal,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +340,62 @@ def _parse_identity(raw_identity: bytes, *, ref_name: str) -> tuple[bytes, bytes
     return raw_identity[:separator], raw_identity[separator + 2 : -1]
 
 
+def _parse_reflog_line(raw_line: bytes, *, ref_name: str) -> _ParsedReflogLine:
+    header, tab, raw_message = raw_line.partition(b"\t")
+    if not tab:
+        # update-ref permits an omitted message, represented by no tab at all
+        # rather than by a trailing empty field.
+        header = raw_line
+        raw_message = b""
+    old_raw, separator, remainder = header.partition(b" ")
+    if not separator:
+        raise GitReflogParseError(
+            "invalid_git_reflog_entry",
+            "reflog record has no old object ID",
+            ref_name=ref_name,
+        )
+    new_raw, separator, signature_raw = remainder.partition(b" ")
+    if not separator or _OID_RE.fullmatch(old_raw) is None or _OID_RE.fullmatch(new_raw) is None:
+        raise GitReflogParseError(
+            "invalid_git_reflog_object_id",
+            "reflog record has an invalid old or new object ID",
+            ref_name=ref_name,
+        )
+    if len(old_raw) != len(new_raw):
+        raise GitReflogParseError(
+            "invalid_git_reflog_object_id",
+            "reflog old and new object IDs use different hash formats",
+            ref_name=ref_name,
+        )
+    try:
+        identity_raw, epoch_raw, offset_raw = signature_raw.rsplit(b" ", 2)
+    except ValueError as error:
+        raise GitReflogParseError(
+            "invalid_git_reflog_timestamp",
+            "reflog identity does not end in an epoch and UTC offset",
+            ref_name=ref_name,
+        ) from error
+    if _EPOCH_RE.fullmatch(epoch_raw) is None or _OFFSET_RE.fullmatch(offset_raw) is None:
+        raise GitReflogParseError(
+            "invalid_git_reflog_timestamp",
+            "reflog entry has an invalid epoch or UTC offset",
+            ref_name=ref_name,
+        )
+    name_raw, email_raw = _parse_identity(identity_raw, ref_name=ref_name)
+    return _ParsedReflogLine(
+        old_id=old_raw,
+        new_id=new_raw,
+        identity=identity_raw,
+        epoch=epoch_raw,
+        offset=offset_raw,
+        actor_name=name_raw,
+        actor_email=email_raw,
+        message=raw_message,
+        epoch_seconds=_parse_epoch(epoch_raw, ref_name=ref_name),
+        offset_seconds=_parse_offset(offset_raw, ref_name=ref_name),
+    )
+
+
 def parse_reflog_entries(payload: bytes, *, ref_name: str) -> tuple[ParsedReflogEntry, ...]:
     """Parse a semantic reflog file from right-delimited identity/date fields.
 
@@ -289,81 +420,17 @@ def parse_reflog_entries(payload: bytes, *, ref_name: str) -> tuple[ParsedReflog
     raw_lines = payload[:-1].split(b"\n")
     raw_ref_name = os.fsencode(ref_name)
     parsed_oldest_first: list[ParsedReflogEntry] = []
-    duplicate_counts: dict[tuple[bytes, ...], int] = {}
+    duplicate_counts: dict[tuple[bytes, bytes, bytes, bytes, bytes], int] = {}
     for index, raw_line in enumerate(raw_lines):
-        header, tab, raw_message = raw_line.partition(b"\t")
-        if not tab:
-            # update-ref permits an omitted message, represented by no tab at
-            # all rather than by a trailing empty field.
-            header = raw_line
-            raw_message = b""
-        old_raw, separator, remainder = header.partition(b" ")
-        if not separator:
-            raise GitReflogParseError(
-                "invalid_git_reflog_entry",
-                "reflog record has no old object ID",
-                ref_name=ref_name,
-            )
-        new_raw, separator, signature_raw = remainder.partition(b" ")
-        if not separator or _OID_RE.fullmatch(old_raw) is None or _OID_RE.fullmatch(new_raw) is None:
-            raise GitReflogParseError(
-                "invalid_git_reflog_object_id",
-                "reflog record has an invalid old or new object ID",
-                ref_name=ref_name,
-            )
-        if len(old_raw) != len(new_raw):
-            raise GitReflogParseError(
-                "invalid_git_reflog_object_id",
-                "reflog old and new object IDs use different hash formats",
-                ref_name=ref_name,
-            )
-        try:
-            identity_raw, epoch_raw, offset_raw = signature_raw.rsplit(b" ", 2)
-        except ValueError as error:
-            raise GitReflogParseError(
-                "invalid_git_reflog_timestamp",
-                "reflog identity does not end in an epoch and UTC offset",
-                ref_name=ref_name,
-            ) from error
-        if _EPOCH_RE.fullmatch(epoch_raw) is None or _OFFSET_RE.fullmatch(offset_raw) is None:
-            raise GitReflogParseError(
-                "invalid_git_reflog_timestamp",
-                "reflog entry has an invalid epoch or UTC offset",
-                ref_name=ref_name,
-            )
-        name_raw, email_raw = _parse_identity(identity_raw, ref_name=ref_name)
-        raw_timestamp = epoch_raw + b" " + offset_raw
-        duplicate_key = (
-            old_raw,
-            new_raw,
-            identity_raw,
-            raw_timestamp,
-            raw_message,
-        )
+        parsed = _parse_reflog_line(raw_line, ref_name=ref_name)
+        duplicate_key = parsed.duplicate_key
         duplicate_ordinal = duplicate_counts.get(duplicate_key, 0)
         duplicate_counts[duplicate_key] = duplicate_ordinal + 1
-        selector_index = len(raw_lines) - index - 1
-        raw_selector_bytes = raw_ref_name + b"@{" + str(selector_index).encode("ascii") + b"}"
         parsed_oldest_first.append(
-            ParsedReflogEntry(
+            parsed.to_entry(
                 ref_name=ref_name,
                 raw_ref_name=raw_ref_name,
-                raw_selector=raw_selector_bytes.decode("utf-8", errors="surrogateescape"),
-                raw_selector_bytes=raw_selector_bytes,
-                new_id=new_raw.decode("ascii"),
-                old_id=old_raw.decode("ascii"),
-                epoch_seconds=_parse_epoch(epoch_raw, ref_name=ref_name),
-                offset_seconds=_parse_offset(offset_raw, ref_name=ref_name),
-                raw_timestamp=raw_timestamp.decode("ascii"),
-                raw_timestamp_bytes=raw_timestamp,
-                actor_name=name_raw.decode("utf-8", errors="surrogateescape"),
-                raw_actor_name=name_raw,
-                actor_email=email_raw.decode("utf-8", errors="surrogateescape"),
-                raw_actor_email=email_raw,
-                raw_actor=identity_raw.decode("utf-8", errors="surrogateescape"),
-                raw_actor_bytes=identity_raw,
-                message=raw_message.decode("utf-8", errors="surrogateescape"),
-                raw_message=raw_message,
+                selector_index=len(raw_lines) - index - 1,
                 duplicate_ordinal=duplicate_ordinal,
             )
         )
@@ -388,8 +455,8 @@ def _is_within(path: Path, parent: Path) -> bool:
     return True
 
 
-def read_semantic_reflog(path: Path, *, repository: GitRepository) -> tuple[bytes, bool]:
-    """Read one regular reflog safely and report concurrent mutation."""
+def _open_semantic_reflog(path: Path, *, repository: GitRepository) -> tuple[int, os.stat_result, Path]:
+    """Open a repository-contained regular reflog without following its final link."""
 
     descriptor = -1
     try:
@@ -419,10 +486,9 @@ def read_semantic_reflog(path: Path, *, repository: GitRepository) -> tuple[byte
                 "Git resolved a reflog that is not a regular file",
                 path=resolved,
             )
-        with os.fdopen(descriptor, "rb") as stream:
-            descriptor = -1
-            payload = stream.read()
-            after = os.fstat(stream.fileno())
+        opened_descriptor = descriptor
+        descriptor = -1
+        return opened_descriptor, before, resolved
     except GitReflogReadError:
         raise
     except OSError as error:
@@ -434,7 +500,10 @@ def read_semantic_reflog(path: Path, *, repository: GitRepository) -> tuple[byte
     finally:
         if descriptor >= 0:
             os.close(descriptor)
-    changed = (
+
+
+def _snapshot_changed(before: os.stat_result, after: os.stat_result) -> bool:
+    return (
         before.st_dev,
         before.st_ino,
         before.st_size,
@@ -445,7 +514,202 @@ def read_semantic_reflog(path: Path, *, repository: GitRepository) -> tuple[byte
         after.st_size,
         after.st_mtime_ns,
     )
-    return payload, changed
+
+
+def read_semantic_reflog(path: Path, *, repository: GitRepository) -> tuple[bytes, bool]:
+    """Read one regular reflog safely and report concurrent mutation."""
+
+    descriptor, before, _resolved = _open_semantic_reflog(path, repository=repository)
+    try:
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            payload = stream.read()
+            after = os.fstat(stream.fileno())
+    except OSError as error:
+        raise GitReflogReadError(
+            "git_reflog_read_error",
+            f"semantic reflog could not be read: {error}",
+            path=path,
+        ) from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return payload, _snapshot_changed(before, after)
+
+
+_DEFAULT_READ_SEMANTIC_REFLOG = read_semantic_reflog
+
+
+def visit_semantic_reflog(
+    path: Path,
+    *,
+    repository: GitRepository,
+    ref_name: str,
+    entry_consumer: Callable[[tuple[ParsedReflogEntry, ...]], None] | None = None,
+    batch_size: int = 512,
+) -> ReflogVisit:
+    """Validate a complete reflog snapshot, then emit newest-first batches.
+
+    Raw records and duplicate accounting live in an ephemeral SQLite spool.
+    This keeps memory bounded without exposing a partially parsed reflog if a
+    malformed record appears near the end of the file.
+    """
+
+    if batch_size < 1:
+        raise ValueError("reflog batch_size must be positive")
+    descriptor, before, _resolved = _open_semantic_reflog(path, repository=repository)
+    record_count = 0
+    has_nul = False
+    truncated = False
+    delivering_callbacks = False
+    try:
+        with tempfile.TemporaryDirectory(prefix="workfold-reflog-") as directory:
+            connection = sqlite3.connect(f"{directory}/reflog.sqlite3")
+            try:
+                connection.execute("PRAGMA journal_mode=OFF")
+                connection.execute("PRAGMA synchronous=OFF")
+                connection.execute("PRAGMA temp_store=FILE")
+                connection.execute("PRAGMA cache_size=-4096")
+                connection.execute(
+                    """
+                    CREATE TABLE records (
+                        ordinal INTEGER PRIMARY KEY,
+                        raw_line BLOB NOT NULL,
+                        duplicate_ordinal INTEGER
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE duplicate_counts (
+                        old_id BLOB NOT NULL,
+                        new_id BLOB NOT NULL,
+                        identity BLOB NOT NULL,
+                        raw_timestamp BLOB NOT NULL,
+                        message BLOB NOT NULL,
+                        count INTEGER NOT NULL,
+                        PRIMARY KEY (old_id, new_id, identity, raw_timestamp, message)
+                    ) WITHOUT ROWID
+                    """
+                )
+                with os.fdopen(descriptor, "rb") as stream:
+                    descriptor = -1
+                    for raw_record in stream:
+                        has_nul |= b"\0" in raw_record
+                        if not raw_record.endswith(b"\n"):
+                            truncated = True
+                            continue
+                        connection.execute(
+                            "INSERT INTO records VALUES (?, ?, NULL)",
+                            (record_count, raw_record[:-1]),
+                        )
+                        record_count += 1
+                    after = os.fstat(stream.fileno())
+
+                if has_nul:
+                    raise GitReflogParseError(
+                        "invalid_git_reflog_entry",
+                        "reflog contains an impossible NUL byte",
+                        ref_name=ref_name,
+                        record_count=record_count,
+                    )
+                if truncated:
+                    raise GitReflogParseError(
+                        "truncated_git_reflog_entry",
+                        "reflog ends inside a record",
+                        ref_name=ref_name,
+                        record_count=record_count,
+                    )
+
+                try:
+                    for ordinal, raw_line in connection.execute(
+                        "SELECT ordinal, raw_line FROM records ORDER BY ordinal"
+                    ):
+                        parsed = _parse_reflog_line(raw_line, ref_name=ref_name)
+                        duplicate_key = parsed.duplicate_key
+                        existing = connection.execute(
+                            """
+                            SELECT count FROM duplicate_counts
+                             WHERE old_id = ? AND new_id = ? AND identity = ?
+                               AND raw_timestamp = ? AND message = ?
+                            """,
+                            duplicate_key,
+                        ).fetchone()
+                        duplicate_ordinal = 0 if existing is None else int(existing[0])
+                        if existing is None:
+                            connection.execute(
+                                "INSERT INTO duplicate_counts VALUES (?, ?, ?, ?, ?, 1)",
+                                duplicate_key,
+                            )
+                        else:
+                            connection.execute(
+                                """
+                                UPDATE duplicate_counts SET count = count + 1
+                                 WHERE old_id = ? AND new_id = ? AND identity = ?
+                                   AND raw_timestamp = ? AND message = ?
+                                """,
+                                duplicate_key,
+                            )
+                        connection.execute(
+                            "UPDATE records SET duplicate_ordinal = ? WHERE ordinal = ?",
+                            (duplicate_ordinal, ordinal),
+                        )
+                except GitReflogParseError as error:
+                    raise GitReflogParseError(
+                        error.code,
+                        str(error),
+                        ref_name=error.ref_name,
+                        record_count=record_count,
+                    ) from error
+                connection.commit()
+
+                raw_ref_name = os.fsencode(ref_name)
+                captured = 0
+                batch: list[ParsedReflogEntry] = []
+                for ordinal, raw_line, duplicate_ordinal in connection.execute(
+                    "SELECT ordinal, raw_line, duplicate_ordinal FROM records ORDER BY ordinal DESC"
+                ):
+                    parsed = _parse_reflog_line(raw_line, ref_name=ref_name)
+                    batch.append(
+                        parsed.to_entry(
+                            ref_name=ref_name,
+                            raw_ref_name=raw_ref_name,
+                            selector_index=record_count - int(ordinal) - 1,
+                            duplicate_ordinal=int(duplicate_ordinal),
+                        )
+                    )
+                    if len(batch) >= batch_size:
+                        if entry_consumer is not None:
+                            delivering_callbacks = True
+                            entry_consumer(tuple(batch))
+                        captured += len(batch)
+                        batch.clear()
+                if batch:
+                    if entry_consumer is not None:
+                        delivering_callbacks = True
+                        entry_consumer(tuple(batch))
+                    captured += len(batch)
+            finally:
+                connection.close()
+    except GitReflogParseError:
+        raise
+    except (OSError, sqlite3.Error) as error:
+        if delivering_callbacks:
+            raise
+        raise GitReflogReadError(
+            "git_reflog_read_error",
+            f"semantic reflog could not be read: {error}",
+            path=path,
+        ) from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+    return ReflogVisit(
+        entry_count=record_count,
+        captured_entry_count=captured,
+        changed_during_read=_snapshot_changed(before, after),
+    )
 
 
 def _command_diagnostic(
@@ -506,7 +770,7 @@ class GitReflogCollector:
         collected: list[CollectedGitReflog] = []
         available_statuses: list[ReflogRef] = []
         unavailable_statuses: list[ReflogRef] = []
-        diagnostics: list[CollectorDiagnostic] = []
+        diagnostics = DiagnosticBuffer()
         successful = 0
         discovered_ref_count = 0
         unavailable_entry_count = 0
@@ -557,6 +821,7 @@ class GitReflogCollector:
                 seen_inventory.add(inventory_key)
                 discovered_ref_count += 1
                 raw_record_count = 0
+                captured_for_ref = 0
                 try:
                     path_output = self._runner.run(
                         (
@@ -567,9 +832,37 @@ class GitReflogCollector:
                         cwd=repository.root,
                     ).stdout
                     reflog_path = _decode_git_path(path_output, repository=repository)
-                    payload, changed = read_semantic_reflog(reflog_path, repository=repository)
-                    raw_record_count = payload.count(b"\n")
-                    parsed_entries = parse_reflog_entries(payload, ref_name=ref_name)
+
+                    def consume_parsed(parsed_batch: tuple[ParsedReflogEntry, ...]) -> None:
+                        nonlocal captured_for_ref, captured_entry_count
+                        collected_batch = tuple(
+                            CollectedGitReflog(repository=repository, entry=entry) for entry in parsed_batch
+                        )
+                        captured_for_ref += len(collected_batch)
+                        captured_entry_count += len(collected_batch)
+                        if retain_entries:
+                            collected.extend(collected_batch)
+                        if collected_batch and entry_consumer is not None:
+                            entry_consumer(collected_batch)
+
+                    if read_semantic_reflog is _DEFAULT_READ_SEMANTIC_REFLOG:
+                        visit = visit_semantic_reflog(
+                            reflog_path,
+                            repository=repository,
+                            ref_name=ref_name,
+                            entry_consumer=consume_parsed,
+                        )
+                        raw_record_count = visit.entry_count
+                        changed = visit.changed_during_read
+                        if captured_for_ref != visit.captured_entry_count:
+                            raise RuntimeError("reflog visitor capture accounting did not reconcile")
+                    else:
+                        # Preserve the public reader as a test/integration seam.
+                        payload, changed = read_semantic_reflog(reflog_path, repository=repository)
+                        raw_record_count = payload.count(b"\n")
+                        parsed_entries = parse_reflog_entries(payload, ref_name=ref_name)
+                        for start in range(0, len(parsed_entries), 512):
+                            consume_parsed(parsed_entries[start : start + 512])
                 except GitCommandError as error:
                     repository_failed = True
                     diagnostics.append(_command_diagnostic(error, repository=repository, stage="git_reflog_path"))
@@ -592,6 +885,7 @@ class GitReflogCollector:
                 except GitReflogParseError as error:
                     repository_failed = True
                     parse_errors += 1
+                    raw_record_count = max(raw_record_count, error.record_count)
                     unavailable_entry_count += raw_record_count
                     diagnostics.append(
                         CollectorDiagnostic(
@@ -616,15 +910,7 @@ class GitReflogCollector:
                             message="The reflog changed while Workfold read it; the captured snapshot may be partial",
                         )
                     )
-                available_statuses.append(ReflogRef(repository, ref_name, raw_record_count, len(parsed_entries)))
-                collected_batch = tuple(
-                    CollectedGitReflog(repository=repository, entry=entry) for entry in parsed_entries
-                )
-                captured_entry_count += len(collected_batch)
-                if retain_entries:
-                    collected.extend(collected_batch)
-                if collected_batch and entry_consumer is not None:
-                    entry_consumer(collected_batch)
+                available_statuses.append(ReflogRef(repository, ref_name, raw_record_count, captured_for_ref))
             if not repository_failed:
                 successful += 1
 
@@ -632,7 +918,7 @@ class GitReflogCollector:
             entries=tuple(collected),
             available_refs=tuple(available_statuses),
             refs_without_reflog=tuple(unavailable_statuses),
-            diagnostics=tuple(diagnostics),
+            diagnostics=diagnostics.snapshot(),
             requested_repositories=len(repositories),
             successful_repositories=successful,
             discovered_refs=discovered_ref_count,
@@ -650,6 +936,7 @@ __all__ = [
     "GitReflogParseError",
     "GitReflogReadError",
     "ParsedReflogEntry",
+    "ReflogVisit",
     "ReflogRef",
     "parse_current_refs",
     "parse_reflog_entries",
@@ -657,4 +944,5 @@ __all__ = [
     "parse_reflog_selectors",
     "discover_reflog_names",
     "read_semantic_reflog",
+    "visit_semantic_reflog",
 ]
