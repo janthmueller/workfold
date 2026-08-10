@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from collections.abc import Collection, Sequence
@@ -83,7 +84,7 @@ def test_git_commit_flows_through_selection_schedule_and_terminal_report(tmp_pat
     assert "timestamp observations included: 1" in rendered
 
 
-def test_author_filter_is_case_insensitive_literal_or_and_accounted(tmp_path: Path) -> None:
+def test_git_identity_filter_is_case_insensitive_literal_or_and_accounted(tmp_path: Path) -> None:
     repo = GitRepo.create(tmp_path / "repo")
     instant = datetime(2026, 8, 3, 10, 0, tzinfo=BERLIN)
     repo.commit(
@@ -103,9 +104,9 @@ def test_author_filter_is_case_insensitive_literal_or_and_accounted(tmp_path: Pa
             "all",
             "--timezone",
             "Europe/Berlin",
-            "--author",
+            "--git-identity",
             "nobody",
-            "--author",
+            "--git-identity",
             "ada@example",
             "--coverage",
             "--verbose",
@@ -117,8 +118,151 @@ def test_author_filter_is_case_insensitive_literal_or_and_accounted(tmp_path: Pa
 
     rendered = output.getvalue()
     _assert_summary_count(rendered, "Events", 1)
-    assert "Authors: commit-derived only: nobody OR ada@example" in rendered
-    assert "filesystem unaffected" in rendered
+    assert "Git identities: nobody OR ada@example" in rendered
+    assert "Git timestamps explicitly filtered by identity" in rendered
+
+
+def test_git_identity_filter_uses_each_timestamp_roles_own_identity(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    author_instant = datetime(2026, 8, 3, 10, 0, tzinfo=BERLIN)
+    committer_instant = datetime(2026, 8, 4, 11, 0, tzinfo=BERLIN)
+    tagger_instant = datetime(2026, 8, 5, 12, 0, tzinfo=BERLIN)
+    commit_id = repo.commit(
+        "work.txt",
+        "one",
+        "different identities",
+        author_date=_git_date(author_instant),
+        committer_date=_git_date(committer_instant),
+        author_name="Original Author",
+        author_email="author@example.test",
+        committer_name="Later Committer",
+        committer_email="COMMITTER@EXAMPLE.TEST",
+    )
+    repo.run(
+        "tag",
+        "-a",
+        "v1.0.0",
+        commit_id,
+        "-m",
+        "tagged release",
+        environment={
+            "GIT_COMMITTER_DATE": _git_date(tagger_instant),
+            "GIT_COMMITTER_NAME": "Release Tagger",
+            "GIT_COMMITTER_EMAIL": "tagger@example.test",
+        },
+    )
+    output = StringIO()
+    options = parse_options(
+        [
+            str(repo.path),
+            "--time",
+            "all",
+            "--profile",
+            "portable",
+            "--git-identity",
+            "committer@example",
+            "--git-identity",
+            "RELEASE TAGGER",
+            "--coverage",
+            "--verbose",
+            "--no-color",
+        ]
+    )
+
+    assert run(options, stdout=output, stderr=StringIO(), terminal_width=100) == 0
+
+    rendered = output.getvalue()
+    _assert_summary_count(rendered, "Events", 2)
+    assert "Git identities: committer@example OR RELEASE TAGGER" in rendered
+    assert "Git author captured: 1; requested=1, identity filtered=1" in rendered
+    assert "Git committer captured: 1; requested=1, included=1, markers=1" in rendered
+    assert "Git tagger captured: 1; requested=1, included=1, markers=1" in rendered
+
+
+def test_git_identity_filter_matches_reflog_actor(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    instant = datetime(2026, 8, 3, 10, 0, tzinfo=BERLIN)
+    commit_id = repo.commit(
+        "work.txt",
+        "one",
+        "reflog fixture",
+        author_date=_git_date(instant),
+        committer_date=_git_date(instant),
+    )
+    repo.run(
+        "update-ref",
+        "--create-reflog",
+        "-m",
+        "manual activity",
+        "refs/custom/activity",
+        commit_id,
+        environment={
+            "GIT_COMMITTER_DATE": _git_date(instant),
+            "GIT_COMMITTER_NAME": "Reflog Operator",
+            "GIT_COMMITTER_EMAIL": "operator@example.test",
+        },
+    )
+    output = StringIO()
+    options = parse_options(
+        [
+            str(repo.path),
+            "--time",
+            "all",
+            "--git-records",
+            "reflog",
+            "--git-identity",
+            "operator@example",
+            "--coverage",
+            "--verbose",
+            "--no-color",
+        ]
+    )
+
+    assert run(options, stdout=output, stderr=StringIO(), terminal_width=100) == 0
+
+    rendered = output.getvalue()
+    _assert_summary_count(rendered, "Events", 1)
+    assert "Git identities: operator@example" in rendered
+    assert re.search(r"Git reflog captured: \d+; .*included=1", rendered)
+
+
+def test_git_identity_filter_does_not_filter_filesystem_observations(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    instant = datetime(2026, 8, 3, 10, 0, tzinfo=BERLIN)
+    repo.commit(
+        "work.txt",
+        "one",
+        "combined fixture",
+        author_date=_git_date(instant),
+        committer_date=_git_date(instant),
+    )
+    timestamp = instant.timestamp()
+    os.utime(repo.path / "work.txt", (timestamp, timestamp))
+    output = StringIO()
+    options = parse_options(
+        [
+            str(repo.path),
+            "--time",
+            "all",
+            "--mode",
+            "all",
+            "--fs-times",
+            "modified",
+            "--git-identity",
+            "does-not-match",
+            "--coverage",
+            "--verbose",
+            "--no-color",
+        ]
+    )
+
+    assert run(options, stdout=output, stderr=StringIO(), terminal_width=100) == 0
+
+    rendered = output.getvalue()
+    _assert_summary_count(rendered, "Events", 1)
+    assert "Git identities: does-not-match; filesystem unaffected" in rendered
+    assert "Git author captured: 1; requested=1, identity filtered=1" in rendered
+    assert "filesystem modified captured: 1; requested=1, included=1, markers=1" in rendered
 
 
 def test_same_commit_identical_author_and_committer_dates_coalesce(tmp_path: Path) -> None:
@@ -230,7 +374,7 @@ def test_empty_repository_plus_failed_target_renders_an_honest_partial_run(
     assert "selected path does not exist" in errors.getvalue()
 
 
-def test_date_selection_precedes_author_filter_in_coverage(tmp_path: Path) -> None:
+def test_date_selection_precedes_identity_filter_in_coverage(tmp_path: Path) -> None:
     repo = GitRepo.create(tmp_path / "repo")
     instant = datetime(2026, 8, 3, 10, 0, tzinfo=BERLIN)
     repo.commit(
@@ -250,7 +394,7 @@ def test_date_selection_precedes_author_filter_in_coverage(tmp_path: Path) -> No
             "2026-W33",
             "--timezone",
             "Europe/Berlin",
-            "--author",
+            "--git-identity",
             "nobody",
             "--coverage",
             "--no-color",
@@ -261,7 +405,7 @@ def test_date_selection_precedes_author_filter_in_coverage(tmp_path: Path) -> No
 
     rendered = output.getvalue()
     assert "Git author captured: 1; requested=1, outside date=1" in rendered
-    assert "author filtered=1" not in rendered
+    assert "identity filtered=1" not in rendered
 
 
 def test_git_coverage_keeps_independent_repository_targets(tmp_path: Path) -> None:

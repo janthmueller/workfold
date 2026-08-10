@@ -121,11 +121,21 @@ def build_parser() -> argparse.ArgumentParser:
     git_group.add_argument(
         "--git-commits-from",
         dest="commits_from",
-        choices=("HEAD", "all-local-refs"),
+        choices=("head", "local-branches", "all-refs"),
         default=None,
-        help="commit reachability (default: all-local-refs)",
+        help="commit reachability (standard default: local-branches; portable/full: all-refs)",
     )
-    git_group.add_argument("--author", dest="authors", action="append", default=[], metavar="VALUE")
+    git_group.add_argument(
+        "--git-identity",
+        dest="git_identities",
+        action="append",
+        default=[],
+        metavar="VALUE",
+        help=(
+            "only include Git timestamps whose recorded author, committer, tagger, or reflog "
+            "identity matches VALUE; repeat for OR"
+        ),
+    )
 
     filesystem_group = parser.add_argument_group("filesystem evidence")
     filesystem_group.add_argument(

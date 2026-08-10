@@ -39,6 +39,7 @@ workfold . -t 2026-07-01..2026-07-31          # inclusive date range
 workfold . -t all -m fs                        # filesystem metadata
 workfold . -t all -m git -p portable           # portable Git-object timestamps
 workfold . -t all -m all -p full               # exhaustive local view
+workfold . --git-identity jan@example.com      # only that recorded Git identity
 workfold . --timezone Europe/Berlin
 workfold . --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
 workfold . --list-outside --limit 50
@@ -52,12 +53,16 @@ The three main selectors are independent:
 | `-m`, `--mode` | Evidence source | `git`, `fs`, `all` |
 | `-p`, `--profile` | Collection depth | `standard`, `portable`, `full` |
 
-- `standard` uses commit author dates for Git and birth/modified dates for
-  regular files, while respecting Git ignore rules.
-- `portable` uses commit author/committer and annotated-tag timestamps stored in
-  Git objects; it excludes local reflogs and filesystem metadata.
-- `full` enables every supported evidence kind inside the selected time and
-  mode. It does not imply `-t all` or `-m all`.
+- `standard` — **What does the ordinary activity pattern look like?** Git uses
+  commit author dates reachable from local branches (plus a detached `HEAD`);
+  filesystem mode uses birth/modified dates for regular files and respects Git
+  ignore rules.
+- `portable` — **What dated evidence is stored inside Git objects?** Includes
+  commit author/committer and annotated-tag tagger dates, excluding local-only
+  evidence.
+- `full` — **What dated evidence can this local machine still discover?**
+  Enables every supported kind inside the selected time and mode; it does not
+  imply `-t all` or `-m all`.
 
 Use `--cluster-window 10m`, `--cluster-window 1h5m`, or another duration to tune
 row clustering. Use `--no-color` or the standard `NO_COLOR` environment

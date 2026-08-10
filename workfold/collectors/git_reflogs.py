@@ -499,7 +499,7 @@ class GitReflogCollector:
         self._runner = runner or GitRunner()
 
     def collect(self, repositories: Sequence[GitRepository]) -> GitReflogCollectionResult:
-        """Collect reflogs independently of commit ref scope and author filters."""
+        """Collect reflogs independently of commit ref scope and identity filters."""
 
         collected: list[CollectedGitReflog] = []
         available_statuses: list[ReflogRef] = []

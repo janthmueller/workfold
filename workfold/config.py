@@ -78,7 +78,8 @@ class GitRecords(IntFlag):
 
 class RefScope(str, Enum):
     HEAD = "head"
-    ALL = "all"
+    LOCAL_BRANCHES = "local-branches"
+    ALL_REFS = "all-refs"
 
 
 class FilesystemTime(str, Enum):
@@ -117,7 +118,7 @@ class RawOptions:
     git_date: GitDateMode
     git_records: GitRecords
     ref_scope: RefScope
-    authors: tuple[str, ...]
+    git_identities: tuple[str, ...]
     filesystem_times: tuple[FilesystemTime, ...]
     filesystem_entries: tuple[FilesystemEntry, ...]
     include_ignored: bool
@@ -421,10 +422,19 @@ def options_from_namespace(namespace: argparse.Namespace) -> RawOptions:
         filesystem_times = parse_filesystem_times(filesystem_times_value)
         filesystem_entries = parse_filesystem_entries(filesystem_entries_value)
 
-    ref_scope = RefScope.HEAD if namespace.commits_from == "HEAD" else RefScope.ALL
+    if namespace.commits_from is not None:
+        ref_scope = {
+            "head": RefScope.HEAD,
+            "local-branches": RefScope.LOCAL_BRANCHES,
+            "all-refs": RefScope.ALL_REFS,
+        }[namespace.commits_from]
+    elif profile in {CollectionProfile.PORTABLE, CollectionProfile.FULL}:
+        ref_scope = RefScope.ALL_REFS
+    else:
+        ref_scope = RefScope.LOCAL_BRANCHES
 
     explicit_git = any(_explicit(namespace, name) for name in ("git_records", "commit_times", "commits_from")) or bool(
-        namespace.authors
+        namespace.git_identities
     )
     explicit_filesystem = any(
         (
@@ -446,14 +456,12 @@ def options_from_namespace(namespace: argparse.Namespace) -> RawOptions:
             irrelevant.append("--git-commit-times")
         if _explicit(namespace, "commits_from"):
             irrelevant.append("--git-commits-from")
-        if namespace.authors:
-            irrelevant.append("--author")
         if irrelevant:
             raise UsageError(f"{', '.join(irrelevant)} require commit or file-change records to be enabled")
 
-    authors = tuple(value.strip() for value in namespace.authors)
-    if any(not value for value in authors):
-        raise UsageError("--author values cannot be empty")
+    git_identities = tuple(value.strip() for value in namespace.git_identities)
+    if any(not value for value in git_identities):
+        raise UsageError("--git-identity values cannot be empty")
     exclusions = tuple(value.strip() for value in namespace.exclusions)
     if any(not value for value in exclusions):
         raise UsageError("--exclude values cannot be empty")
@@ -486,7 +494,7 @@ def options_from_namespace(namespace: argparse.Namespace) -> RawOptions:
         git_date=git_date,
         git_records=git_records,
         ref_scope=ref_scope,
-        authors=authors,
+        git_identities=git_identities,
         filesystem_times=filesystem_times,
         filesystem_entries=filesystem_entries,
         include_ignored=include_ignored,

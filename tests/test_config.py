@@ -39,7 +39,8 @@ def test_default_options_are_the_quick_git_view_for_this_week() -> None:
     assert options.git_mode is GitMode.COMMITS
     assert options.git_date is GitDateMode.AUTHOR
     assert options.git_records == GitRecords.COMMITS
-    assert options.ref_scope is RefScope.ALL
+    assert options.ref_scope is RefScope.LOCAL_BRANCHES
+    assert options.git_identities == ()
     assert options.filesystem_times == (FilesystemTime.CREATED, FilesystemTime.MODIFIED)
     assert options.filesystem_entries == (FilesystemEntry.FILE,)
     assert options.respect_gitignore
@@ -144,6 +145,7 @@ def test_full_git_broadens_only_git_and_preserves_explicit_time() -> None:
     assert options.git_mode is GitMode.BOTH
     assert options.git_date is GitDateMode.BOTH
     assert options.git_records == GitRecords.ALL
+    assert options.ref_scope is RefScope.ALL_REFS
     assert options.filesystem_entries == (FilesystemEntry.FILE,)
     assert not options.include_ignored
     assert not options.coverage
@@ -176,6 +178,7 @@ def test_portable_is_the_locked_git_object_backed_preset() -> None:
     assert options.git_mode is GitMode.COMMITS
     assert options.git_date is GitDateMode.BOTH
     assert options.git_records == GitRecords.COMMITS | GitRecords.TAGS
+    assert options.ref_scope is RefScope.ALL_REFS
     assert not options.git_records.includes_reflogs
     assert not options.coverage
 
@@ -197,7 +200,7 @@ def test_profile_may_be_selected_only_once(profiles: tuple[str, str]) -> None:
     [
         ["--git-records", "commit"],
         ["--git-commit-times", "author"],
-        ["--git-commits-from", "HEAD"],
+        ["--git-commits-from", "head"],
         ["--fs-times", "modified"],
         ["--fs-entries", "file"],
         ["--respect-gitignore"],
@@ -211,11 +214,23 @@ def test_locked_profiles_reject_scope_overrides(profile: str, flag: list[str]) -
 
 
 def test_explicit_standard_profile_allows_scope_customization() -> None:
-    options = parse_options(["--profile", "standard", "--git-records", "commit,tag", "--git-commit-times", "committer"])
+    options = parse_options(
+        [
+            "--profile",
+            "standard",
+            "--git-records",
+            "commit,tag",
+            "--git-commit-times",
+            "committer",
+            "--git-commits-from",
+            "all-refs",
+        ]
+    )
 
     assert options.profile is CollectionProfile.STANDARD
     assert options.git_records == GitRecords.COMMITS | GitRecords.TAGS
     assert options.git_date is GitDateMode.COMMITTER
+    assert options.ref_scope is RefScope.ALL_REFS
 
 
 def test_git_record_csv_consolidates_record_family_and_granularity() -> None:
@@ -239,20 +254,34 @@ def test_invalid_git_record_csv_is_rejected(value: str) -> None:
 def test_commit_options_require_commit_derived_records() -> None:
     with pytest.raises(UsageError, match="require commit or file-change"):
         parse_options(["--git-records", "tag,reflog", "--git-commit-times", "author"])
-    with pytest.raises(UsageError, match="require commit or file-change"):
-        parse_options(["--git-records", "tag", "--author", "Jan"])
+
+
+def test_git_identity_filter_applies_to_non_commit_git_records() -> None:
+    options = parse_options(
+        ["--git-records", "tag,reflog", "--git-identity", "Tagger", "--git-identity", "actor@example.test"]
+    )
+
+    assert options.git_identities == ("Tagger", "actor@example.test")
 
 
 def test_commits_from_maps_to_commit_reachability() -> None:
-    assert parse_options(["--git-commits-from", "HEAD"]).ref_scope is RefScope.HEAD
-    assert parse_options(["--git-commits-from", "all-local-refs"]).ref_scope is RefScope.ALL
+    assert parse_options(["--git-commits-from", "head"]).ref_scope is RefScope.HEAD
+    assert parse_options(["--git-commits-from", "local-branches"]).ref_scope is RefScope.LOCAL_BRANCHES
+    assert parse_options(["--git-commits-from", "all-refs"]).ref_scope is RefScope.ALL_REFS
 
 
 def test_source_specific_options_are_not_silently_ignored() -> None:
     with pytest.raises(UsageError, match="Git-specific"):
-        parse_options(["--mode", "fs", "--git-commits-from", "HEAD"])
+        parse_options(["--mode", "fs", "--git-commits-from", "head"])
+    with pytest.raises(UsageError, match="Git-specific"):
+        parse_options(["--mode", "fs", "--git-identity", "Ada"])
     with pytest.raises(UsageError, match="filesystem-specific"):
         parse_options(["--mode", "git", "--include-ignored"])
+
+
+def test_git_identity_filter_rejects_empty_values() -> None:
+    with pytest.raises(UsageError, match="--git-identity values cannot be empty"):
+        parse_options(["--git-identity", " "])
 
 
 def test_filesystem_times_use_semantic_public_names_and_deduplicate() -> None:

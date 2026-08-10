@@ -94,10 +94,10 @@ Collectors emit normalized, provenance-preserving timestamp observations.
 Configuration resolves time, mode, and the evidence profile as three independent
 axes. The profile defaults to `standard`; neither portable nor full expansion
 may rewrite time or mode.
-Schedule classification, display cropping, greedy globally aligned clustering,
-renderer-neutral report construction, and terminal rendering remain separate
-stages. The clusterer emits half-open semantic bands and literal event data;
-only the renderer creates Rich objects or assigns green/blue/red styles.
+Schedule classification, display cropping, anchored globally aligned time
+clustering, renderer-neutral report construction, and terminal rendering remain
+separate stages. The clusterer emits half-open semantic bands and literal event
+data; only the renderer creates Rich objects or assigns green/blue/red styles.
 Repository-controlled values must be sanitized and added as literal Rich text,
 never parsed as markup.
 
@@ -112,7 +112,7 @@ and Calendar. Both split rows partition Events but answer independent questions.
 The key derives from visible markers after cropping and mentions `×N` only if
 count tokens render. Only `--verbose` adds scope, period, full successful
 coverage, source/record breakdowns, cluster/compression policy, exact collector
-choices, author scope, collection extents, and ignore/exclusion policy; it also
+choices, Git identity scope, collection extents, and ignore/exclusion policy; it also
 includes the detailed coverage ledger. `--coverage` includes the ledger without
 those verbose details, and evidence-profile resolution must not enable either
 output mode. The minimal default must still append exception notices for partial

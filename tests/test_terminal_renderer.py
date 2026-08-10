@@ -81,7 +81,7 @@ def _report(
         coverage_status=COMPLETE_COVERAGE_STATUS,
         enabled_sources=(Source.GIT, Source.FILESYSTEM),
         enabled_record_kinds=(RecordKind.COMMIT, RecordKind.FILESYSTEM_ENTRY),
-        identity_label="all commit authors",
+        identity_label="all recorded identities",
         ignore_label="respecting Git ignore rules",
     )
     return build_report(aggregation, context)
@@ -118,7 +118,7 @@ def test_plain_renderer_uses_event_symbols_for_mixed_and_outside_activity() -> N
     assert "empty time omitted" not in rendered
     assert "Collector selectors:" not in rendered
     assert "Git commits + filesystem metadata" not in rendered
-    assert "Authors:" not in rendered
+    assert "Git identities:" not in rendered
     assert "Filesystem policy:" not in rendered
     assert "\x1b[" not in rendered
     assert all(display_width(line) <= 80 for line in rendered.splitlines())
@@ -320,7 +320,7 @@ def test_verbose_renderer_restores_operational_and_exact_scope_details() -> None
     assert "Cluster window: 1h" in rendered
     assert "Compression: empty time omitted; busy cells use exact symbol×count" in rendered
     assert "Collector selectors: Git commits + filesystem metadata" in rendered
-    assert "Authors: all commit authors" in rendered
+    assert "Git identities: all recorded identities" in rendered
     assert "Extents: whole Git repositories=/work/repository" in rendered
     assert "Filesystem policy: respecting Git ignore rules" in rendered
     assert "Explicit exclusions: *.tmp" in rendered

@@ -85,7 +85,10 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     assert "implies coverage" not in normalized_help
     assert "--git-records KINDS" in help_text
     assert "--git-commit-times KINDS" in help_text
-    assert "--git-commits-from {HEAD,all-local-refs}" in normalized_help
+    assert "--git-commits-from {head,local-branches,all-refs}" in normalized_help
+    assert "standard default: local-branches; portable/full: all-refs" in normalized_help
+    assert "--git-identity VALUE" in normalized_help
+    assert "author, committer, tagger, or reflog identity" in normalized_help
     assert "--fs-times KINDS" in help_text
     assert "--fs-entries KINDS" in help_text
     assert "show the detailed coverage ledger" in normalized_help
@@ -105,6 +108,7 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
         "--commits-from",
         "--filesystem-times",
         "--filesystem-entries",
+        "--author",
     }.isdisjoint(public_options)
 
 
@@ -126,11 +130,20 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
         "--commits-from",
         "--filesystem-times",
         "--filesystem-entries",
+        "--author",
     ],
 )
 def test_cli_rejects_retired_collection_options(option: str) -> None:
     with pytest.raises(SystemExit) as error:
         build_parser().parse_args([option])
+
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("scope", ["HEAD", "all-local-refs"])
+def test_cli_rejects_retired_commit_reachability_values(scope: str) -> None:
+    with pytest.raises(SystemExit) as error:
+        build_parser().parse_args(["--git-commits-from", scope])
 
     assert error.value.code == 2
 

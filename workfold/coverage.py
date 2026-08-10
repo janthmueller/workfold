@@ -35,7 +35,7 @@ class SelectionDisposition(str, Enum):
 
     INCLUDED = "included"
     OUTSIDE_DATE = "outside_date"
-    AUTHOR_FILTERED = "author_filtered"
+    IDENTITY_FILTERED = "identity_filtered"
 
 
 class PlottingDisposition(str, Enum):
@@ -219,7 +219,7 @@ class TimestampCoverage:
     extraction_errors: int = 0
     included: int = 0
     outside_date: int = 0
-    author_filtered: int = 0
+    identity_filtered: int = 0
     markers: int = 0
     coalesced_into_markers: int = 0
 
@@ -232,7 +232,7 @@ class TimestampCoverage:
             self.extraction_errors,
             self.included,
             self.outside_date,
-            self.author_filtered,
+            self.identity_filtered,
             self.markers,
             self.coalesced_into_markers,
         )
@@ -247,7 +247,7 @@ class TimestampCoverage:
     def selection_total(self) -> int:
         """Return all selection dispositions for captured observations."""
 
-        return self.included + self.outside_date + self.author_filtered
+        return self.included + self.outside_date + self.identity_filtered
 
     @property
     def plotting_total(self) -> int:
@@ -271,7 +271,7 @@ class TimestampCoverage:
         return {
             SelectionDisposition.INCLUDED: self.included,
             SelectionDisposition.OUTSIDE_DATE: self.outside_date,
-            SelectionDisposition.AUTHOR_FILTERED: self.author_filtered,
+            SelectionDisposition.IDENTITY_FILTERED: self.identity_filtered,
         }[disposition]
 
     def plotting_count(self, disposition: PlottingDisposition) -> int:

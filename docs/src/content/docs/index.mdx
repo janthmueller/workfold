@@ -41,9 +41,9 @@ workfold
 
 With no flags, Workfold selects the current ISO week in the operating system's
 local timezone (`-t this-week`), uses Git mode (`-m git`), reads commit author
-timestamps from all local refs under the `standard` profile (`-p standard`),
-uses one-hour greedy cluster windows, and classifies against
-`Mo-Fr 08:00-16:30`.
+timestamps from local branches plus a detached `HEAD` under the `standard`
+profile (`-p standard`), uses a configurable cluster window (default: `1h`),
+and classifies against `Mo-Fr 08:00-16:30`.
 
 ```bash
 workfold . -t 2026-W31
@@ -64,16 +64,16 @@ out `-t all -m all -p full`.
 
 ## Read the chart
 
-The chart renders only occupied time clusters in implicit `00:00`-toward-`24:00`
-order; it does not add empty day-boundary rows. Starting with the earliest
-unassigned local wall-clock event, Workfold greedily forms one globally aligned
-half-open assignment window of the configured width, assigns events from all
-seven weekdays, then repeats. A displayed label spans the first through last
-observed event in that cluster. Band endpoints always display as `HH:MM`, even
-for second-level windows and events; exact seconds and nanoseconds remain in
-normalized provenance and outside-event rows. Empty bands are omitted, and a
-gap of at least one hour between observed endpoints uses one dim duration cue
-rather than rows of empty intervals.
+The chart uses anchored time clustering and renders only occupied clusters in
+implicit `00:00`-toward-`24:00` order; it does not add empty day-boundary rows.
+Starting with the earliest unassigned local wall-clock event, Workfold forms one
+globally aligned half-open assignment window of the configured width, assigns
+events from all seven weekdays, then repeats. A displayed label spans the first
+through last observed event in that cluster. Band endpoints always display as
+`HH:MM`, even for second-level windows and events; exact seconds and nanoseconds
+remain in normalized provenance and outside-event rows. Empty bands are
+omitted, and a gap of at least one hour between observed endpoints uses one dim
+duration cue rather than rows of empty intervals.
 
 The matrix is the first terminal output; no title or context line appears above
 it. A content-aware symbol key, left-aligned working-hours line, and three direct
@@ -83,7 +83,7 @@ is no Summary heading: Events shows the total, Schedule splits it into
 inside/outside, and Calendar independently splits it into weekday/weekend.
 `--verbose` adds scope, period, the full successful coverage status,
 source/record breakdowns, cluster/compression policy, exact collector choices,
-author scope, collection extents, ignore/exclusion policy, and the detailed
+Git identity scope, collection extents, ignore/exclusion policy, and the detailed
 coverage ledger. Use
 `--coverage` for the ledger without the operational details. Partial collection,
 explicit narrowing, unsupported capabilities, and nonzero cropping still appear

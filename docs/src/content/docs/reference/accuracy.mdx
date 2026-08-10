@@ -29,15 +29,15 @@ Workfold therefore uses qualified wording such as:
 > complete for all discoverable timestamps in the requested scope
 
 That scope includes paths, the time selector, mode, evidence profile, record and
-timestamp kinds, commit reachability, authors, filesystem ignore policy,
-explicit exclusions, and platform capabilities. `--coverage` prints the
-detailed ledger without operational details; `--verbose` prints operational
+timestamp kinds, commit reachability, Git identity filters, filesystem ignore
+policy, explicit exclusions, and platform capabilities. `--coverage` prints
+the detailed ledger without operational details; `--verbose` prints operational
 details, the full successful coverage status, and that ledger. The `full`
 profile changes collection scope only and does not imply either report-detail
 flag.
 
 Default output omits the ordinary complete status, but it must show a compact
-coverage exception for active author filtering, explicit exclusions,
+coverage exception for active Git identity filtering, explicit exclusions,
 unsupported capabilities, partial collection, or collection errors. The
 verbose Scope fact combines mode and profile, such as `Git · portable`, while
 the full Coverage fact stays focused on completeness.
@@ -108,7 +108,7 @@ The collection pipeline is local:
   belongs to the MVP;
 - terminal-facing repository text is sanitized before rendering.
 
-Reports can still contain local paths, author identities, commit subjects,
+Reports can still contain local paths, recorded Git identities, commit subjects,
 reflog messages, and filenames. Review output before sharing it.
 
 ## Errors and strict mode

@@ -388,7 +388,7 @@ def _render_details(report: Report, width: int) -> str:
     lines.extend(_fact_lines("Compression", "empty time omitted; busy cells use exact symbol×count", width))
     lines.extend(_fact_lines("Collector selectors", context.source_label, width))
     if context.identity_label is not None:
-        lines.extend(_fact_lines("Authors", context.identity_label, width))
+        lines.extend(_fact_lines("Git identities", context.identity_label, width))
     if context.extent_label is not None:
         lines.extend(_fact_lines("Extents", context.extent_label, width))
     if context.ignore_label is not None:

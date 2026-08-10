@@ -134,7 +134,7 @@ def test_collector_resolves_whole_repository_and_preserves_raw_dates(tmp_path: P
         author_email="ada@example.test",
     )
 
-    result = GitCollector().collect((repo.path / "nested" / "work.txt", repo.path), ref_scope=RefScope.ALL)
+    result = GitCollector().collect((repo.path / "nested" / "work.txt", repo.path), ref_scope=RefScope.ALL_REFS)
 
     assert not result.diagnostics
     assert result.requested_targets == 2
@@ -345,7 +345,7 @@ def test_collector_ignores_inherited_repository_selection_environment(tmp_path: 
     assert result.repositories[0].root == selected.path.resolve()
 
 
-def test_all_refs_includes_non_current_work_and_deduplicates_shared_commits(tmp_path: Path) -> None:
+def test_ref_scopes_separate_head_local_branches_and_all_refs(tmp_path: Path) -> None:
     repo = GitRepo.create(tmp_path / "repo")
     root = repo.commit(
         "root.txt",
@@ -371,22 +371,56 @@ def test_all_refs_includes_non_current_work_and_deduplicates_shared_commits(tmp_
         parent=root,
         update_ref="refs/heads/topic",
     )
+    remote_only = repo.commit(
+        "remote.txt",
+        "remote",
+        "remote only",
+        author_date="1700000300 +0000",
+        committer_date="1700000301 +0000",
+        parent=root,
+        update_ref="refs/remotes/origin/remote-only",
+    )
+    custom_only = repo.commit(
+        "custom.txt",
+        "custom",
+        "custom only",
+        author_date="1700000400 +0000",
+        committer_date="1700000401 +0000",
+        parent=root,
+        update_ref="refs/custom/archive",
+    )
     repo.point_ref("refs/tags/shared", root)
 
     head_result = GitCollector().collect((repo.path,), ref_scope=RefScope.HEAD)
-    all_result = GitCollector().collect((repo.path,), ref_scope=RefScope.ALL)
+    branch_result = GitCollector().collect((repo.path,), ref_scope=RefScope.LOCAL_BRANCHES)
+    all_result = GitCollector().collect((repo.path,), ref_scope=RefScope.ALL_REFS)
 
     assert {item.commit.object_id for item in head_result.commits} == {root, main}
-    assert {item.commit.object_id for item in all_result.commits} == {root, main, topic}
-    assert all_result.discovered_commit_ids == 3
+    assert {item.commit.object_id for item in branch_result.commits} == {root, main, topic}
+    assert {item.commit.object_id for item in all_result.commits} == {
+        root,
+        main,
+        topic,
+        remote_only,
+        custom_only,
+    }
+    assert all_result.discovered_commit_ids == 5
 
 
 def test_unborn_and_detached_head_are_valid_scopes(tmp_path: Path) -> None:
     unborn = GitRepo.create(tmp_path / "unborn")
     empty = GitCollector().collect((unborn.path,), ref_scope=RefScope.HEAD)
+    empty_branches = GitCollector().collect((unborn.path,), ref_scope=RefScope.LOCAL_BRANCHES)
+    empty_all_refs = GitCollector().collect((unborn.path,), ref_scope=RefScope.ALL_REFS)
     assert not empty.diagnostics
     assert empty.successful_repositories == 1
     assert not empty.commits
+    assert not empty_branches.diagnostics
+    assert empty_branches.successful_repositories == 1
+    assert not empty_branches.commits
+    assert not empty_all_refs.diagnostics
+    assert empty_all_refs.successful_repositories == 1
+    assert not empty_all_refs.commits
 
     repo = GitRepo.create(tmp_path / "detached")
     commit_id = repo.commit(
@@ -397,8 +431,13 @@ def test_unborn_and_detached_head_are_valid_scopes(tmp_path: Path) -> None:
         committer_date="1700000000 +0000",
     )
     repo.detach(commit_id)
+    repo.run("update-ref", "-d", "refs/heads/main")
     detached = GitCollector().collect((repo.path,), ref_scope=RefScope.HEAD)
+    detached_branches = GitCollector().collect((repo.path,), ref_scope=RefScope.LOCAL_BRANCHES)
+    detached_all_refs = GitCollector().collect((repo.path,), ref_scope=RefScope.ALL_REFS)
     assert [item.commit.object_id for item in detached.commits] == [commit_id]
+    assert [item.commit.object_id for item in detached_branches.commits] == [commit_id]
+    assert [item.commit.object_id for item in detached_all_refs.commits] == [commit_id]
 
 
 def test_collector_returns_actionable_structured_errors_and_continues(tmp_path: Path) -> None:

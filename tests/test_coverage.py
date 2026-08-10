@@ -88,7 +88,7 @@ def test_every_timestamp_disposition_has_a_typed_counter() -> None:
         )
     builder.selection_outcome(AUTHOR_KEY, SelectionDisposition.INCLUDED, 3)
     builder.selection_outcome(AUTHOR_KEY, SelectionDisposition.OUTSIDE_DATE)
-    builder.selection_outcome(AUTHOR_KEY, SelectionDisposition.AUTHOR_FILTERED)
+    builder.selection_outcome(AUTHOR_KEY, SelectionDisposition.IDENTITY_FILTERED)
     builder.plotting_outcome(AUTHOR_KEY, PlottingDisposition.MARKER, 2)
     builder.plotting_outcome(AUTHOR_KEY, PlottingDisposition.COALESCED_INTO_MARKER)
     coverage = builder.build().timestamps[0]
@@ -100,7 +100,7 @@ def test_every_timestamp_disposition_has_a_typed_counter() -> None:
     )
     assert coverage.selection_count(SelectionDisposition.INCLUDED) == 3
     assert coverage.selection_count(SelectionDisposition.OUTSIDE_DATE) == 1
-    assert coverage.selection_count(SelectionDisposition.AUTHOR_FILTERED) == 1
+    assert coverage.selection_count(SelectionDisposition.IDENTITY_FILTERED) == 1
     assert coverage.plotting_count(PlottingDisposition.MARKER) == 2
 
 

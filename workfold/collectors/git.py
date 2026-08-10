@@ -551,19 +551,26 @@ def enumerate_commit_ids(
 ) -> tuple[tuple[str, ...], int]:
     """Enumerate reachable commits without applying timestamp traversal filters."""
 
-    if ref_scope is RefScope.HEAD:
+    if ref_scope is RefScope.ALL_REFS:
+        # `--all` includes HEAD and every locally present refs/* namespace.  It
+        # performs no remote operation and deliberately has no date options.
+        output = runner.run(("rev-list", "--all"), cwd=repository.root).stdout
+    else:
         head = runner.run(
             ("rev-parse", "--verify", "--quiet", "HEAD^{commit}"),
             cwd=repository.root,
             allowed_returncodes=(0, 1),
         )
-        if head.returncode == 1:
-            return (), 0
-        output = runner.run(("rev-list", "HEAD"), cwd=repository.root).stdout
-    else:
-        # `--all` includes HEAD and every locally present refs/* namespace.  It
-        # performs no remote operation and deliberately has no date options.
-        output = runner.run(("rev-list", "--all"), cwd=repository.root).stdout
+        if ref_scope is RefScope.HEAD:
+            if head.returncode == 1:
+                return (), 0
+            output = runner.run(("rev-list", "HEAD"), cwd=repository.root).stdout
+        else:
+            # Local branch refs capture work across branch switches without
+            # fetched remote-tracking, tag, stash, or custom-ref-only history.
+            # Include HEAD when it resolves so detached work is never hidden.
+            revisions = ("rev-list", "--branches", "HEAD") if head.returncode == 0 else ("rev-list", "--branches")
+            output = runner.run(revisions, cwd=repository.root).stdout
     return parse_commit_ids(output, repository=repository)
 
 
@@ -628,7 +635,7 @@ class GitCollector:
     def __init__(self, runner: GitRunner | None = None) -> None:
         self._runner = runner or GitRunner()
 
-    def collect(self, paths: Sequence[Path], *, ref_scope: RefScope = RefScope.ALL) -> GitCollectionResult:
+    def collect(self, paths: Sequence[Path], *, ref_scope: RefScope = RefScope.ALL_REFS) -> GitCollectionResult:
         """Collect whole repositories, continuing across independent target failures."""
 
         resolution = GitRepositoryResolver(self._runner).resolve(paths)

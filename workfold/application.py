@@ -30,6 +30,7 @@ from workfold.config import (
     FilesystemTime,
     GitDateMode,
     RawOptions,
+    RefScope,
     UsageError,
 )
 from workfold.coverage import (
@@ -128,7 +129,7 @@ def run(
     selected_observations, selection = _select_observations(
         collection.observations,
         selected_range=selected_range,
-        author_filters=options.authors,
+        identity_filters=options.git_identities,
     )
     markers = coalesce_observations(selected_observations)
     plotting = _plotting_outcomes(markers)
@@ -337,31 +338,28 @@ def _select_observations(
     observations: Sequence[TimestampObservation],
     *,
     selected_range: InstantRangeUnion,
-    author_filters: tuple[str, ...],
+    identity_filters: tuple[str, ...],
 ) -> tuple[tuple[TimestampObservation, ...], dict[str, SelectionDisposition]]:
     if len({item.observation_id for item in observations}) != len(observations):
         raise RuntimeError("collectors emitted duplicate observation identities")
     selected: list[TimestampObservation] = []
     dispositions: dict[str, SelectionDisposition] = {}
-    filters = tuple(value.casefold() for value in author_filters)
+    filters = tuple(value.casefold() for value in identity_filters)
     for observation in observations:
-        is_commit_derived = observation.origin.record_kind in {
-            RecordKind.COMMIT,
-            RecordKind.GIT_FILE_CHANGE,
-        }
         if not selected_range.contains(observation.instant_utc_ns):
             dispositions[observation.observation_id] = SelectionDisposition.OUTSIDE_DATE
-        elif filters and is_commit_derived and not _matches_author(observation, filters):
-            dispositions[observation.observation_id] = SelectionDisposition.AUTHOR_FILTERED
+        elif filters and observation.kind.source is Source.GIT and not _matches_git_identity(observation, filters):
+            dispositions[observation.observation_id] = SelectionDisposition.IDENTITY_FILTERED
         else:
             dispositions[observation.observation_id] = SelectionDisposition.INCLUDED
             selected.append(observation)
     return tuple(selected), dispositions
 
 
-def _matches_author(observation: TimestampObservation, filters: tuple[str, ...]) -> bool:
-    origin = observation.origin
-    haystacks = tuple(value.casefold() for value in (origin.author_name, origin.author_email) if value is not None)
+def _matches_git_identity(observation: TimestampObservation, filters: tuple[str, ...]) -> bool:
+    haystacks = tuple(
+        value.casefold() for value in (observation.actor_name, observation.actor_email) if value is not None
+    )
     return any(needle in haystack for needle in filters for haystack in haystacks)
 
 
@@ -624,7 +622,11 @@ def _source_label(options: RawOptions) -> str:
             GitDateMode.COMMITTER: "committer dates",
             GitDateMode.BOTH: "author + committer dates",
         }[options.git_date]
-        reachability = "HEAD" if options.ref_scope.value == "head" else "all-local-refs"
+        reachability = {
+            RefScope.HEAD: "HEAD",
+            RefScope.LOCAL_BRANCHES: "local branches + detached HEAD",
+            RefScope.ALL_REFS: "all locally stored refs",
+        }[options.ref_scope]
         suffix = f", {roles}, commits from {reachability}" if options.git_records.includes_commits else ""
         parts.append(f"Git {' + '.join(records)}{suffix}")
     if options.source.includes_filesystem:
@@ -684,12 +686,13 @@ def _enabled_record_kinds(options: RawOptions) -> tuple[RecordKind, ...]:
 
 
 def _identity_label(options: RawOptions) -> str | None:
-    if not (options.source.includes_git and options.git_records.includes_commits):
+    if not options.source.includes_git:
         return None
-    if not options.authors:
-        return "all commit authors"
-    filters = " OR ".join(options.authors)
-    return f"commit-derived only: {filters}; tags, reflogs, and filesystem unaffected"
+    if not options.git_identities:
+        return "all recorded identities"
+    filters = " OR ".join(options.git_identities)
+    suffix = "; filesystem unaffected" if options.source.includes_filesystem else ""
+    return f"{filters}{suffix}"
 
 
 def _ignore_label(options: RawOptions, collection: _Collection) -> str | None:
@@ -728,8 +731,8 @@ def _coverage_status_label(
     else:
         label = COMPLETE_COVERAGE_STATUS
     qualifiers: list[str] = []
-    if options.authors:
-        qualifiers.append("commit-derived records explicitly filtered by author")
+    if options.git_identities:
+        qualifiers.append("Git timestamps explicitly filtered by identity")
     if options.exclusions:
         qualifiers.append("explicit exclusions active")
     unsupported_capabilities: dict[str, str | None] = {}
@@ -799,7 +802,7 @@ def _coverage_details(
             unsupported=item.unsupported,
             errors=item.extraction_errors,
             outside_date=item.outside_date,
-            author_filtered=item.author_filtered,
+            identity_filtered=item.identity_filtered,
             coalesced=item.coalesced_into_markers,
         )
     for kind in sorted(timestamp_counts, key=lambda item: item.value):
@@ -815,7 +818,7 @@ def _coverage_details(
                 "unsupported",
                 "errors",
                 "outside_date",
-                "author_filtered",
+                "identity_filtered",
                 "coalesced",
             )
             if counts[name]
@@ -879,7 +882,7 @@ def _coverage_details(
             f"requested={item.requested:,}, captured={item.captured:,}, "
             f"unavailable={item.unavailable:,}, unsupported={item.unsupported:,}, "
             f"errors={item.extraction_errors:,}, included={item.included:,}, "
-            f"outside date={item.outside_date:,}, author filtered={item.author_filtered:,}, "
+            f"outside date={item.outside_date:,}, identity filtered={item.identity_filtered:,}, "
             f"markers={item.markers:,}, coalesced={item.coalesced_into_markers:,}"
         )
         details.append(

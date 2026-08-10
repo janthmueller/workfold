@@ -24,17 +24,17 @@ The default view selects:
 
 - the current ISO week in the resolved local timezone;
 - the `standard` evidence profile;
-- Git commit records reachable through all local refs;
-- author timestamps from every author;
+- Git commit records reachable through local branches plus a detached `HEAD`;
+- author timestamps from every recorded Git identity;
 - `Mo-Fr 08:00-16:30` as the working schedule;
 - a `1h` sparse cluster window.
 
 `-m/--mode` selects `git`, `fs`, or `all` and defaults to `git`. It is
 independent from `-t/--time`: changing one never changes the other.
 
-Git collection invokes the local `git` executable. It does not fetch, contact a
-remote, or limit history to the currently checked-out branch unless you request
-`--git-commits-from HEAD`.
+Git collection invokes the local `git` executable and never fetches or contacts
+a remote. Use `--git-commits-from head` to limit history to the currently
+checked-out branch or detached `HEAD`.
 
 ## Select dates
 
@@ -81,17 +81,17 @@ the MVP; express the two sides as clauses on adjacent days.
 
 ## Read and tune the sparse chart
 
-The default chart renders only occupied bands in implicit
-`00:00`-toward-`24:00` order; it does not print empty boundary rows. Workfold
-sorts visible events by localized wall-clock time, uses the earliest unassigned
-event as an anchor, assigns every weekday's events in the half-open interval
-`[anchor, anchor + cluster-window)`, and repeats. The anchor never moves when a
-later event joins the band, and an event exactly on the end starts or joins the
-next band. All seven weekday columns share these bands, so rows remain
-comparable. A row label shows its first through last observed event, not the
-entire assignment window. Its endpoint labels always use `HH:MM`; seconds are
-deliberately omitted even for second-level windows or events. Exact seconds and
-nanoseconds remain in normalized provenance and exact outside-event rows.
+The default chart uses anchored time clustering and renders only occupied bands
+in implicit `00:00`-toward-`24:00` order; it does not print empty boundary rows.
+Workfold sorts visible events by localized wall-clock time, uses the earliest
+unassigned event as an anchor, assigns every weekday's events in the half-open
+interval `[anchor, anchor + cluster-window)`, and repeats. The anchor never
+moves when a later event joins the band, and an event exactly on the end starts
+or joins the next band. All seven weekday columns share these bands, so rows
+remain comparable. A row label shows its first through last observed event, not
+the entire assignment window. Its endpoint labels always use `HH:MM`; seconds
+are deliberately omitted even for second-level windows or events. Exact seconds
+and nanoseconds remain in normalized provenance and exact outside-event rows.
 
 `--cluster-window` accepts a positive duration below 24 hours. Components use
 `h`, `m`, and `s` in that order without repeating a unit. Whitespace is optional
@@ -129,11 +129,11 @@ inside/outside split, and Calendar is its independent weekday/weekend split.
 Both split rows show counts and percentages of Events; a weekend event can also
 be outside the schedule. Use `--verbose` for scope, period, the complete successful
 coverage wording, source/record breakdowns, cluster/compression policy, exact
-collector selection, author scope, collection extents, ignore/exclusion policy,
-and the detailed coverage ledger. Use `--coverage` for the ledger without those
-verbose details. Partial collection, explicit narrowing, unsupported
-capabilities, and nonzero cropping remain visible by default as exception
-notices.
+collector selection, Git identity scope, collection extents, ignore/exclusion
+policy, and the detailed coverage ledger. Use `--coverage` for the ledger
+without those verbose details. Partial collection, explicit narrowing,
+unsupported capabilities, and nonzero cropping remain visible by default as
+exception notices.
 
 `--display-hours` crops chart rows only. It does not change classification:
 
@@ -161,15 +161,46 @@ workfold . --git-commit-times author,committer
 workfold . --git-records tag
 workfold . --git-records reflog
 workfold . --git-records commit,tag,reflog
-workfold . --git-commits-from HEAD
-workfold . --git-commits-from all-local-refs
-workfold . --author 'Ada' --author 'ada@example.com'
+workfold . --git-commits-from head
+workfold . --git-commits-from local-branches
+workfold . --git-commits-from all-refs
+workfold . --git-identity 'Ada' --git-identity 'ada@example.com'
 ```
 
-Repeated author filters match names or email addresses with OR semantics. With
-no filter, all authors are included. Author and committer observations at an
-identical instant on the same commit may share one plotted marker, while both
-roles remain present in provenance and coverage.
+Commit reachability has three explicit scopes:
+
+- `head` follows the ancestry of the currently checked-out branch or detached
+  `HEAD`;
+- `local-branches` follows every `refs/heads/*` branch and also includes a
+  detached `HEAD`; this is the standard default;
+- `all-refs` follows every locally stored ref, including remote-tracking refs,
+  tags, stash, and custom refs; it never fetches and is the portable/full
+  default.
+
+A commit is captured once by object ID even when several selected refs reach
+it. Date selection happens after reachability discovery. Consequently, a
+reachable commit can contribute an author event, a committer event, both, or
+neither in the selected period. Commits known only to an unfetched remote or no
+longer reachable from the selected refs are outside the commit scope. A full
+profile can still expose a local reflog timestamp referring to an otherwise
+unreachable commit, but that reflog observation is not converted into a commit
+observation.
+
+`--git-identity` is an inclusive filter over the identity attached to each Git
+timestamp: an author observation uses its author, a committer observation its
+committer, an annotated-tag observation its tagger, and a reflog observation its
+reflog actor. File-change observations inherit the corresponding author or
+committer identity from their commit. Matching is a case-insensitive literal
+substring of the recorded name or email. Repeated values use OR semantics; with
+no flag, all recorded Git identities are included. Git identities are
+self-declared metadata, not verified people or accounts. In combined mode the
+filter does not affect filesystem observations.
+
+Filtering happens before plotting. Therefore, when identical author and
+committer instants could share one marker, only the matching role remains if
+their identities differ; both roles remain when both match. Lightweight tags
+have no independent tagger timestamp or tagger identity and therefore produce
+no tag observation, as reported by coverage.
 
 Annotated tags carry tagger timestamps; lightweight tags have no independent
 tagger time. Reflogs are local and may be disabled or expired. Git stores tree
@@ -224,26 +255,71 @@ workfold . -t 2026-W31 -m fs -p full
 ```
 
 `-p/--profile` defaults to `standard`, which uses the ordinary granular
-evidence selectors and their defaults. The `portable` profile is Git-only and
-selects timestamps stored in Git objects: commit
-author and committer times from all local refs plus annotated-tag tagger times.
-Lightweight tags have no tagger time and remain explicitly unavailable. It
-excludes derived file-change events, local reflogs, and filesystem metadata.
-Portable evidence does not describe remote publication state: Workfold neither
-contacts a remote nor infers when an object was pushed.
+evidence selectors and their defaults. Each profile answers a different
+question about the available evidence.
 
-The `full` profile selects every supported evidence kind only within the
-existing time and mode. It never implies `-t all` or `-m all`. In Git mode it
-enables commit, file-change, tag, and reflog records, both commit times, and all
-local refs. In filesystem mode it enables all timestamp/entry kinds and ignored
-entries. It changes collection scope only and does not enable detailed ledger
-output.
+### Standard: What does the ordinary activity pattern look like?
 
-Portable and full are locked profiles and reject granular selectors that would
-redefine them. `--author` and, when filesystem mode is enabled, repeatable
-`--exclude` may narrow a locked profile. The default coverage exception reports
-active author filtering and/or explicit exclusions, while verbose Scope shows
-mode plus profile and the remaining verbose details list the filter values.
+The standard profile is the customizable everyday view:
+
+- Git mode uses commit records and their author dates from local branches plus
+  a detached `HEAD`.
+- Filesystem mode uses birth and modification dates for regular files while
+  respecting Git ignore rules.
+- Combined mode applies both sets of defaults.
+
+Granular Git and filesystem options can replace these defaults. Standard keeps
+the initial chart focused, but it is not a completeness claim.
+
+### Portable: What dated evidence is stored inside Git objects?
+
+A commit stores two independently meaningful clocks:
+
+- the **author date**, describing when the change was originally authored;
+- the **committer date**, describing when that particular commit object was
+  created or rewritten.
+
+An annotated tag is a separate Git object with a **tagger date**, describing
+when that tag object was created. For example:
+
+```text
+Monday 10:00    Alice originally authors a commit    → author date
+Thursday 15:00  Bob rebases or cherry-picks it       → committer date
+Friday 09:00    Bob creates annotated tag v1.0       → tagger date
+```
+
+Standard shows the Monday author event. Portable retains all three object-backed
+observations. If one commit's author and committer timestamps are identical,
+Workfold may plot one marker carrying both roles; provenance and coverage still
+retain both timestamp roles.
+
+Portable is a locked, Git-only profile. It reads commit author and committer
+dates from all locally stored refs plus annotated-tag tagger dates. Lightweight
+tags have no independent tag object or tagger date and remain explicitly
+unavailable. Derived per-file changes are excluded because Git does not store a
+separate timestamp for each changed file.
+
+These timestamps travel when their Git objects are transferred, but they do
+not say when an object was pushed or published. Portable therefore excludes
+local reflogs and filesystem metadata, and Workfold never invents push,
+branch-creation, or lightweight-tag creation times.
+
+### Full: What dated evidence can this local machine still discover?
+
+Full selects every supported evidence kind available to the selected mode. In
+Git mode it enables commit, file-change, tag, and reflog records, both commit
+times, and all locally stored refs. In filesystem mode it enables every
+supported timestamp and entry kind and includes ignored entries.
+
+Full includes machine-local and mutable evidence, so it is broader than
+portable rather than more transferable. It changes collection scope only and
+does not enable the detailed coverage ledger automatically.
+
+Profiles never change the selected time or mode: `full` does not imply
+`-t all` or `-m all`. Portable and full reject granular selectors that would
+redefine them. `--git-identity` and, when filesystem mode is enabled, repeatable
+`--exclude` may still narrow them. Such narrowing remains visible in coverage
+status and verbose output.
 
 ## Control terminal detail
 
@@ -268,7 +344,7 @@ or color-only distinction is required.
 `--verbose` appends operational details after the compact summary: cluster and
 compression policy, Scope (mode plus profile), Period (range plus timezone), the
 full Coverage status, source/record breakdowns, exact Git/filesystem collector
-selection, author scope, resolved repositories/roots, and filesystem
+selection, Git identity scope, resolved repositories/roots, and filesystem
 ignore/exclusion policy. It does not change the matrix, compact totals, or
 coverage result, and it also appends the detailed accounting ledger.
 `--coverage` prints that same ledger without the verbose context/operational

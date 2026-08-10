@@ -40,6 +40,47 @@ def _assert_lean_success_output(rendered: str) -> None:
     assert "complete for all discoverable timestamps" not in rendered
 
 
+def test_standard_uses_local_branches_while_all_refs_includes_remote_tracking(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    instant = datetime(2026, 8, 3, 10, 5, tzinfo=UTC)
+    root = repo.commit(
+        "root.txt",
+        "root",
+        "root",
+        author_date=_git_date(instant),
+        committer_date=_git_date(instant),
+    )
+    repo.commit(
+        "topic.txt",
+        "topic",
+        "local topic",
+        author_date=_git_date(instant),
+        committer_date=_git_date(instant),
+        parent=root,
+        update_ref="refs/heads/topic",
+    )
+    repo.commit(
+        "remote.txt",
+        "remote",
+        "remote tracking only",
+        author_date=_git_date(instant),
+        committer_date=_git_date(instant),
+        parent=root,
+        update_ref="refs/remotes/origin/remote-only",
+    )
+
+    standard_output = StringIO()
+    standard = parse_options([str(repo.path), "--time", "all", "--no-color"])
+    assert run(standard, stdout=standard_output, stderr=StringIO(), terminal_width=80) == 0
+
+    all_refs_output = StringIO()
+    all_refs = parse_options([str(repo.path), "--time", "all", "--git-commits-from", "all-refs", "--no-color"])
+    assert run(all_refs, stdout=all_refs_output, stderr=StringIO(), terminal_width=80) == 0
+
+    _assert_summary_count(standard_output.getvalue(), "Events", 2)
+    _assert_summary_count(all_refs_output.getvalue(), "Events", 3)
+
+
 def test_filesystem_mode_flows_through_the_shared_pipeline(tmp_path: Path) -> None:
     root = tmp_path / "root"
     root.mkdir()
@@ -224,7 +265,7 @@ def test_full_all_mode_collects_all_record_families_and_reports_capabilities(
             "--profile",
             "full",
             "--coverage",
-            "--author",
+            "--git-identity",
             "Fixture",
             "--exclude",
             "*.tmp",
