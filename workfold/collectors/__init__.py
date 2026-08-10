@@ -25,6 +25,7 @@ from workfold.collectors.git import (
 )
 from workfold.collectors.git_changes import GitFileChangeRepositoryAccounting
 from workfold.collectors.git_tags import GitTagRepositoryAccounting
+from workfold.collectors.ignores import GitFilesystemInventory
 
 __all__ = [
     "CollectedGitCommit",
@@ -41,6 +42,7 @@ __all__ = [
     "GitCollector",
     "GitCommandError",
     "GitFileChangeRepositoryAccounting",
+    "GitFilesystemInventory",
     "GitRepository",
     "GitRepositoryResolutionResult",
     "GitRepositoryResolver",

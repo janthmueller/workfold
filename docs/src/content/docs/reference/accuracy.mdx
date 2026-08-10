@@ -84,6 +84,15 @@ in provenance and exact outside-event listings.
 ### Filesystem
 
 - A scan sees only the current metadata snapshot, not earlier values.
+- Inside a Git worktree, the normal respect-ignore scan uses local Git plumbing
+  only to inventory tracked and untracked path candidates. A successful current
+  no-follow filesystem stat—not the Git index—determines whether an included
+  path exists, its entry type, and all of its timestamps. Never-staged,
+  non-ignored files are included; index-only paths absent from the worktree are
+  not filesystem events.
+- Ignored leaf candidates are counted without reading their metadata. The full
+  profile and `--include-ignored` instead traverse and stat those entries because
+  their timestamps are explicitly in scope.
 - Copying, checkout, archive extraction, formatting, and builds may alter times.
 - Creation/birth time is not exposed by every operating system or filesystem.
   On Linux, Workfold requests `STATX_BTIME` through libc `statx`; the individual

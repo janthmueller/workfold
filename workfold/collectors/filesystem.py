@@ -1,8 +1,10 @@
 """Current-snapshot filesystem timestamp collection.
 
-Traversal is lexical and never follows symbolic-link targets. Every entry is
-assigned exactly one record disposition and receives one extraction disposition
-for every requested timestamp kind when eligible. Portable timestamps share the
+Git-aware scans use Git only to inventory paths under its authoritative ignore
+semantics; a current no-follow stat remains the entry/type/timestamp boundary.
+Native traversal is lexical and never follows symbolic-link targets. Every
+discovered entry receives one record disposition and every eligible timestamp
+slot receives one extraction disposition. Portable timestamps share the
 discovery stat snapshot; Linux birth time adds one identity-checked statx read.
 """
 
@@ -20,12 +22,14 @@ from workfold.collectors.base import CollectorDiagnostic, CollectorResult, Diagn
 from workfold.collectors.filesystem_times import FilesystemTimestampAdapter
 from workfold.collectors.ignores import (
     ExplicitExcluder,
+    GitFilesystemInventory,
     GitIgnoreProbe,
     GitIgnoreRepository,
     GitIgnoreService,
     IgnoreCandidate,
     has_git_admin_ancestor,
     has_repository_marker_ancestor,
+    is_git_admin_name,
     is_git_admin_path,
     is_nested_repository_boundary,
     is_within_git_admin,
@@ -244,13 +248,17 @@ class _AccountingBuilder:
             self._requested.setdefault(key, 0)
             self._observation_ids.setdefault(key, [])
 
-    def discover(self, root: Path) -> None:
+    def discover(self, root: Path, count: int = 1) -> None:
+        if count < 0:
+            raise ValueError("filesystem discovery count must be non-negative")
         key = _record_key(root)
-        self._discovered[key] = self._discovered.get(key, 0) + 1
+        self._discovered[key] = self._discovered.get(key, 0) + count
 
-    def record(self, root: Path, disposition: RecordDisposition) -> None:
+    def record(self, root: Path, disposition: RecordDisposition, count: int = 1) -> None:
+        if count < 0:
+            raise ValueError("filesystem record count must be non-negative")
         key = (_record_key(root), disposition)
-        self._records[key] = self._records.get(key, 0) + 1
+        self._records[key] = self._records.get(key, 0) + count
 
     def request(self, root: Path, kind: TimestampKind) -> None:
         key = _timestamp_key(root, kind)
@@ -537,6 +545,31 @@ class FilesystemCollector:
             capabilities.append(_ignore_capability(root, respect_gitignore, probe, error=None))
             return
 
+        inventory: GitFilesystemInventory | None = None
+        if respect_gitignore and probe.repository is not None and root_type is EntryType.DIRECTORY:
+            candidate_inventory = self._ignore_service.inventory(probe.repository, root)
+            if candidate_inventory.error is None:
+                if not include_directories:
+                    capabilities.append(
+                        _ignore_capability(root, respect_gitignore, probe, error=candidate_inventory.warning)
+                    )
+                    self._collect_git_inventory(
+                        root_snapshot,
+                        inventory=candidate_inventory,
+                        repository=probe.repository,
+                        kinds=kinds,
+                        include_regular_files=include_regular_files,
+                        include_symlinks=include_symlinks,
+                        excluder=excluder,
+                        accounting=accounting,
+                        entries=entries,
+                        observations=observations,
+                        diagnostics=diagnostics,
+                    )
+                    return
+                inventory = candidate_inventory
+
+        inventory_ignored_seen: set[str] = set()
         pending = self._discover_entries(
             root_snapshot,
             excluder=excluder,
@@ -544,13 +577,26 @@ class FilesystemCollector:
             entries=entries,
             diagnostics=diagnostics,
             repository=probe.repository,
+            inventory=inventory,
+            inventory_ignored_seen=inventory_ignored_seen,
         )
         ignored: frozenset[Path] = frozenset()
         ignore_error = None
-        if respect_gitignore and probe.repository is not None:
+        if inventory is not None:
+            _account_inventory_ignored(
+                root,
+                inventory,
+                seen=inventory_ignored_seen,
+                excluder=excluder,
+                accounting=accounting,
+            )
+            _account_inventory_warning(root, inventory, accounting=accounting, diagnostics=diagnostics)
+            ignore_error = inventory.warning
+        elif respect_gitignore and probe.repository is not None:
             matches = self._ignore_service.ignored(
                 probe.repository,
                 tuple(IgnoreCandidate(item.path, item.is_directory) for item in pending),
+                lexical_root=root,
             )
             ignored = matches.ignored_paths
             ignore_error = matches.error
@@ -589,6 +635,104 @@ class FilesystemCollector:
             if disposition is RecordDisposition.ELIGIBLE:
                 self._extract_entry(item, kinds, accounting, observations, diagnostics)
 
+    def _collect_git_inventory(
+        self,
+        root_snapshot: _RootSnapshot,
+        *,
+        inventory: GitFilesystemInventory,
+        repository: GitIgnoreRepository,
+        kinds: tuple[TimestampKind, ...],
+        include_regular_files: bool,
+        include_symlinks: bool,
+        excluder: ExplicitExcluder,
+        accounting: _AccountingBuilder,
+        entries: list[CollectedFilesystemEntry],
+        observations: list[TimestampObservation],
+        diagnostics: list[CollectorDiagnostic],
+    ) -> None:
+        """Validate Git path candidates against the current filesystem snapshot."""
+
+        root = root_snapshot.path
+        root_type = _entry_type(root_snapshot.snapshot.st_mode)
+        accounting.discover(root)
+        root_origin = _origin(root, root, root_type)
+        accounting.record(root, RecordDisposition.EXCLUDED_ENTRY_TYPE)
+        entries.append(CollectedFilesystemEntry(root_origin, RecordDisposition.EXCLUDED_ENTRY_TYPE))
+
+        _account_inventory_warning(root, inventory, accounting=accounting, diagnostics=diagnostics)
+
+        try:
+            selected_is_worktree_root = root.resolve(strict=True) == repository.root.resolve(strict=True)
+        except (OSError, RuntimeError):
+            selected_is_worktree_root = False
+        if selected_is_worktree_root:
+            admin_path = root / ".git"
+            try:
+                admin_snapshot = self._lstat(admin_path)
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                accounting.discover(root)
+                accounting.record(root, RecordDisposition.RECORD_ERROR)
+                diagnostics.append(_stat_diagnostic(root, admin_path, error, is_root=False))
+            else:
+                accounting.discover(root)
+                admin_origin = _origin(root, admin_path, _entry_type(admin_snapshot.st_mode))
+                accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
+                entries.append(CollectedFilesystemEntry(admin_origin, RecordDisposition.SEMANTIC_GIT_ADMIN))
+
+        for relative_path in inventory.included_relative_paths:
+            path = root if relative_path == "." else root / relative_path
+            try:
+                snapshot = self._lstat(path)
+            except (FileNotFoundError, NotADirectoryError):
+                # The Git index can retain a path that is absent from the
+                # current worktree. It is a candidate, not a filesystem record.
+                continue
+            except OSError as error:
+                accounting.discover(root)
+                accounting.record(root, RecordDisposition.RECORD_ERROR)
+                diagnostics.append(_stat_diagnostic(root, path, error, is_root=False))
+                continue
+
+            accounting.discover(root)
+            entry_type = _entry_type(snapshot.st_mode)
+            origin = _origin(root, path, entry_type)
+            relative = PurePosixPath(relative_path)
+            if _is_semantic_git_admin(path, repository) or (
+                entry_type is EntryType.DIRECTORY and is_nested_repository_boundary(path, selected_root=root)
+            ):
+                disposition = RecordDisposition.SEMANTIC_GIT_ADMIN
+            elif excluder.matches(relative, is_directory=entry_type is EntryType.DIRECTORY):
+                disposition = RecordDisposition.EXPLICITLY_EXCLUDED
+            elif _entry_is_in_scope(
+                entry_type,
+                include_regular_files=include_regular_files,
+                include_directories=False,
+                include_symlinks=include_symlinks,
+            ):
+                disposition = RecordDisposition.ELIGIBLE
+            else:
+                disposition = RecordDisposition.EXCLUDED_ENTRY_TYPE
+            accounting.record(root, disposition)
+            entries.append(CollectedFilesystemEntry(origin, disposition))
+            if disposition is RecordDisposition.ELIGIBLE:
+                self._extract_entry(
+                    _PendingEntry(root, path, snapshot, origin, entry_type),
+                    kinds,
+                    accounting,
+                    observations,
+                    diagnostics,
+                )
+
+        _account_inventory_ignored(
+            root,
+            inventory,
+            seen=set(),
+            excluder=excluder,
+            accounting=accounting,
+        )
+
     def _discover_entries(
         self,
         root_snapshot: _RootSnapshot,
@@ -598,6 +742,8 @@ class FilesystemCollector:
         entries: list[CollectedFilesystemEntry],
         diagnostics: list[CollectorDiagnostic],
         repository: GitIgnoreRepository | None,
+        inventory: GitFilesystemInventory | None,
+        inventory_ignored_seen: set[str],
     ) -> list[_PendingEntry]:
         root = root_snapshot.path
         pending: list[_PendingEntry] = []
@@ -620,6 +766,11 @@ class FilesystemCollector:
         if root_type is not EntryType.DIRECTORY:
             return pending
 
+        inventory_ignored_paths: set[str] = set(inventory.ignored_relative_paths) if inventory is not None else set()
+        inventory_directory_paths: frozenset[str] = (
+            inventory.ignored_directory_paths if inventory is not None else frozenset()
+        )
+        admin_relative_parts = _repository_admin_relative_parts(root, repository)
         directories = [root]
         while directories:
             directory = directories.pop()
@@ -651,11 +802,20 @@ class FilesystemCollector:
                     raise RuntimeError("successful filesystem stat omitted its snapshot")
                 entry_type = _entry_type(snapshot.st_mode)
                 origin = _origin(root, path, entry_type)
-                if _is_semantic_git_admin(path, repository):
+                relative = PurePosixPath(path.relative_to(root).as_posix())
+                relative_text = relative.as_posix()
+                inventory_ignored = relative_text in inventory_ignored_paths
+                if inventory_ignored:
+                    inventory_ignored_seen.add(relative_text)
+                if _is_semantic_git_admin(
+                    path,
+                    repository,
+                    relative_parts=relative.parts,
+                    admin_relative_parts=admin_relative_parts,
+                ):
                     accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
                     entries.append(CollectedFilesystemEntry(origin, RecordDisposition.SEMANTIC_GIT_ADMIN))
                     continue
-                relative = PurePosixPath(path.relative_to(root).as_posix())
                 if excluder.matches(relative, is_directory=entry_type is EntryType.DIRECTORY):
                     accounting.record(root, RecordDisposition.EXPLICITLY_EXCLUDED)
                     entries.append(CollectedFilesystemEntry(origin, RecordDisposition.EXPLICITLY_EXCLUDED))
@@ -665,6 +825,12 @@ class FilesystemCollector:
                 if entry_type is EntryType.DIRECTORY and is_nested_repository_boundary(path, selected_root=root):
                     accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
                     entries.append(CollectedFilesystemEntry(origin, RecordDisposition.SEMANTIC_GIT_ADMIN))
+                    continue
+                if inventory_ignored or (
+                    entry_type is EntryType.DIRECTORY and relative_text in inventory_directory_paths
+                ):
+                    accounting.record(root, RecordDisposition.IGNORED)
+                    entries.append(CollectedFilesystemEntry(origin, RecordDisposition.IGNORED))
                     continue
                 pending.append(_PendingEntry(root, path, snapshot, origin, entry_type))
                 if entry_type is EntryType.DIRECTORY:
@@ -713,6 +879,49 @@ class FilesystemCollector:
                     )
 
 
+def _account_inventory_warning(
+    root: Path,
+    inventory: GitFilesystemInventory,
+    *,
+    accounting: _AccountingBuilder,
+    diagnostics: list[CollectorDiagnostic],
+) -> None:
+    if inventory.warning is None:
+        return
+    accounting.discover(root)
+    accounting.record(root, RecordDisposition.RECORD_ERROR)
+    diagnostics.append(_ignore_diagnostic(root, inventory.warning, warning=False))
+
+
+def _account_inventory_ignored(
+    root: Path,
+    inventory: GitFilesystemInventory,
+    *,
+    seen: set[str],
+    excluder: ExplicitExcluder,
+    accounting: _AccountingBuilder,
+) -> None:
+    unseen = (
+        inventory.ignored_relative_paths
+        if not seen
+        else tuple(path for path in inventory.ignored_relative_paths if path not in seen)
+    )
+    ignored_count = len(unseen)
+    accounting.discover(root, ignored_count)
+    if not excluder.patterns:
+        accounting.record(root, RecordDisposition.IGNORED, ignored_count)
+        return
+    explicitly_excluded = sum(
+        excluder.matches(
+            relative_path,
+            is_directory=relative_path in inventory.ignored_directory_paths,
+        )
+        for relative_path in unseen
+    )
+    accounting.record(root, RecordDisposition.EXPLICITLY_EXCLUDED, explicitly_excluded)
+    accounting.record(root, RecordDisposition.IGNORED, ignored_count - explicitly_excluded)
+
+
 def _entry_type(mode: int) -> EntryType | None:
     if stat.S_ISREG(mode):
         return EntryType.REGULAR_FILE
@@ -723,8 +932,35 @@ def _entry_type(mode: int) -> EntryType | None:
     return None
 
 
-def _is_semantic_git_admin(path: Path, repository: GitIgnoreRepository | None) -> bool:
+def _is_semantic_git_admin(
+    path: Path,
+    repository: GitIgnoreRepository | None,
+    *,
+    relative_parts: tuple[str, ...] = (),
+    admin_relative_parts: tuple[str, ...] = (),
+) -> bool:
+    # A physical admin extent inside the scan root is mapped once and then
+    # compared lexically. Conventional markers retain the stricter shape check.
+    if admin_relative_parts and relative_parts[: len(admin_relative_parts)] == admin_relative_parts:
+        return True
+    if not is_git_admin_name(path):
+        return False
     return (repository is not None and is_within_git_admin(path, repository)) or is_git_admin_path(path)
+
+
+def _repository_admin_relative_parts(
+    root: Path,
+    repository: GitIgnoreRepository | None,
+) -> tuple[str, ...]:
+    if repository is None or repository.admin_root is None:
+        return ()
+    try:
+        physical_root = root.resolve(strict=True)
+        physical_admin = repository.admin_root.resolve(strict=True)
+        relative = physical_admin.relative_to(physical_root)
+    except (OSError, RuntimeError, ValueError):
+        return ()
+    return PurePosixPath(relative.as_posix()).parts
 
 
 def _entry_is_in_scope(
@@ -808,14 +1044,18 @@ def _traversal_diagnostic(root: Path, path: Path, error: OSError) -> CollectorDi
 
 
 def _ignore_diagnostic(root: Path, error: Exception, *, warning: bool) -> CollectorDiagnostic:
+    code = getattr(error, "code", "git_ignore_unavailable")
+    hint = "Install/repair Git or use --include-ignored to request an unfiltered scan."
+    if code == "git_filesystem_inventory_incomplete":
+        hint = "Check the reported path permissions; the unreadable scope was not treated as complete."
     return CollectorDiagnostic(
-        code=getattr(error, "code", "git_ignore_unavailable"),
+        code=code,
         stage="filesystem_ignore_discovery",
         target=os.fspath(root),
         message=str(error),
         severity=DiagnosticSeverity.WARNING if warning else DiagnosticSeverity.ERROR,
         path=os.fspath(root),
-        hint="Install/repair Git or use --include-ignored to request an unfiltered scan.",
+        hint=hint,
     )
 
 

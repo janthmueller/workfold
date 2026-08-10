@@ -25,7 +25,9 @@ _GIT_SAFETY_OPTIONS: Final[tuple[str, ...]] = (
     "-c",
     "protocol.allow=never",
 )
+_GIT_IGNORE_COMMANDS: Final[frozenset[str]] = frozenset({"check-ignore", "ls-files", "rev-parse"})
 _MAX_GITDIR_POINTER_BYTES: Final[int] = 4096
+_MAX_INVENTORY_STDERR_BYTES: Final[int] = 16_384
 
 
 class ExclusionPatternError(ValueError):
@@ -129,6 +131,45 @@ class GitIgnoreMatches:
     error: GitIgnoreCommandError | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class GitFilesystemInventory:
+    """Git-authoritative path candidates for one current worktree scope.
+
+    Git decides only whether a leaf path is tracked, untracked, or ignored.
+    Callers must still use a no-follow filesystem stat before treating an
+    included candidate as a current filesystem entry.
+    """
+
+    included_relative_paths: tuple[str, ...] = ()
+    ignored_relative_paths: tuple[str, ...] = ()
+    ignored_directory_paths: frozenset[str] = frozenset()
+    warning: GitIgnoreCommandError | None = None
+    error: GitIgnoreCommandError | None = None
+
+    def __post_init__(self) -> None:
+        included = set(self.included_relative_paths)
+        ignored = set(self.ignored_relative_paths)
+        normalized_included = {os.path.normcase(path) for path in included}
+        normalized_ignored = {os.path.normcase(path) for path in ignored}
+        if len(included) != len(self.included_relative_paths) or len(normalized_included) != len(included):
+            raise ValueError("Git filesystem inventory contains duplicate included paths")
+        if len(ignored) != len(self.ignored_relative_paths) or len(normalized_ignored) != len(ignored):
+            raise ValueError("Git filesystem inventory contains duplicate ignored paths")
+        if normalized_included & normalized_ignored:
+            raise ValueError("Git filesystem inventory cannot include and ignore the same path")
+        if included & self.ignored_directory_paths:
+            raise ValueError("Git filesystem inventory cannot include an ignored directory path")
+        normalized_directories = {
+            tuple(os.path.normcase(part) for part in directory.split("/")) for directory in self.ignored_directory_paths
+        }
+        for included_path in included:
+            parts = tuple(os.path.normcase(part) for part in included_path.split("/"))
+            if any(parts[:size] in normalized_directories for size in range(1, len(parts) + 1)):
+                raise ValueError("Git filesystem inventory cannot place included paths below an ignored directory")
+        if self.warning is not None and self.error is not None:
+            raise ValueError("Git filesystem inventory cannot carry both a warning and a fatal error")
+
+
 ProcessRunner = Callable[..., subprocess.CompletedProcess[bytes]]
 
 
@@ -167,10 +208,10 @@ class GitIgnoreRunner:
     ) -> subprocess.CompletedProcess[bytes]:
         """Run a validated read-only Git ignore command without a shell."""
 
-        if not arguments or arguments[0] not in {"check-ignore", "rev-parse"}:
+        if not arguments or arguments[0] not in _GIT_IGNORE_COMMANDS:
             raise GitIgnoreCommandError(
                 code="unsafe_git_ignore_command",
-                message="only rev-parse and check-ignore are allowed for filesystem ignores",
+                message="only rev-parse, check-ignore, and ls-files are allowed for filesystem ignores",
                 cwd=cwd,
                 command=tuple(arguments),
             )
@@ -341,7 +382,13 @@ class GitIgnoreService:
             "standard repository, nested, info, and global Git excludes are active",
         )
 
-    def ignored(self, repository: GitIgnoreRepository, candidates: Sequence[IgnoreCandidate]) -> GitIgnoreMatches:
+    def ignored(
+        self,
+        repository: GitIgnoreRepository,
+        candidates: Sequence[IgnoreCandidate],
+        *,
+        lexical_root: Path | None = None,
+    ) -> GitIgnoreMatches:
         """Return Git's ignored subset; tracked entries remain unignored."""
 
         encoded_to_paths: dict[bytes, list[Path]] = {}
@@ -356,9 +403,26 @@ class GitIgnoreService:
                 command=("check-ignore", "--stdin", "-z"),
             )
             return GitIgnoreMatches(frozenset(), structured)
+        physical_lexical_root: Path | None = None
+        if lexical_root is not None:
+            try:
+                physical_lexical_root = _physical_path_without_following_final(lexical_root)
+                physical_lexical_root.relative_to(physical_repository_root)
+            except (OSError, RuntimeError, ValueError) as error:
+                structured = GitIgnoreCommandError(
+                    code="git_ignore_path_mapping_error",
+                    message=f"could not map the selected root into the physical Git worktree: {error}",
+                    cwd=repository.root,
+                    command=("check-ignore", "--stdin", "-z"),
+                )
+                return GitIgnoreMatches(frozenset(), structured)
         for candidate in candidates:
             try:
-                physical_path = _physical_path_without_following_final(candidate.path)
+                if lexical_root is None or physical_lexical_root is None:
+                    physical_path = _physical_path_without_following_final(candidate.path)
+                else:
+                    relative_to_root = candidate.path.relative_to(lexical_root)
+                    physical_path = physical_lexical_root / relative_to_root
                 relative = physical_path.relative_to(physical_repository_root)
             except (OSError, RuntimeError, ValueError) as error:
                 mapping_failures.append((candidate.path, str(error)))
@@ -396,6 +460,99 @@ class GitIgnoreService:
             frozenset(path for token in output_tokens for path in encoded_to_paths[token]),
             mapping_error,
         )
+
+    def inventory(self, repository: GitIgnoreRepository, selected_root: Path) -> GitFilesystemInventory:
+        """Return current leaf candidates using standard Git ignore semantics.
+
+        The inventory is an optimization boundary, not filesystem evidence:
+        tracked index paths may be absent from the worktree, so the collector
+        must validate every included path with a current no-follow stat.
+        """
+
+        if repository.is_bare:
+            return GitFilesystemInventory(
+                error=GitIgnoreCommandError(
+                    code="git_filesystem_inventory_unavailable",
+                    message="a bare repository has no filesystem worktree inventory",
+                    cwd=repository.root,
+                    command=("ls-files",),
+                )
+            )
+        try:
+            physical_repository_root = repository.root.resolve(strict=True)
+            physical_selected_root = selected_root.resolve(strict=True)
+            selected_prefix = physical_selected_root.relative_to(physical_repository_root)
+        except (OSError, RuntimeError, ValueError) as error:
+            return GitFilesystemInventory(
+                error=GitIgnoreCommandError(
+                    code="git_filesystem_inventory_path_mapping_error",
+                    message=f"could not map the selected filesystem root into the Git worktree: {error}",
+                    cwd=repository.root,
+                    command=("ls-files",),
+                )
+            )
+
+        included_arguments = _inventory_arguments(
+            ("--cached", "--others", "--exclude-standard"),
+            selected_prefix=selected_prefix,
+        )
+        ignored_arguments = _inventory_arguments(
+            ("--others", "--ignored", "--exclude-standard"),
+            selected_prefix=selected_prefix,
+        )
+        ignored_directory_arguments = _inventory_arguments(
+            ("--others", "--ignored", "--exclude-standard", "--directory"),
+            selected_prefix=selected_prefix,
+        )
+        try:
+            included_result = self._runner.run(included_arguments, cwd=physical_repository_root)
+            ignored_result = self._runner.run(ignored_arguments, cwd=physical_repository_root)
+            ignored_directory_result = self._runner.run(
+                ignored_directory_arguments,
+                cwd=physical_repository_root,
+            )
+            included, _ = _parse_inventory_output(
+                included_result.stdout,
+                selected_prefix=selected_prefix,
+            )
+            ignored, ignored_directories = _parse_inventory_output(
+                ignored_result.stdout,
+                selected_prefix=selected_prefix,
+            )
+            _, ignored_directory_boundaries = _parse_inventory_output(
+                ignored_directory_result.stdout,
+                selected_prefix=selected_prefix,
+            )
+            stderr = b"\n".join(
+                dict.fromkeys(
+                    line
+                    for output in (
+                        included_result.stderr,
+                        ignored_result.stderr,
+                        ignored_directory_result.stderr,
+                    )
+                    for line in output.splitlines()
+                    if line
+                )
+            )
+            warning = _inventory_stderr_error(physical_repository_root, ("ls-files",), stderr) if stderr else None
+            return GitFilesystemInventory(
+                included,
+                ignored,
+                ignored_directories | ignored_directory_boundaries,
+                warning=warning,
+            )
+        except GitIgnoreCommandError as error:
+            return GitFilesystemInventory(error=error)
+        except ValueError as error:
+            return GitFilesystemInventory(
+                error=GitIgnoreCommandError(
+                    code="git_filesystem_inventory_parse_error",
+                    message=f"could not parse Git filesystem inventory: {error}",
+                    cwd=physical_repository_root,
+                    command=("ls-files",),
+                )
+            )
 
 
 def is_git_admin_name(path: Path) -> bool:
@@ -538,6 +695,77 @@ def _physical_path_without_following_final(path: Path) -> Path:
     return path.parent.resolve(strict=True) / path.name
 
 
+def _inventory_arguments(options: tuple[str, ...], *, selected_prefix: Path) -> tuple[str, ...]:
+    arguments = ("ls-files", "-z", "--full-name", *options)
+    if selected_prefix == Path("."):
+        return arguments
+    pathspec = f":(top,literal){selected_prefix.as_posix()}"
+    return (*arguments, "--", pathspec)
+
+
+def _parse_inventory_output(
+    output: bytes,
+    *,
+    selected_prefix: Path,
+) -> tuple[tuple[str, ...], frozenset[str]]:
+    if output and not output.endswith(b"\0"):
+        raise ValueError("NUL-delimited Git output has no final terminator")
+    raw_paths = output[:-1].split(b"\0") if output else ()
+    prefix_parts = (
+        None
+        if selected_prefix == Path(".")
+        else tuple(os.fsencode(part) for part in PurePosixPath(selected_prefix.as_posix()).parts)
+    )
+    paths: list[str] = []
+    directory_hints: set[str] = set()
+    seen: set[bytes] = set()
+    for raw_path in raw_paths:
+        if not raw_path:
+            raise ValueError("Git returned an empty inventory path")
+        # Git represents an untracked nested repository as one directory
+        # boundary even without ``--directory``. It is still one candidate;
+        # the collector's lstat decides its actual current type.
+        directory_hint = raw_path.endswith(b"/")
+        if directory_hint:
+            raw_path = raw_path[:-1]
+            if not raw_path:
+                raise ValueError("Git returned an empty inventory directory")
+        parts = raw_path.split(b"/")
+        if raw_path.startswith(b"/") or any(part in {b"", b".", b".."} for part in parts):
+            raise ValueError(f"Git returned an unsafe inventory path: {os.fsdecode(raw_path)!r}")
+        if prefix_parts is None:
+            selected_relative = raw_path
+        elif len(parts) >= len(prefix_parts) and all(
+            os.path.normcase(os.fsdecode(actual)) == os.path.normcase(os.fsdecode(expected))
+            for actual, expected in zip(parts[: len(prefix_parts)], prefix_parts, strict=True)
+        ):
+            remainder = parts[len(prefix_parts) :]
+            selected_relative = b"/".join(remainder) if remainder else b"."
+        else:
+            raise ValueError(f"Git returned a path outside the selected root: {os.fsdecode(raw_path)!r}")
+        if selected_relative not in seen:
+            decoded = os.fsdecode(selected_relative)
+            paths.append(decoded)
+            seen.add(selected_relative)
+        else:
+            decoded = os.fsdecode(selected_relative)
+        if directory_hint:
+            directory_hints.add(decoded)
+    return tuple(paths), frozenset(directory_hints)
+
+
+def _inventory_stderr_error(root: Path, command: tuple[str, ...], stderr: bytes) -> GitIgnoreCommandError:
+    bounded = stderr[:_MAX_INVENTORY_STDERR_BYTES]
+    detail = bounded.decode("utf-8", errors="surrogateescape").rstrip()
+    return GitIgnoreCommandError(
+        code="git_filesystem_inventory_incomplete",
+        message=f"Git reported an incomplete filesystem inventory: {detail}",
+        cwd=root,
+        command=command,
+        stderr=bounded,
+    )
+
+
 def _is_same_or_descendant(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
@@ -604,6 +832,7 @@ def _is_directory_or_symlink(path: Path) -> bool:
 __all__ = [
     "ExclusionPatternError",
     "ExplicitExcluder",
+    "GitFilesystemInventory",
     "GitIgnoreCommandError",
     "GitIgnoreMatches",
     "GitIgnoreProbe",

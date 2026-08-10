@@ -17,6 +17,7 @@ from workfold.collectors.filesystem import (
 )
 from workfold.collectors.filesystem_times import FilesystemTimestampAdapter
 from workfold.collectors.ignores import (
+    GitFilesystemInventory,
     GitIgnoreCommandError,
     GitIgnoreMatches,
     GitIgnoreProbe,
@@ -57,6 +58,7 @@ class FixedIgnoreService(GitIgnoreService):
         probe: GitIgnoreProbe,
         matches: GitIgnoreMatches = GitIgnoreMatches(frozenset()),
     ) -> None:
+        super().__init__()
         self.probe_result = probe
         self.matches_result = matches
         self.ignored_calls: list[tuple[GitIgnoreRepository, tuple[IgnoreCandidate, ...]]] = []
@@ -68,9 +70,26 @@ class FixedIgnoreService(GitIgnoreService):
         self,
         repository: GitIgnoreRepository,
         candidates: Sequence[IgnoreCandidate],
+        *,
+        lexical_root: Path | None = None,
     ) -> GitIgnoreMatches:
+        del lexical_root
         self.ignored_calls.append((repository, tuple(candidates)))
         return self.matches_result
+
+
+class NativeOnlyIgnoreService(GitIgnoreService):
+    """Force the reference traversal/check-ignore path for equivalence tests."""
+
+    def inventory(self, repository: GitIgnoreRepository, selected_root: Path) -> GitFilesystemInventory:
+        return GitFilesystemInventory(
+            error=GitIgnoreCommandError(
+                code="test_inventory_disabled",
+                message="inventory disabled by fixture",
+                cwd=selected_root,
+                command=("ls-files",),
+            )
+        )
 
 
 def test_quick_scan_accounts_for_regular_ignored_excluded_and_admin_entries(tmp_path: Path) -> None:
@@ -91,7 +110,7 @@ def test_quick_scan_accounts_for_regular_ignored_excluded_and_admin_entries(tmp_
     result = FilesystemCollector().collect(
         (repo.path,),
         timestamp_kinds=FS_MODIFIED,
-        exclusions=("excluded/",),
+        exclusions=("excluded/", "*.ignored"),
     )
 
     by_relative: dict[str, CollectedFilesystemEntry] = {}
@@ -100,13 +119,12 @@ def test_quick_scan_accounts_for_regular_ignored_excluded_and_admin_entries(tmp_
         assert path is not None
         by_relative[path.relative_to(repo.path).as_posix() if path != repo.path else "."] = item
     assert by_relative["ordinary/nested/work.txt"].disposition is RecordDisposition.ELIGIBLE
-    assert by_relative["ordinary"].disposition is RecordDisposition.EXCLUDED_ENTRY_TYPE
-    assert by_relative["ordinary/nested"].disposition is RecordDisposition.EXCLUDED_ENTRY_TYPE
-    assert by_relative["ignored"].disposition is RecordDisposition.IGNORED
-    assert by_relative["ignored/hidden.txt"].disposition is RecordDisposition.IGNORED
-    assert by_relative["one.ignored"].disposition is RecordDisposition.IGNORED
-    assert by_relative["excluded"].disposition is RecordDisposition.EXPLICITLY_EXCLUDED
-    assert "excluded/child.txt" not in by_relative
+    assert "ordinary" not in by_relative
+    assert "ordinary/nested" not in by_relative
+    assert "ignored" not in by_relative
+    assert "ignored/hidden.txt" not in by_relative
+    assert "one.ignored" not in by_relative
+    assert by_relative["excluded/child.txt"].disposition is RecordDisposition.EXPLICITLY_EXCLUDED
     assert by_relative[".git"].disposition is RecordDisposition.SEMANTIC_GIT_ADMIN
     assert by_relative["external-link"].disposition is RecordDisposition.EXCLUDED_ENTRY_TYPE
     assert "external-link/must-not-be-seen.txt" not in by_relative
@@ -118,8 +136,140 @@ def test_quick_scan_accounts_for_regular_ignored_excluded_and_admin_entries(tmp_
     assert len(result.observations) == len(result.eligible_origins)
     assert all(item.kind is TimestampKind.FS_MODIFIED for item in result.observations)
     assert not result.is_partial
-    result.accounting.records[0].validate()
+    records = result.accounting.records[0]
+    records.validate()
+    assert records.ignored == 1
+    assert records.explicitly_excluded == 2
     assert result.accounting.timestamps[0].requested == result.accounting.records[0].eligible
+
+
+def test_git_inventory_validates_current_files_without_statting_ignored_tree(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    ignored = repo.path / "ignored"
+    ignored.mkdir()
+    (repo.path / ".gitignore").write_text("ignored/\n*.log\n", encoding="utf-8")
+    tracked = repo.path / "tracked.txt"
+    tracked.write_text("tracked", encoding="utf-8")
+    tracked_ignored = repo.path / "tracked.log"
+    tracked_ignored.write_text("tracked despite current ignore rules", encoding="utf-8")
+    tracked_inside_ignored = ignored / "tracked.txt"
+    tracked_inside_ignored.write_text("tracked below ignored directory", encoding="utf-8")
+    staged = repo.path / "staged.txt"
+    staged.write_text("staged", encoding="utf-8")
+    deleted = repo.path / "deleted.txt"
+    deleted.write_text("soon absent", encoding="utf-8")
+    repo.run("add", ".gitignore", "tracked.txt", "staged.txt", "deleted.txt")
+    repo.run("add", "-f", "tracked.log", "ignored/tracked.txt")
+    tracked.write_text("unstaged current contents", encoding="utf-8")
+    deleted.unlink()
+    untracked = repo.path / "untracked.txt"
+    untracked.write_text("never staged", encoding="utf-8")
+    for index in range(200):
+        (ignored / f"generated-{index}.txt").write_text("ignored", encoding="utf-8")
+
+    lstat_calls: list[Path] = []
+
+    def counting_lstat(path: Path) -> os.stat_result:
+        lstat_calls.append(path)
+        return os.lstat(path)
+
+    result = FilesystemCollector(lstat_reader=counting_lstat).collect(
+        (repo.path,),
+        timestamp_kinds=FS_MODIFIED,
+    )
+
+    eligible_paths = {item.path for item in result.eligible_origins}
+    assert eligible_paths == {
+        repo.path / ".gitignore",
+        tracked,
+        tracked_ignored,
+        tracked_inside_ignored,
+        staged,
+        untracked,
+    }
+    assert deleted not in {item.origin.path for item in result.entries}
+    assert {path for path in lstat_calls if ignored == path or ignored in path.parents} == {tracked_inside_ignored}
+    assert result.accounting.records[0].ignored == 200
+    assert len(result.observations) == 6
+    assert not result.diagnostics
+    result.accounting.records[0].validate()
+
+
+def test_git_inventory_restricts_candidates_to_literal_selected_subdirectory(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    selected = repo.path / "work[one]"
+    selected.mkdir()
+    (repo.path / ".gitignore").write_text("*.tmp\n", encoding="utf-8")
+    inside = selected / "inside.txt"
+    inside.write_text("inside", encoding="utf-8")
+    unusual = selected / "line\nbreak.txt"
+    unusual.write_text("unusual", encoding="utf-8")
+    (selected / "ignored.tmp").write_text("ignored", encoding="utf-8")
+    (repo.path / "outside.txt").write_text("outside", encoding="utf-8")
+
+    result = FilesystemCollector().collect((selected,), timestamp_kinds=FS_MODIFIED)
+
+    assert {item.path for item in result.eligible_origins} == {inside, unusual}
+    assert result.accounting.records[0].ignored == 1
+    assert all(item.origin.repository_or_root == selected for item in result.entries)
+    assert not result.diagnostics
+
+
+def test_git_inventory_prunes_ignored_directories_but_keeps_visible_empty_directories(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    ignored = repo.path / "ignored"
+    ignored.mkdir()
+    visible_empty = repo.path / "visible-empty"
+    visible_empty.mkdir()
+    (repo.path / ".gitignore").write_text("ignored/\n", encoding="utf-8")
+    for index in range(100):
+        (ignored / f"artifact-{index}.txt").write_text("ignored", encoding="utf-8")
+
+    opened: list[Path] = []
+
+    def guarded_scandir(path: Path) -> AbstractContextManager[Iterator[os.DirEntry[str]]]:
+        if path == ignored:
+            raise AssertionError("Git-ignored directory must be pruned before traversal")
+        opened.append(path)
+        return os.scandir(path)
+
+    result = FilesystemCollector(scandir_reader=guarded_scandir).collect(
+        (repo.path,),
+        timestamp_kinds=FS_MODIFIED,
+        include_directories=True,
+    )
+
+    assert visible_empty in {item.path for item in result.eligible_origins}
+    assert ignored not in opened
+    assert result.accounting.records[0].ignored == 101
+    assert not result.diagnostics
+
+
+def test_git_inventory_and_native_scan_select_the_same_regular_files(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    (repo.path / "nested" / "generated").mkdir(parents=True)
+    visible = {
+        repo.path / ".gitignore",
+        repo.path / "tracked.log",
+        repo.path / "nested" / "work.txt",
+        repo.path / "untracked.txt",
+    }
+    for path in visible:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("visible", encoding="utf-8")
+    (repo.path / ".gitignore").write_text("*.log\nnested/generated/\n", encoding="utf-8")
+    repo.run("add", ".gitignore", "nested/work.txt")
+    repo.run("add", "-f", "tracked.log")
+    (repo.path / "ignored.log").write_text("ignored", encoding="utf-8")
+    (repo.path / "nested" / "generated" / "artifact.txt").write_text("ignored", encoding="utf-8")
+
+    fast = FilesystemCollector().collect((repo.path,), timestamp_kinds=FS_MODIFIED)
+    native = FilesystemCollector(ignore_service=NativeOnlyIgnoreService()).collect(
+        (repo.path,), timestamp_kinds=FS_MODIFIED
+    )
+
+    native_regular = {item.path for item in native.eligible_origins}
+    assert {item.path for item in fast.eligible_origins} == native_regular == visible
 
 
 def test_explicitly_excluded_directory_is_recorded_once_and_never_opened(tmp_path: Path) -> None:
@@ -656,6 +806,27 @@ def test_confirmed_admin_directory_is_pruned_with_nonstandard_internal_layout(tm
     assert all(
         item.origin.path is None or repo.path / ".git" not in item.origin.path.parents for item in result.entries
     )
+
+
+def test_cached_admin_boundary_prunes_nonstandard_storage_inside_worktree(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    admin_storage = repo.path / "git-storage"
+    (repo.path / ".git").rename(admin_storage)
+    (repo.path / ".git").write_text("gitdir: git-storage\n", encoding="utf-8")
+    (repo.path / "visible.txt").write_text("visible", encoding="utf-8")
+
+    result = FilesystemCollector().collect(
+        (repo.path,),
+        timestamp_kinds=FS_MODIFIED,
+        include_directories=True,
+        include_symlinks=True,
+        respect_gitignore=False,
+        include_ignored=True,
+    )
+
+    storage = next(item for item in result.entries if item.origin.path == admin_storage)
+    assert storage.disposition is RecordDisposition.SEMANTIC_GIT_ADMIN
+    assert all(item.origin.path is None or admin_storage not in item.origin.path.parents for item in result.entries)
 
 
 def test_unrelated_dot_git_entries_remain_normal_filesystem_evidence(tmp_path: Path) -> None:

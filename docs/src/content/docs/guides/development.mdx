@@ -94,6 +94,22 @@ Collectors emit normalized, provenance-preserving timestamp observations.
 Configuration resolves time, mode, and the evidence profile as three independent
 axes. The profile defaults to `standard`; neither portable nor full expansion
 may rewrite time or mode.
+
+Filesystem path inventory and filesystem metadata extraction are distinct
+boundaries. For a file/symlink scan that respects ignore rules inside a Git
+worktree, local NUL-delimited `git ls-files` plumbing supplies tracked,
+untracked, and ignored path candidates using Git's standard ignore semantics.
+Git never supplies filesystem types or timestamps: every included candidate
+must still pass a current no-follow `lstat`, followed by the same timestamp
+adapter used by native traversal. An index-only path absent from the current
+worktree is therefore not filesystem evidence. Directory scans combine the
+same inventory's ignored-directory boundaries with the native no-follow walker,
+so current and empty directories remain discoverable without entering ignored
+subtrees. Scans outside Git and scans that include ignored entries use the
+native walker alone. Keep the fast inventory and native reference behavior
+equivalent for requested regular files, and never reintroduce per-entry path
+resolution for repository/admin containment.
+
 Schedule classification, display cropping, anchored globally aligned time
 clustering, renderer-neutral report construction, and terminal rendering remain
 separate stages. The clusterer emits half-open semantic bands and literal event

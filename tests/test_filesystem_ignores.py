@@ -11,6 +11,7 @@ import pytest
 from workfold.collectors.ignores import (
     ExclusionPatternError,
     ExplicitExcluder,
+    GitFilesystemInventory,
     GitIgnoreCommandError,
     GitIgnoreRepository,
     GitIgnoreRunner,
@@ -238,6 +239,131 @@ def test_standard_git_ignore_semantics_include_nested_info_global_and_tracked_ru
     }
     assert paths["tracked.log"] not in result.ignored_paths
     assert paths["normal.txt"] not in result.ignored_paths
+
+    inventory = service.inventory(repository, repo.path)
+    assert inventory.error is None
+    assert {"tracked.log", "normal.txt"} <= set(inventory.included_relative_paths)
+    assert {
+        "ignored.log",
+        "info.tmp",
+        "global.cache",
+        "nested/generated.bin",
+    } <= set(inventory.ignored_relative_paths)
+    assert "tracked.log" not in inventory.ignored_relative_paths
+
+
+def test_git_filesystem_inventory_is_nul_safe_and_literal_subdirectory_scoped(tmp_path: Path) -> None:
+    repository_root = tmp_path / "repo"
+    selected_root = repository_root / "work[one]"
+    selected_root.mkdir(parents=True)
+    runner = QueueRunner(
+        (
+            completed(0, b"work[one]/tracked.txt\0work[one]/line\nbreak.txt\0"),
+            completed(0, b"work[one]/generated.log\0work[one]/nested-repo/\0"),
+            completed(0, b"work[one]/nested-repo/\0"),
+        )
+    )
+    repository = GitIgnoreRepository(repository_root.resolve(), False)
+
+    inventory = GitIgnoreService(runner).inventory(repository, selected_root)
+
+    assert inventory.error is None
+    assert inventory.warning is None
+    assert inventory.included_relative_paths == ("tracked.txt", "line\nbreak.txt")
+    assert inventory.ignored_relative_paths == ("generated.log", "nested-repo")
+    assert inventory.ignored_directory_paths == {"nested-repo"}
+    expected_pathspec = ":(top,literal)work[one]"
+    assert runner.calls[0][0] == (
+        "ls-files",
+        "-z",
+        "--full-name",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        expected_pathspec,
+    )
+    assert runner.calls[1][0] == (
+        "ls-files",
+        "-z",
+        "--full-name",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--",
+        expected_pathspec,
+    )
+    assert runner.calls[2][0] == (
+        "ls-files",
+        "-z",
+        "--full-name",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--directory",
+        "--",
+        expected_pathspec,
+    )
+
+
+def test_git_filesystem_inventory_keeps_partial_paths_with_a_warning(tmp_path: Path) -> None:
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    warning = b"warning: could not open directory 'private/': Permission denied\n"
+    runner = QueueRunner(
+        (
+            completed(0, b"visible.txt\0", warning),
+            completed(0, b"ignored.log\0", warning),
+            completed(0, b"private/\0", warning),
+        )
+    )
+
+    inventory = GitIgnoreService(runner).inventory(
+        GitIgnoreRepository(repository_root.resolve(), False),
+        repository_root,
+    )
+
+    assert inventory.error is None
+    assert inventory.warning is not None
+    assert inventory.warning.code == "git_filesystem_inventory_incomplete"
+    assert "Permission denied" in str(inventory.warning)
+    assert inventory.included_relative_paths == ("visible.txt",)
+    assert inventory.ignored_relative_paths == ("ignored.log",)
+
+
+@pytest.mark.parametrize(
+    ("included", "ignored"),
+    [
+        (b"unterminated", b""),
+        (b"../outside.txt\0", b""),
+        (b"inside.txt\0", b"inside.txt\0"),
+    ],
+)
+def test_git_filesystem_inventory_rejects_malformed_or_overlapping_paths(
+    tmp_path: Path,
+    included: bytes,
+    ignored: bytes,
+) -> None:
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    inventory = GitIgnoreService(QueueRunner((completed(0, included), completed(0, ignored), completed(0)))).inventory(
+        GitIgnoreRepository(repository_root.resolve(), False),
+        repository_root,
+    )
+
+    assert inventory.error is not None
+    assert inventory.error.code == "git_filesystem_inventory_parse_error"
+
+
+def test_git_filesystem_inventory_value_rejects_duplicate_paths() -> None:
+    with pytest.raises(ValueError, match="duplicate included"):
+        GitFilesystemInventory(("same", "same"))
+    with pytest.raises(ValueError, match="duplicate ignored"):
+        GitFilesystemInventory((), ("same", "same"))
+    with pytest.raises(ValueError, match="ignored directory"):
+        GitFilesystemInventory(("other",), ("ignored",), frozenset({"other"}))
+    with pytest.raises(ValueError, match="below an ignored directory"):
+        GitFilesystemInventory(("ignored/child",), (), frozenset({"ignored"}))
 
 
 def test_probe_distinguishes_outside_broken_and_bare_repositories(tmp_path: Path) -> None:
