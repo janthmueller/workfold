@@ -15,7 +15,6 @@ from workfold.models import (
     Source,
     TimestampKind,
     TimestampObservation,
-    TimestampSlot,
     coalesce_observations,
 )
 from workfold.provenance import (
@@ -28,6 +27,7 @@ from workfold.provenance import (
     git_reflog_id,
     git_tag_id,
     lexical_absolute,
+    observation_id,
     repository_id,
 )
 
@@ -39,8 +39,6 @@ def _git_origin(record_id: str = "commit-1") -> RecordOrigin:
         RecordKind.COMMIT,
         Path("/repo"),
         commit_id="a" * 40,
-        author_name="Ada",
-        author_email="ada@example.test",
         description="subject",
     )
 
@@ -103,15 +101,12 @@ def test_provenance_rejects_invalid_inputs() -> None:
         activity_marker_id(("same", "same"))
 
 
-def test_origin_slot_and_observation_factories_preserve_roles() -> None:
+def test_origin_and_observation_factories_preserve_roles() -> None:
     origin = _git_origin()
-    slot = TimestampSlot.create(origin, TimestampKind.GIT_AUTHOR)
     observation = _observation(TimestampKind.GIT_AUTHOR, origin=origin)
 
     assert origin.provenance_id == "commit-1"
-    assert slot.origin_id == origin.record_id
-    assert slot.timestamp_kind is TimestampKind.GIT_AUTHOR
-    assert observation.observation_id == slot.slot_id
+    assert observation.observation_id == observation_id(origin.record_id, TimestampKind.GIT_AUTHOR.value)
     assert observation.timestamp_kind.source is Source.GIT
     assert observation.epoch_ns == 1_000_000_000
     assert observation.raw_timestamp == "1 +0000"
@@ -124,15 +119,37 @@ def test_origin_rejects_inconsistent_semantics() -> None:
         RecordOrigin("x", Source.GIT, RecordKind.FILESYSTEM_ENTRY, Path("/repo"))
     with pytest.raises(ValueError, match="Git record"):
         RecordOrigin("x", Source.FILESYSTEM, RecordKind.COMMIT, Path("/repo"))
+    with pytest.raises(ValueError, match="commit_id"):
+        RecordOrigin("x", Source.GIT, RecordKind.COMMIT, Path("/repo"))
+    with pytest.raises(ValueError, match="file-change origins"):
+        RecordOrigin("x", Source.GIT, RecordKind.GIT_FILE_CHANGE, Path("/repo"))
+    with pytest.raises(ValueError, match="tag origins"):
+        RecordOrigin("x", Source.GIT, RecordKind.TAG, Path("/repo"))
+    with pytest.raises(ValueError, match="reflog origins"):
+        RecordOrigin("x", Source.GIT, RecordKind.REFLOG, Path("/repo"))
+    with pytest.raises(ValueError, match="require a path"):
+        RecordOrigin("x", Source.FILESYSTEM, RecordKind.FILESYSTEM_ENTRY, Path("/root"))
     with pytest.raises(ValueError, match="change_kind"):
-        RecordOrigin("x", Source.GIT, RecordKind.COMMIT, Path("/repo"), change_kind=GitChangeKind.MODIFIED)
+        RecordOrigin(
+            "x",
+            Source.GIT,
+            RecordKind.COMMIT,
+            Path("/repo"),
+            commit_id="a" * 40,
+            change_kind=GitChangeKind.MODIFIED,
+        )
     with pytest.raises(ValueError, match="entry_type"):
-        RecordOrigin("x", Source.GIT, RecordKind.COMMIT, Path("/repo"), entry_type=EntryType.DIRECTORY)
+        RecordOrigin(
+            "x",
+            Source.GIT,
+            RecordKind.COMMIT,
+            Path("/repo"),
+            commit_id="a" * 40,
+            entry_type=EntryType.DIRECTORY,
+        )
 
 
-def test_slot_and_observation_validation() -> None:
-    with pytest.raises(ValueError, match="must not be empty"):
-        TimestampSlot("", "origin", TimestampKind.GIT_AUTHOR)
+def test_observation_validation() -> None:
     filesystem_origin = RecordOrigin(
         "file",
         Source.FILESYSTEM,
@@ -143,6 +160,26 @@ def test_slot_and_observation_validation() -> None:
     )
     with pytest.raises(ValueError, match="does not belong"):
         TimestampObservation.create(filesystem_origin, TimestampKind.GIT_AUTHOR, 1, "1")
+    with pytest.raises(ValueError, match="recorded UTC offset"):
+        TimestampObservation.create(_git_origin(), TimestampKind.GIT_AUTHOR, 1, "1")
+    with pytest.raises(ValueError, match="recorded identity"):
+        TimestampObservation.create(
+            _git_origin(),
+            TimestampKind.GIT_AUTHOR,
+            1,
+            "1 +0000",
+            original_offset_minutes=0,
+        )
+    with pytest.raises(ValueError, match="cannot carry Git identity"):
+        TimestampObservation.create(
+            filesystem_origin,
+            TimestampKind.FS_MODIFIED,
+            1,
+            "1",
+            actor_name="not applicable",
+        )
+    with pytest.raises(ValueError, match="raw_timestamp"):
+        TimestampObservation.create(filesystem_origin, TimestampKind.FS_MODIFIED, 1, "")
     assert TimestampKind.FS_MODIFIED.source is Source.FILESYSTEM
     with pytest.raises(ValueError, match="observation_id"):
         TimestampObservation("", _git_origin(), TimestampKind.GIT_AUTHOR, 1, "1")
@@ -175,6 +212,9 @@ def test_duplicate_roles_are_not_silently_coalesced() -> None:
         TimestampKind.GIT_AUTHOR,
         first.instant_utc_ns,
         "duplicate",
+        0,
+        "Ada",
+        "ada@example.test",
     )
     committer = _observation(TimestampKind.GIT_COMMITTER, origin=origin)
     assert len(coalesce_observations((first, second, committer))) == 3
@@ -201,7 +241,19 @@ def test_activity_marker_rejects_forbidden_constituents() -> None:
         ActivityMarker(
             "marker",
             1_000_000_000,
-            (author, TimestampObservation("other", author.origin, TimestampKind.GIT_AUTHOR, 1_000_000_000, "raw")),
+            (
+                author,
+                TimestampObservation(
+                    "other",
+                    author.origin,
+                    TimestampKind.GIT_AUTHOR,
+                    1_000_000_000,
+                    "raw",
+                    0,
+                    "Ada",
+                    "ada@example.test",
+                ),
+            ),
         )
     with pytest.raises(ValueError, match="at most two"):
         ActivityMarker("marker", 1_000_000_000, (author, committer, author))
@@ -229,6 +281,9 @@ def test_classified_marker_restores_exact_submicrosecond_time_of_day() -> None:
         TimestampKind.GIT_AUTHOR,
         base_ns + 789,
         str(base_ns + 789),
+        original_offset_minutes=0,
+        actor_name="Ada",
+        actor_email="ada@example.test",
     )
     classified = ClassifiedMarker(ActivityMarker.create((observation,)), local, True)
 

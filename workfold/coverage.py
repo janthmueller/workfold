@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
 from typing import TypeVar
 
 from workfold.models import RecordKind, Source, TimestampKind
@@ -45,40 +44,6 @@ class PlottingDisposition(str, Enum):
     COALESCED_INTO_MARKER = "coalesced_into_marker"
 
 
-class DiagnosticSeverity(str, Enum):
-    """Machine-readable severity independent of rendered text."""
-
-    INFO = "info"
-    WARNING = "warning"
-    ERROR = "error"
-
-
-class DiagnosticStage(str, Enum):
-    """Pipeline stage that emitted a diagnostic."""
-
-    CONFIGURATION = "configuration"
-    DISCOVERY = "discovery"
-    EXTRACTION = "extraction"
-    SELECTION = "selection"
-    PLOTTING = "plotting"
-    RENDERING = "rendering"
-
-
-class DiagnosticCode(str, Enum):
-    """Stable diagnostic codes used by strict-mode and report policy."""
-
-    INVALID_CONFIGURATION = "invalid_configuration"
-    TARGET_UNAVAILABLE = "target_unavailable"
-    TRAVERSAL_ERROR = "traversal_error"
-    SUBPROCESS_ERROR = "subprocess_error"
-    STAT_ERROR = "stat_error"
-    DECODE_ERROR = "decode_error"
-    PARSE_ERROR = "parse_error"
-    CONCURRENT_MUTATION = "concurrent_mutation"
-    REFLOG_UNAVAILABLE = "reflog_unavailable"
-    INTERNAL_INVARIANT = "internal_invariant"
-
-
 class CapabilityStatus(str, Enum):
     """Availability of a requested collector feature."""
 
@@ -86,27 +51,6 @@ class CapabilityStatus(str, Enum):
     UNSUPPORTED = "unsupported"
     UNAVAILABLE = "unavailable"
     POTENTIALLY_UNRELIABLE = "potentially_unreliable"
-
-
-class CoverageStatus(str, Enum):
-    """High-level result status derived from reconciled coverage."""
-
-    COMPLETE = "complete"
-    PARTIAL = "partial"
-    FAILED = "failed"
-
-
-@dataclass(frozen=True, slots=True)
-class Diagnostic:
-    """A structured operational diagnostic; details remain unformatted."""
-
-    code: DiagnosticCode
-    stage: DiagnosticStage
-    target: str
-    severity: DiagnosticSeverity
-    details: str
-    path: Path | None = None
-    provenance_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,19 +414,30 @@ class CoverageLedgerBuilder:
 
         records = tuple(
             RecordCoverage(
-                key,
-                self._records_discovered.get(key, 0),
-                *tuple(self._record_outcomes.get((key, disposition), 0) for disposition in RecordDisposition),
+                key=key,
+                discovered=self._records_discovered.get(key, 0),
+                eligible=self._record_outcomes.get((key, RecordDisposition.ELIGIBLE), 0),
+                ignored=self._record_outcomes.get((key, RecordDisposition.IGNORED), 0),
+                explicitly_excluded=self._record_outcomes.get((key, RecordDisposition.EXPLICITLY_EXCLUDED), 0),
+                excluded_entry_type=self._record_outcomes.get((key, RecordDisposition.EXCLUDED_ENTRY_TYPE), 0),
+                semantic_git_admin=self._record_outcomes.get((key, RecordDisposition.SEMANTIC_GIT_ADMIN), 0),
+                record_errors=self._record_outcomes.get((key, RecordDisposition.RECORD_ERROR), 0),
             )
             for key in sorted(record_keys, key=_record_key_sort)
         )
         timestamps = tuple(
             TimestampCoverage(
-                key,
-                self._slots_requested.get(key, 0),
-                *tuple(self._extraction_outcomes.get((key, disposition), 0) for disposition in ExtractionDisposition),
-                *tuple(self._selection_outcomes.get((key, disposition), 0) for disposition in SelectionDisposition),
-                *tuple(self._plotting_outcomes.get((key, disposition), 0) for disposition in PlottingDisposition),
+                key=key,
+                requested=self._slots_requested.get(key, 0),
+                captured=self._extraction_outcomes.get((key, ExtractionDisposition.CAPTURED), 0),
+                unavailable=self._extraction_outcomes.get((key, ExtractionDisposition.UNAVAILABLE), 0),
+                unsupported=self._extraction_outcomes.get((key, ExtractionDisposition.UNSUPPORTED), 0),
+                extraction_errors=self._extraction_outcomes.get((key, ExtractionDisposition.ERROR), 0),
+                included=self._selection_outcomes.get((key, SelectionDisposition.INCLUDED), 0),
+                outside_date=self._selection_outcomes.get((key, SelectionDisposition.OUTSIDE_DATE), 0),
+                identity_filtered=self._selection_outcomes.get((key, SelectionDisposition.IDENTITY_FILTERED), 0),
+                markers=self._plotting_outcomes.get((key, PlottingDisposition.MARKER), 0),
+                coalesced_into_markers=self._plotting_outcomes.get((key, PlottingDisposition.COALESCED_INTO_MARKER), 0),
             )
             for key in sorted(timestamp_keys, key=_timestamp_key_sort)
         )
@@ -490,22 +445,6 @@ class CoverageLedgerBuilder:
         if validate:
             ledger.validate()
         return ledger
-
-
-def coverage_status(
-    ledger: CoverageLedger,
-    diagnostics: tuple[Diagnostic, ...] = (),
-    *,
-    any_collector_succeeded: bool = True,
-) -> CoverageStatus:
-    """Derive report status from typed counts and diagnostics."""
-
-    ledger.validate()
-    if not any_collector_succeeded:
-        return CoverageStatus.FAILED
-    if ledger.has_operational_errors or any(item.severity is DiagnosticSeverity.ERROR for item in diagnostics):
-        return CoverageStatus.PARTIAL
-    return CoverageStatus.COMPLETE
 
 
 _Key = TypeVar("_Key")
@@ -536,11 +475,6 @@ __all__ = [
     "CoverageInvariantError",
     "CoverageLedger",
     "CoverageLedgerBuilder",
-    "CoverageStatus",
-    "Diagnostic",
-    "DiagnosticCode",
-    "DiagnosticSeverity",
-    "DiagnosticStage",
     "ExtractionDisposition",
     "PlottingDisposition",
     "RecordCoverage",
@@ -549,5 +483,4 @@ __all__ = [
     "SelectionDisposition",
     "TimestampCoverage",
     "TimestampCoverageKey",
-    "coverage_status",
 ]

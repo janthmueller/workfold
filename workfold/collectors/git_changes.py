@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from workfold.collectors.base import CollectorDiagnostic, CollectorResult
+from workfold.collectors.base import CollectorDiagnostic
 from workfold.collectors.git import (
     CollectedGitCommit,
     GitCommandError,
@@ -86,11 +86,8 @@ class CollectedGitFileChange:
             path=Path(path),
             old_path=Path(old_path) if old_path is not None else None,
             commit_id=commit.object_id,
-            object_id=commit.object_id,
             diff_basis=self.diff_basis,
             change_kind=self.change.change_kind,
-            author_name=commit.author.identity.name,
-            author_email=commit.author.identity.email,
             description=commit.subject,
         )
 
@@ -206,25 +203,6 @@ class GitFileChangeCollectionResult:
         """Whether any requested repository batch could not be collected."""
 
         return bool(self.diagnostics)
-
-    def to_domain_result(
-        self,
-        timestamp_kinds: Sequence[TimestampKind] = (TimestampKind.GIT_AUTHOR,),
-    ) -> CollectorResult[RecordOrigin, TimestampObservation]:
-        """Adapt raw changes to shared records and timestamp observations."""
-
-        normalized_kinds = tuple(dict.fromkeys(timestamp_kinds))
-        invalid = [
-            kind for kind in normalized_kinds if kind not in {TimestampKind.GIT_AUTHOR, TimestampKind.GIT_COMMITTER}
-        ]
-        if invalid:
-            names = ", ".join(kind.value for kind in invalid)
-            raise ValueError(f"file-change records do not expose timestamp kind(s): {names}")
-        return CollectorResult(
-            origins=tuple(item.to_origin() for item in self.changes),
-            observations=tuple(item.to_observation(kind) for item in self.changes for kind in normalized_kinds),
-            diagnostics=self.diagnostics,
-        )
 
 
 def _change_kind(status: bytes) -> GitChangeKind:

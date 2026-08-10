@@ -53,7 +53,19 @@ def _classified(
     )
     kind = TimestampKind.GIT_AUTHOR if is_git else TimestampKind.FS_MODIFIED
     instant_ns = int(local_datetime.replace(microsecond=0).timestamp()) * 1_000_000_000 + fractional_nanoseconds
-    marker = ActivityMarker.create((TimestampObservation.create(origin, kind, instant_ns, str(instant_ns)),))
+    marker = ActivityMarker.create(
+        (
+            TimestampObservation.create(
+                origin,
+                kind,
+                instant_ns,
+                str(instant_ns),
+                original_offset_minutes=0 if is_git else None,
+                actor_name="Fixture" if is_git else None,
+                actor_email="fixture@example.test" if is_git else None,
+            ),
+        )
+    )
     return ClassifiedMarker(
         marker,
         local_datetime,

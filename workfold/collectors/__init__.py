@@ -1,6 +1,6 @@
 """Local timestamp collectors."""
 
-from workfold.collectors.base import CollectorDiagnostic, CollectorResult, DiagnosticSeverity
+from workfold.collectors.base import CollectorDiagnostic, DiagnosticSeverity
 from workfold.collectors.filesystem import (
     CollectedFilesystemEntry,
     FilesystemAccounting,
@@ -31,7 +31,6 @@ __all__ = [
     "CollectedGitCommit",
     "CollectedFilesystemEntry",
     "CollectorDiagnostic",
-    "CollectorResult",
     "DiagnosticSeverity",
     "FilesystemAccounting",
     "FilesystemCollectionResult",

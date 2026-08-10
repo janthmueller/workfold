@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from workfold.collectors.base import CollectorDiagnostic, CollectorResult, DiagnosticSeverity
+from workfold.collectors.base import CollectorDiagnostic, DiagnosticSeverity
 from workfold.collectors.git import GitCommandError, GitRepository, GitRunner
 from workfold.models import RecordKind, RecordOrigin, Source, TimestampKind, TimestampObservation
 from workfold.provenance import git_reflog_id
@@ -125,8 +125,6 @@ class CollectedGitReflog:
             object_id=self.entry.new_id,
             target_id=self.entry.old_id,
             ref_name=self.entry.ref_name,
-            author_name=self.entry.actor_name,
-            author_email=self.entry.actor_email,
             description=self.entry.message,
         )
 
@@ -169,15 +167,6 @@ class GitReflogCollectionResult:
     @property
     def is_partial(self) -> bool:
         return any(item.severity is DiagnosticSeverity.ERROR for item in self.diagnostics)
-
-    def to_domain_result(self) -> CollectorResult[RecordOrigin, TimestampObservation]:
-        """Adapt every captured reflog record to the shared model."""
-
-        return CollectorResult(
-            origins=tuple(item.to_origin() for item in self.entries),
-            observations=tuple(item.to_observation() for item in self.entries),
-            diagnostics=self.diagnostics,
-        )
 
 
 def parse_current_refs(payload: bytes) -> tuple[str, ...]:

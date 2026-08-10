@@ -8,7 +8,7 @@ from datetime import datetime
 from enum import Enum, IntEnum
 from pathlib import Path
 
-from workfold.provenance import activity_marker_id, observation_id, timestamp_slot_id
+from workfold.provenance import activity_marker_id, observation_id
 
 
 class Source(str, Enum):
@@ -23,7 +23,7 @@ class RecordKind(str, Enum):
 
     COMMIT = "commit"
     GIT_FILE_CHANGE = "git_file_change"
-    ANNOTATED_TAG = "annotated_tag"
+    TAG = "tag"
     REFLOG = "reflog"
     FILESYSTEM_ENTRY = "filesystem_entry"
 
@@ -108,8 +108,6 @@ class RecordOrigin:
     diff_basis: str | None = None
     change_kind: GitChangeKind | None = None
     entry_type: EntryType | None = None
-    author_name: str | None = None
-    author_email: str | None = None
     description: str | None = None
 
     def __post_init__(self) -> None:
@@ -119,41 +117,47 @@ class RecordOrigin:
             raise ValueError("filesystem entry origins require the filesystem source")
         if self.record_kind is not RecordKind.FILESYSTEM_ENTRY and self.source is not Source.GIT:
             raise ValueError("Git record origins require the Git source")
+        if self.record_kind is RecordKind.COMMIT and self.commit_id is None:
+            raise ValueError("commit origins require a commit_id")
+        if self.record_kind is RecordKind.GIT_FILE_CHANGE:
+            if self.commit_id is None or self.path is None or self.diff_basis is None or self.change_kind is None:
+                raise ValueError("Git file-change origins require commit, path, diff-basis, and change provenance")
+        if self.record_kind is RecordKind.TAG and (self.ref_name is None or self.target_id is None):
+            raise ValueError("tag origins require ref and target identities")
+        if self.record_kind is RecordKind.REFLOG and (
+            self.ref_name is None or self.object_id is None or self.target_id is None
+        ):
+            raise ValueError("reflog origins require ref, old-object, and new-object identities")
+        if self.record_kind is RecordKind.FILESYSTEM_ENTRY and self.path is None:
+            raise ValueError("filesystem entry origins require a path")
         if self.change_kind is not None and self.record_kind is not RecordKind.GIT_FILE_CHANGE:
             raise ValueError("change_kind is valid only for Git file-change records")
+        if (
+            self.old_path is not None or self.diff_basis is not None
+        ) and self.record_kind is not RecordKind.GIT_FILE_CHANGE:
+            raise ValueError("old_path and diff_basis are valid only for Git file-change records")
         if self.entry_type is not None and self.record_kind is not RecordKind.FILESYSTEM_ENTRY:
             raise ValueError("entry_type is valid only for filesystem-entry records")
+        if self.path is not None and self.record_kind not in {
+            RecordKind.GIT_FILE_CHANGE,
+            RecordKind.FILESYSTEM_ENTRY,
+        }:
+            raise ValueError("path is valid only for file-change and filesystem-entry records")
+        if self.commit_id is not None and self.record_kind not in {RecordKind.COMMIT, RecordKind.GIT_FILE_CHANGE}:
+            raise ValueError("commit_id is valid only for commit and file-change records")
+        if (
+            self.object_id is not None or self.target_id is not None or self.ref_name is not None
+        ) and self.record_kind not in {
+            RecordKind.TAG,
+            RecordKind.REFLOG,
+        }:
+            raise ValueError("object, target, and ref identities are valid only for tag and reflog records")
 
     @property
     def provenance_id(self) -> str:
         """Compatibility name emphasizing that ``record_id`` is provenance."""
 
         return self.record_id
-
-
-@dataclass(frozen=True, slots=True)
-class TimestampSlot:
-    """One requested timestamp opportunity on a source record."""
-
-    slot_id: str
-    origin_id: str
-    kind: TimestampKind
-
-    def __post_init__(self) -> None:
-        if not self.slot_id or not self.origin_id:
-            raise ValueError("slot_id and origin_id must not be empty")
-
-    @classmethod
-    def create(cls, origin: RecordOrigin, kind: TimestampKind) -> TimestampSlot:
-        """Create a slot with its deterministic identity."""
-
-        return cls(timestamp_slot_id(origin.record_id, kind.value), origin.record_id, kind)
-
-    @property
-    def timestamp_kind(self) -> TimestampKind:
-        """Return the timestamp kind using the conceptual-model name."""
-
-        return self.kind
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,10 +176,19 @@ class TimestampObservation:
     def __post_init__(self) -> None:
         if not self.observation_id:
             raise ValueError("observation_id must not be empty")
+        if not self.raw_timestamp:
+            raise ValueError("raw_timestamp must not be empty")
         if self.kind.source is not self.origin.source:
             raise ValueError("timestamp kind does not belong to the origin source")
         if self.original_offset_minutes is not None and not -1439 <= self.original_offset_minutes <= 1439:
             raise ValueError("original offset must be between -1439 and 1439 minutes")
+        if self.origin.source is Source.GIT:
+            if self.original_offset_minutes is None:
+                raise ValueError("Git observations require their recorded UTC offset")
+            if self.actor_name is None or self.actor_email is None:
+                raise ValueError("Git observations require their recorded identity")
+        elif any(value is not None for value in (self.original_offset_minutes, self.actor_name, self.actor_email)):
+            raise ValueError("filesystem observations cannot carry Git identity or offset metadata")
 
     @classmethod
     def create(
@@ -357,7 +370,6 @@ __all__ = [
     "Source",
     "TimestampKind",
     "TimestampObservation",
-    "TimestampSlot",
     "Weekday",
     "coalesce_observations",
 ]

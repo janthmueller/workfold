@@ -89,13 +89,14 @@ def test_collects_annotated_alias_and_lightweight_tags_with_honest_slots(tmp_pat
     assert annotated.tagger.raw_timestamp == "1704067200 +0545"
     assert annotated.to_origin().record_id != alias.to_origin().record_id
 
-    domain = result.to_domain_result()
-    assert len(domain.origins) == 3
-    assert len(domain.observations) == 2
-    assert all(item.record_kind is RecordKind.ANNOTATED_TAG for item in domain.origins)
-    assert all(item.kind is TimestampKind.GIT_TAGGER for item in domain.observations)
-    assert domain.observations[0].original_offset_minutes == 345
-    assert domain.observations[0].actor_name == "Tagger Person"
+    origins = tuple(item.to_origin() for item in result.tags)
+    observations = tuple(item.to_observation() for item in result.tags if item.tagger is not None)
+    assert len(origins) == 3
+    assert len(observations) == 2
+    assert all(item.record_kind is RecordKind.TAG for item in origins)
+    assert all(item.kind is TimestampKind.GIT_TAGGER for item in observations)
+    assert observations[0].original_offset_minutes == 345
+    assert observations[0].actor_name == "Tagger Person"
 
 
 def test_annotated_tag_without_tagger_is_an_unavailable_slot_not_a_fabricated_date(
@@ -132,7 +133,7 @@ def test_annotated_tag_without_tagger_is_an_unavailable_slot_not_a_fabricated_da
     assert result.tags[0].annotated
     assert result.tags[0].tagger is None
     assert result.tags[0].to_origin().target_id == commit_id
-    assert not result.to_domain_result().observations
+    assert not tuple(item.to_observation() for item in result.tags if item.tagger is not None)
 
 
 def test_aliases_share_one_batched_tag_object_read(tmp_path: Path) -> None:

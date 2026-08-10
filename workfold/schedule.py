@@ -77,6 +77,15 @@ class Schedule:
         minute_of_day = value.hour * 60 + value.minute
         return self.contains(weekday, minute_of_day)
 
+    @property
+    def bounds(self) -> tuple[int, int] | None:
+        """Return the earliest start and latest end across configured days."""
+
+        intervals = tuple(interval for day in self.intervals_by_weekday for interval in day)
+        if not intervals:
+            return None
+        return min(item.start_minute for item in intervals), max(item.end_minute for item in intervals)
+
     def __str__(self) -> str:
         clauses: list[str] = []
         day_index = 0

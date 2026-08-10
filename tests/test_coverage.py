@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from workfold.coverage import (
     Capability,
@@ -9,11 +7,6 @@ from workfold.coverage import (
     CoverageInvariantError,
     CoverageLedger,
     CoverageLedgerBuilder,
-    CoverageStatus,
-    Diagnostic,
-    DiagnosticCode,
-    DiagnosticSeverity,
-    DiagnosticStage,
     ExtractionDisposition,
     PlottingDisposition,
     RecordCoverage,
@@ -22,7 +15,6 @@ from workfold.coverage import (
     SelectionDisposition,
     TimestampCoverage,
     TimestampCoverageKey,
-    coverage_status,
 )
 from workfold.models import RecordKind, Source, TimestampKind
 
@@ -62,7 +54,6 @@ def test_ledger_builder_reconciles_all_three_phases() -> None:
     assert ledger.observations_included == 1
     assert ledger.markers_plotted == 1
     assert not ledger.has_operational_errors
-    assert coverage_status(ledger) is CoverageStatus.COMPLETE
 
 
 def test_every_record_disposition_has_a_typed_counter() -> None:
@@ -170,20 +161,7 @@ def test_timestamp_partition_rejects_cross_source_kind() -> None:
         TimestampCoverageKey(Source.FILESYSTEM, "/root", RecordKind.FILESYSTEM_ENTRY, TimestampKind.GIT_AUTHOR)
 
 
-def test_status_uses_typed_diagnostics_and_success_state() -> None:
-    ledger = _complete_builder().build()
-    diagnostic = Diagnostic(
-        DiagnosticCode.STAT_ERROR,
-        DiagnosticStage.EXTRACTION,
-        "/root",
-        DiagnosticSeverity.ERROR,
-        "permission denied",
-        Path("private"),
-        "record-id",
-    )
-    assert coverage_status(ledger, (diagnostic,)) is CoverageStatus.PARTIAL
-    assert coverage_status(ledger, any_collector_succeeded=False) is CoverageStatus.FAILED
-
+def test_capability_retains_platform_availability_context() -> None:
     capability = Capability(
         Source.FILESYSTEM,
         "/root",

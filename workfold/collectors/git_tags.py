@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from workfold.collectors.base import CollectorDiagnostic, CollectorResult
+from workfold.collectors.base import CollectorDiagnostic, DiagnosticSeverity
 from workfold.collectors.git import GitCommandError, GitRepository, GitRunner, unique_semantic_repositories
 from workfold.collectors.git_objects import (
     GitObjectParseError,
@@ -17,7 +17,6 @@ from workfold.collectors.git_objects import (
     parse_cat_file_batch,
     parse_git_signature,
 )
-from workfold.coverage import DiagnosticSeverity
 from workfold.models import RecordKind, RecordOrigin, Source, TimestampKind, TimestampObservation
 from workfold.provenance import git_tag_id
 
@@ -92,13 +91,11 @@ class CollectedGitTag:
                 self.target_id,
             ),
             source=Source.GIT,
-            record_kind=RecordKind.ANNOTATED_TAG,
+            record_kind=RecordKind.TAG,
             repository_or_root=self.repository.root,
             object_id=self.tag_object_id,
             target_id=self.target_id,
             ref_name=self.ref.ref_name,
-            author_name=self.tagger.identity.name if self.tagger is not None else None,
-            author_email=self.tagger.identity.email if self.tagger is not None else None,
             description=self.subject,
         )
 
@@ -205,15 +202,6 @@ class GitTagCollectionResult:
     @property
     def is_partial(self) -> bool:
         return bool(self.diagnostics)
-
-    def to_domain_result(self) -> CollectorResult[RecordOrigin, TimestampObservation]:
-        """Expose every tag origin and only real independent tagger dates."""
-
-        return CollectorResult(
-            origins=tuple(item.to_origin() for item in self.tags),
-            observations=tuple(item.to_observation() for item in self.tags if item.tagger is not None),
-            diagnostics=self.diagnostics,
-        )
 
 
 def parse_tag_refs(payload: bytes) -> tuple[DiscoveredGitTag, ...]:

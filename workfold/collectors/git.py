@@ -11,10 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from workfold.collectors.base import CollectorDiagnostic, CollectorResult
+from workfold.collectors.base import CollectorDiagnostic, DiagnosticSeverity
 from workfold.collectors.git_objects import GitObjectParseError, ParsedCommit, parse_cat_file_batch, parse_commit_object
 from workfold.config import RefScope
-from workfold.coverage import DiagnosticSeverity
 from workfold.iterables import batched
 from workfold.models import RecordKind, RecordOrigin, Source, TimestampKind, TimestampObservation
 from workfold.provenance import git_commit_id
@@ -388,9 +387,6 @@ class CollectedGitCommit:
             record_kind=RecordKind.COMMIT,
             repository_or_root=self.repository.root,
             commit_id=self.commit.object_id,
-            object_id=self.commit.object_id,
-            author_name=self.commit.author.identity.name,
-            author_email=self.commit.author.identity.email,
             description=self.commit.subject,
         )
 
@@ -492,27 +488,6 @@ class GitCollectionResult:
         """Whether at least one requested operation failed."""
 
         return bool(self.diagnostics)
-
-    def to_domain_result(
-        self,
-        timestamp_kinds: Sequence[TimestampKind] = (TimestampKind.GIT_AUTHOR,),
-    ) -> CollectorResult[RecordOrigin, TimestampObservation]:
-        """Adapt raw commits to the shared models without filtering their dates."""
-
-        normalized_kinds = tuple(dict.fromkeys(timestamp_kinds))
-        invalid = [
-            kind for kind in normalized_kinds if kind not in {TimestampKind.GIT_AUTHOR, TimestampKind.GIT_COMMITTER}
-        ]
-        if invalid:
-            names = ", ".join(kind.value for kind in invalid)
-            raise ValueError(f"commit records do not expose timestamp kind(s): {names}")
-        origins = tuple(item.to_origin() for item in self.commits)
-        observations = tuple(item.to_observation(kind) for item in self.commits for kind in normalized_kinds)
-        return CollectorResult(
-            origins=origins,
-            observations=observations,
-            diagnostics=self.diagnostics,
-        )
 
 
 def _decode_path(value: bytes) -> Path:

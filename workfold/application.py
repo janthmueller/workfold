@@ -6,15 +6,14 @@ import os
 import shutil
 import sys
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import TextIO, TypeVar
 from zoneinfo import ZoneInfo
 
-from workfold.aggregation import Aggregation, AggregationBuilder
-from workfold.collectors.base import CollectorDiagnostic
+from workfold.collectors.base import CollectorDiagnostic, DiagnosticSeverity
 from workfold.collectors.filesystem import FilesystemCollectionResult, FilesystemCollector
 from workfold.collectors.git import (
     CollectedGitCommit,
@@ -27,6 +26,7 @@ from workfold.collectors.git_changes import (
     CollectedGitFileChange,
     GitFileChangeCollectionResult,
     GitFileChangeCollector,
+    GitFileChangeRepositoryAccounting,
 )
 from workfold.collectors.git_reflogs import (
     CollectedGitReflog,
@@ -47,7 +47,6 @@ from workfold.coverage import (
     CapabilityStatus,
     CoverageLedger,
     CoverageLedgerBuilder,
-    DiagnosticSeverity,
     ExtractionDisposition,
     PlottingDisposition,
     RecordCoverageKey,
@@ -55,17 +54,12 @@ from workfold.coverage import (
     SelectionDisposition,
     TimestampCoverageKey,
 )
-from workfold.models import (
-    RecordKind,
-    Source,
-    TimestampKind,
-    TimestampObservation,
-    coalesce_observations,
-)
+from workfold.models import RecordKind, Source, TimestampKind
+from workfold.pipeline import ActivityPipeline, ObservationConsumer, PlottingCountKey, SelectionCountKey
 from workfold.renderers.terminal import TerminalOptions, render_terminal, terminal_color_enabled
 from workfold.reports import COMPLETE_COVERAGE_STATUS, ReportContext, build_report
 from workfold.sanitization import sanitize_terminal_text
-from workfold.schedule import Schedule, classify_marker, parse_schedule
+from workfold.schedule import Schedule, parse_schedule
 from workfold.time_ranges import (
     InstantRangeUnion,
     TimeRangeError,
@@ -93,82 +87,6 @@ class _Collection:
     reflog_result: GitReflogCollectionResult | None = None
     filesystem_result: FilesystemCollectionResult | None = None
     repository_resolution: GitRepositoryResolutionResult | None = None
-
-
-_ObservationConsumer = Callable[[Sequence[TimestampObservation]], None]
-_SelectionCountKey = tuple[TimestampCoverageKey, SelectionDisposition]
-_PlottingCountKey = tuple[TimestampCoverageKey, PlottingDisposition]
-
-
-class _ActivityPipeline:
-    """Consume record-local observation batches into coverage and chart state."""
-
-    def __init__(
-        self,
-        *,
-        selected_range: InstantRangeUnion,
-        identity_filters: tuple[str, ...],
-        timezone_value: ZoneInfo,
-        schedule: Schedule,
-        cluster_window: timedelta,
-        display_range: tuple[int, int] | None,
-        outside_limit: int,
-    ) -> None:
-        self._selected_range = selected_range
-        self._identity_filters = tuple(value.casefold() for value in identity_filters)
-        self._timezone = timezone_value
-        self._schedule = schedule
-        self._selection_counts: Counter[_SelectionCountKey] = Counter()
-        self._plotting_counts: Counter[_PlottingCountKey] = Counter()
-        self._aggregation = AggregationBuilder(
-            cluster_window=cluster_window,
-            display_range=display_range,
-            outside_limit=outside_limit,
-        )
-
-    @property
-    def selection_counts(self) -> Mapping[_SelectionCountKey, int]:
-        return self._selection_counts
-
-    @property
-    def plotting_counts(self) -> Mapping[_PlottingCountKey, int]:
-        return self._plotting_counts
-
-    def consume(self, observations: Sequence[TimestampObservation]) -> None:
-        """Process one source record's observations and release their provenance."""
-
-        batch = tuple(observations)
-        if not batch:
-            return
-        origin_id = batch[0].origin.record_id
-        if any(item.origin.record_id != origin_id for item in batch):
-            raise RuntimeError("an observation batch must belong to one source record")
-        if len({item.observation_id for item in batch}) != len(batch):
-            raise RuntimeError("an observation batch contains duplicate identities")
-
-        included: list[TimestampObservation] = []
-        for observation in batch:
-            if not self._selected_range.contains(observation.instant_utc_ns):
-                disposition = SelectionDisposition.OUTSIDE_DATE
-            elif (
-                self._identity_filters
-                and observation.kind.source is Source.GIT
-                and not _matches_git_identity(observation, self._identity_filters)
-            ):
-                disposition = SelectionDisposition.IDENTITY_FILTERED
-            else:
-                disposition = SelectionDisposition.INCLUDED
-                included.append(observation)
-            self._selection_counts[(_observation_coverage_key(observation), disposition)] += 1
-
-        for marker in coalesce_observations(included):
-            for index, observation in enumerate(marker.observations):
-                plotting = PlottingDisposition.MARKER if index == 0 else PlottingDisposition.COALESCED_INTO_MARKER
-                self._plotting_counts[(_observation_coverage_key(observation), plotting)] += 1
-            self._aggregation.add(classify_marker(marker, self._timezone, self._schedule))
-
-    def build(self) -> Aggregation:
-        return self._aggregation.build()
 
 
 def run(
@@ -201,7 +119,7 @@ def run(
         if options.display_hours is not None
         else None
     )
-    pipeline = _ActivityPipeline(
+    pipeline = ActivityPipeline(
         selected_range=selected_range,
         identity_filters=options.git_identities,
         timezone_value=timezone_value,
@@ -277,7 +195,7 @@ def run(
 def _collect(
     options: RawOptions,
     *,
-    observation_consumer: _ObservationConsumer,
+    observation_consumer: ObservationConsumer,
     git_collector: GitCollector | None,
     repository_resolver: GitRepositoryResolver | None,
     file_change_collector: GitFileChangeCollector | None,
@@ -402,6 +320,21 @@ def _merge_file_change_results(
 ) -> GitFileChangeCollectionResult:
     """Merge bounded Git derivation batches without reconstructing records."""
 
+    accounting_by_repository: dict[str, GitFileChangeRepositoryAccounting] = {}
+    for result in results:
+        for item in result.repository_accounting:
+            existing = accounting_by_repository.get(item.repository.identity)
+            if existing is None:
+                accounting_by_repository[item.repository.identity] = item
+            else:
+                accounting_by_repository[item.repository.identity] = GitFileChangeRepositoryAccounting(
+                    repository=existing.repository,
+                    requested_commits=existing.requested_commits + item.requested_commits,
+                    successful_commits=existing.successful_commits + item.successful_commits,
+                    parse_errors=existing.parse_errors + item.parse_errors,
+                    subprocess_errors=existing.subprocess_errors + item.subprocess_errors,
+                    discovered_changes=existing.discovered_changes + item.discovered_changes,
+                )
     return GitFileChangeCollectionResult(
         changes=tuple(change for result in results for change in result.changes),
         diagnostics=tuple(diagnostic for result in results for diagnostic in result.diagnostics),
@@ -410,7 +343,7 @@ def _merge_file_change_results(
         discovered_changes=sum(result.discovered_changes for result in results),
         parse_errors=sum(result.parse_errors for result in results),
         subprocess_errors=sum(result.subprocess_errors for result in results),
-        repository_accounting=tuple(accounting for result in results for accounting in result.repository_accounting),
+        repository_accounting=tuple(accounting_by_repository.values()),
         records_retained=all(result.records_retained for result in results),
     )
 
@@ -469,29 +402,12 @@ def _filesystem_timestamp_kinds(values: tuple[FilesystemTime, ...]) -> tuple[Tim
     return tuple(mapping[value] for value in values)
 
 
-def _observation_coverage_key(observation: TimestampObservation) -> TimestampCoverageKey:
-    origin = observation.origin
-    return TimestampCoverageKey(
-        origin.source,
-        os.fspath(origin.repository_or_root),
-        origin.record_kind,
-        observation.kind,
-    )
-
-
-def _matches_git_identity(observation: TimestampObservation, filters: tuple[str, ...]) -> bool:
-    haystacks = tuple(
-        value.casefold() for value in (observation.actor_name, observation.actor_email) if value is not None
-    )
-    return any(needle in haystack for needle in filters for haystack in haystacks)
-
-
 def _build_coverage(
     collection: _Collection,
     options: RawOptions,
     *,
-    selection: Mapping[_SelectionCountKey, int],
-    plotting: Mapping[_PlottingCountKey, int],
+    selection: Mapping[SelectionCountKey, int],
+    plotting: Mapping[PlottingCountKey, int],
 ) -> CoverageLedger:
     ledgers: list[CoverageLedger] = []
     timestamp_kinds = _git_timestamp_kinds(options.git_date)
@@ -577,7 +493,7 @@ def _build_coverage(
                 ledgers.append(
                     _build_partition_coverage(
                         target=target,
-                        record_kind=RecordKind.ANNOTATED_TAG,
+                        record_kind=RecordKind.TAG,
                         discovered=accounting.discovered_tags,
                         eligible=accounting.captured_tags,
                         record_errors=accounting.record_errors,
@@ -596,7 +512,7 @@ def _build_coverage(
             ledgers.append(
                 _build_partition_coverage(
                     target=_GIT_COVERAGE_TARGET,
-                    record_kind=RecordKind.ANNOTATED_TAG,
+                    record_kind=RecordKind.TAG,
                     discovered=result.discovered_tags,
                     eligible=len(result.tags),
                     record_errors=result.discovered_tags - len(result.tags),
@@ -661,8 +577,8 @@ def _build_partition_coverage(
     timestamp_kinds: tuple[TimestampKind, ...],
     captured: Mapping[TimestampKind, int],
     unavailable: Mapping[TimestampKind, int],
-    selection: Mapping[_SelectionCountKey, int],
-    plotting: Mapping[_PlottingCountKey, int],
+    selection: Mapping[SelectionCountKey, int],
+    plotting: Mapping[PlottingCountKey, int],
 ) -> CoverageLedger:
     if discovered != eligible + record_errors:
         raise RuntimeError(f"{record_kind.value} record accounting does not reconcile")
@@ -799,7 +715,7 @@ def _enabled_record_kinds(options: RawOptions) -> tuple[RecordKind, ...]:
         if options.git_records.includes_commits and options.git_mode.includes_file_changes:
             kinds.append(RecordKind.GIT_FILE_CHANGE)
         if options.git_records.includes_tags:
-            kinds.append(RecordKind.ANNOTATED_TAG)
+            kinds.append(RecordKind.TAG)
         if options.git_records.includes_reflogs:
             kinds.append(RecordKind.REFLOG)
     if options.source.includes_filesystem:
@@ -1075,7 +991,7 @@ def _coverage_scope_details(options: RawOptions) -> tuple[str, ...]:
     record_names = {
         RecordKind.COMMIT: "commits",
         RecordKind.GIT_FILE_CHANGE: "file changes",
-        RecordKind.ANNOTATED_TAG: "tags",
+        RecordKind.TAG: "tags",
         RecordKind.REFLOG: "reflogs",
         RecordKind.FILESYSTEM_ENTRY: "filesystem entries",
     }
@@ -1112,7 +1028,7 @@ def _record_label(kind: RecordKind) -> str:
     return {
         RecordKind.COMMIT: "Git commits",
         RecordKind.GIT_FILE_CHANGE: "Git file changes",
-        RecordKind.ANNOTATED_TAG: "Git tags",
+        RecordKind.TAG: "Git tags",
         RecordKind.REFLOG: "Git reflog entries",
         RecordKind.FILESYSTEM_ENTRY: "filesystem entries",
     }[kind]

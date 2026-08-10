@@ -122,14 +122,15 @@ def test_collects_all_available_namespaces_with_exact_raw_provenance(tmp_path: P
     assert oldest.raw_timestamp == "1701000000 +0545"
     assert oldest.raw_selector == "refs/custom/activity@{1}"
 
-    domain = result.to_domain_result()
-    assert len(domain.origins) == len(result.entries)
-    assert len(domain.observations) == len(result.entries)
-    assert all(item.record_kind is RecordKind.REFLOG for item in domain.origins)
-    assert all(item.kind is TimestampKind.GIT_REFLOG for item in domain.observations)
+    origins = tuple(item.to_origin() for item in result.entries)
+    observations = tuple(item.to_observation() for item in result.entries)
+    assert len(origins) == len(result.entries)
+    assert len(observations) == len(result.entries)
+    assert all(item.record_kind is RecordKind.REFLOG for item in origins)
+    assert all(item.kind is TimestampKind.GIT_REFLOG for item in observations)
     custom_observation = next(
         item
-        for item in domain.observations
+        for item in observations
         if item.origin.ref_name == "refs/custom/activity" and item.raw_timestamp.endswith("-0230")
     )
     assert custom_observation.original_offset_minutes == -150

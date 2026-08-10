@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from workfold.collectors.base import DiagnosticSeverity
 from workfold.collectors.filesystem import (
     CollectedFilesystemEntry,
     FilesystemAccounting,
@@ -27,7 +28,6 @@ from workfold.collectors.ignores import (
 )
 from workfold.coverage import (
     CapabilityStatus,
-    DiagnosticSeverity,
     ExtractionDisposition,
     PlottingDisposition,
     RecordCoverage,
@@ -660,8 +660,6 @@ def test_coverage_adapter_requires_complete_selection_and_plotting_maps(tmp_path
     assert ledger.timestamps[0].included == 1
     assert ledger.timestamps[0].outside_date == 1
     assert ledger.timestamps[0].markers == 1
-    assert result.to_domain_result().observations == result.observations
-
     with pytest.raises(ValueError, match="selection map"):
         result.build_coverage({}, {})
     with pytest.raises(ValueError, match="selection map"):

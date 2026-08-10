@@ -20,7 +20,7 @@ from workfold.collectors.git import (
     parse_commit_ids,
     resolve_repository,
 )
-from workfold.models import TimestampKind
+from workfold.models import RecordKind, TimestampKind
 
 from support.git_repo import GitRepo
 
@@ -161,18 +161,19 @@ def test_collector_resolves_whole_repository_and_preserves_raw_dates(tmp_path: P
     with pytest.raises(FrozenInstanceError):
         setattr(accounting, "captured_commits", 2)
 
-    domain = result.to_domain_result((TimestampKind.GIT_AUTHOR, TimestampKind.GIT_COMMITTER))
-    assert len(domain.origins) == 1
-    assert [item.kind for item in domain.observations] == [
+    origin = result.commits[0].to_origin()
+    observations = tuple(
+        result.commits[0].to_observation(kind) for kind in (TimestampKind.GIT_AUTHOR, TimestampKind.GIT_COMMITTER)
+    )
+    assert origin.record_kind is RecordKind.COMMIT
+    assert [item.kind for item in observations] == [
         TimestampKind.GIT_AUTHOR,
         TimestampKind.GIT_COMMITTER,
     ]
-    assert domain.observations[0].instant_utc_ns == 1_704_067_200_000_000_000
-    assert domain.observations[0].raw_timestamp == "1704067200 +0530"
-    assert domain.observations[0].original_offset_minutes == 330
-    assert domain.observations[1].actor_name == "Fixture Committer"
-    with pytest.raises(ValueError, match="do not expose"):
-        result.to_domain_result((TimestampKind.GIT_TAGGER,))
+    assert observations[0].instant_utc_ns == 1_704_067_200_000_000_000
+    assert observations[0].raw_timestamp == "1704067200 +0530"
+    assert observations[0].original_offset_minutes == 330
+    assert observations[1].actor_name == "Fixture Committer"
     with pytest.raises(ValueError, match="only Git author"):
         result.commits[0].to_observation(TimestampKind.GIT_REFLOG)
 

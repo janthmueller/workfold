@@ -101,21 +101,24 @@ def test_collects_root_modify_delete_and_rename_as_separate_records(tmp_path: Pa
     }
     assert by_commit[root][0].diff_basis == "empty-tree"
 
-    domain = result.to_domain_result((TimestampKind.GIT_AUTHOR, TimestampKind.GIT_COMMITTER))
-    assert len(domain.origins) == 5
-    assert len(domain.observations) == 10
-    assert all(item.record_kind is RecordKind.GIT_FILE_CHANGE for item in domain.origins)
-    rename_origin = next(item for item in domain.origins if item.commit_id == renamed)
+    origins = tuple(item.to_origin() for item in result.changes)
+    observations = tuple(
+        item.to_observation(kind)
+        for item in result.changes
+        for kind in (TimestampKind.GIT_AUTHOR, TimestampKind.GIT_COMMITTER)
+    )
+    assert len(origins) == 5
+    assert len(observations) == 10
+    assert all(item.record_kind is RecordKind.GIT_FILE_CHANGE for item in origins)
+    rename_origin = next(item for item in origins if item.commit_id == renamed)
     assert rename_origin.path == Path("renamed.txt")
     assert rename_origin.old_path == Path("old.txt")
     assert rename_origin.diff_basis == modified
-    rename_observations = [item for item in domain.observations if item.origin.commit_id == renamed]
+    rename_observations = [item for item in observations if item.origin.commit_id == renamed]
     assert [item.raw_timestamp for item in rename_observations] == [
         "1700000200 +0530",
         "1700000201 -0230",
     ]
-    with pytest.raises(ValueError, match="do not expose"):
-        result.to_domain_result((TimestampKind.GIT_TAGGER,))
     with pytest.raises(ValueError, match="support only"):
         rename_change.to_observation(TimestampKind.GIT_TAGGER)
 

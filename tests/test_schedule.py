@@ -28,6 +28,9 @@ def _marker(value: datetime) -> ActivityMarker:
         TimestampKind.GIT_AUTHOR,
         datetime_to_utc_ns(value),
         value.isoformat(),
+        original_offset_minutes=0,
+        actor_name="Fixture",
+        actor_email="fixture@example.test",
     )
     return ActivityMarker.create((observation,))
 
@@ -35,8 +38,15 @@ def _marker(value: datetime) -> ActivityMarker:
 def test_default_schedule_has_weekday_hours_and_empty_weekend() -> None:
     schedule = default_schedule()
     assert str(schedule) == "Mo-Fr 08:00-16:30"
+    assert schedule.bounds == (480, 990)
     assert schedule.intervals_for(Weekday.MONDAY) == (TimeInterval(480, 990),)
     assert schedule.intervals_for(Weekday.SATURDAY) == ()
+
+
+def test_empty_schedule_has_no_display_bounds() -> None:
+    schedule = Schedule(tuple(() for _weekday in Weekday))
+
+    assert schedule.bounds is None
 
 
 def test_parser_accepts_case_insensitive_days_and_normalizes_interval_unions() -> None:

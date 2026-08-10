@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from enum import Enum
 
-from workfold.coverage import DiagnosticSeverity
+
+class DiagnosticSeverity(str, Enum):
+    """Machine-readable operational severity independent of rendered text."""
+
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,14 +34,4 @@ class CollectorDiagnostic:
     hint: str | None = None
 
 
-OriginT = TypeVar("OriginT")
-ObservationT = TypeVar("ObservationT")
-
-
-@dataclass(frozen=True, slots=True)
-class CollectorResult(Generic[OriginT, ObservationT]):
-    """Neutral collector result used by orchestration adapters."""
-
-    origins: tuple[OriginT, ...] = ()
-    observations: tuple[ObservationT, ...] = ()
-    diagnostics: tuple[CollectorDiagnostic, ...] = ()
+__all__ = ["CollectorDiagnostic", "DiagnosticSeverity"]

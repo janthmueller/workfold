@@ -44,7 +44,15 @@ def _classified(
         path=Path(identifier) if source is Source.FILESYSTEM else None,
     )
     instant_ns = datetime_to_utc_ns(local_datetime) + submicrosecond_ns
-    observation = TimestampObservation.create(origin, timestamp_kind, instant_ns, str(instant_ns))
+    observation = TimestampObservation.create(
+        origin,
+        timestamp_kind,
+        instant_ns,
+        str(instant_ns),
+        original_offset_minutes=0 if source is Source.GIT else None,
+        actor_name="Fixture" if source is Source.GIT else None,
+        actor_email="fixture@example.test" if source is Source.GIT else None,
+    )
     marker = ActivityMarker.create((observation,))
     return ClassifiedMarker(marker=marker, local_datetime=local_datetime, within_schedule=within_schedule)
 

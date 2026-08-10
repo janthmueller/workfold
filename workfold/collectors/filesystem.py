@@ -18,7 +18,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from workfold.collectors.base import CollectorDiagnostic, CollectorResult, DiagnosticSeverity
+from workfold.collectors.base import CollectorDiagnostic, DiagnosticSeverity
 from workfold.collectors.filesystem_times import FilesystemTimestampAdapter
 from workfold.collectors.ignores import (
     ExplicitExcluder,
@@ -232,11 +232,6 @@ class FilesystemCollectionResult:
         """Return whether an operational error prevented complete collection."""
 
         return any(item.severity is DiagnosticSeverity.ERROR for item in self.diagnostics)
-
-    def to_domain_result(self) -> CollectorResult[RecordOrigin, TimestampObservation]:
-        """Return the collector-neutral representation used by orchestration."""
-
-        return CollectorResult(self.origins, self.observations, self.diagnostics)
 
     def build_coverage(
         self,
