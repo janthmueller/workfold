@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 from collections.abc import Collection, Sequence
@@ -164,7 +165,12 @@ def test_paths_are_nul_safe_and_preserve_undecodable_bytes(tmp_path: Path) -> No
     repo = GitRepo.create(tmp_path / "bytes")
     raw_name = b"tab\tline\ninvalid-\xff.txt"
     raw_repo = os.fsencode(repo.path)
-    descriptor = os.open(os.path.join(raw_repo, raw_name), os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        descriptor = os.open(os.path.join(raw_repo, raw_name), os.O_WRONLY | os.O_CREAT, 0o600)
+    except OSError as error:
+        if error.errno == errno.EILSEQ:
+            pytest.skip("the filesystem rejects arbitrary undecodable filename bytes")
+        raise
     try:
         os.write(descriptor, b"content")
     finally:

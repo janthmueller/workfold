@@ -6,7 +6,7 @@ import os
 import re
 import sys
 from collections.abc import Mapping, Sequence
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import cast
 
 if sys.version_info >= (3, 11):
@@ -153,7 +153,7 @@ def global_config_path(*, environ: Mapping[str, str], platform_name: str) -> Pat
     else:
         configured = environ.get("XDG_CONFIG_HOME", "")
         candidate = Path(configured) if configured else None
-        base = candidate if candidate is not None and candidate.is_absolute() else home / ".config"
+        base = candidate if candidate is not None and PurePosixPath(configured).is_absolute() else home / ".config"
     return base / "workfold" / "workfold.toml"
 
 

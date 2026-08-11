@@ -73,6 +73,7 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     help_text = parser.format_help()
     normalized_help = " ".join(help_text.split())
     public_options = {option for action in parser._actions for option in action.option_strings}
+    actions_by_option = {option: action for action in parser._actions for option in action.option_strings}
 
     assert {
         "--config",
@@ -101,8 +102,10 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     assert "--git-identity VALUE" in normalized_help
     assert "--marker-style {source,identity}" in normalized_help
     assert "--grid {none,vertical,horizontal,both}" in normalized_help
-    assert "-H SCOPE, --hide-days SCOPE" in normalized_help
-    assert "-E SCOPE, --hide-empty-days SCOPE" in normalized_help
+    assert actions_by_option["-H"] is actions_by_option["--hide-days"]
+    assert actions_by_option["-H"].metavar == "SCOPE"
+    assert actions_by_option["-E"] is actions_by_option["--hide-empty-days"]
+    assert actions_by_option["-E"].metavar == "SCOPE"
     assert "author, committer, tagger, or reflog identity" in normalized_help
     assert "--fs-times KINDS" in help_text
     assert "--fs-entries KINDS" in help_text
