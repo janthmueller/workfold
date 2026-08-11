@@ -1,2 +1,3 @@
 recursive-include tests *.py
+include .github/scripts/sync_lock_version.py
 include THIRD_PARTY_NOTICES.md

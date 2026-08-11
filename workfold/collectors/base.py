@@ -19,6 +19,34 @@ class DiagnosticSeverity(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class DiagnosticOccurrences:
+    """Exact severity/completeness counts represented by one diagnostic."""
+
+    errors: int = 0
+    warnings: int = 0
+    infos: int = 0
+    completeness_failures: int = 0
+
+    def __post_init__(self) -> None:
+        values = (self.errors, self.warnings, self.infos, self.completeness_failures)
+        if any(value < 0 for value in values):
+            raise ValueError("diagnostic occurrence counts must be non-negative")
+        if self.completeness_failures > self.total:
+            raise ValueError("completeness failures cannot exceed diagnostic occurrences")
+
+    @property
+    def total(self) -> int:
+        return self.errors + self.warnings + self.infos
+
+    def count(self, severity: DiagnosticSeverity) -> int:
+        return {
+            DiagnosticSeverity.ERROR: self.errors,
+            DiagnosticSeverity.WARNING: self.warnings,
+            DiagnosticSeverity.INFO: self.infos,
+        }[severity]
+
+
+@dataclass(frozen=True, slots=True)
 class CollectorDiagnostic:
     """A structured collector failure or limitation.
 
@@ -41,6 +69,26 @@ class CollectorDiagnostic:
     provenance_id: str | None = None
     hint: str | None = None
     affects_completeness: bool = False
+    represented_occurrences: DiagnosticOccurrences | None = None
+
+    def __post_init__(self) -> None:
+        if self.represented_occurrences is not None and self.represented_occurrences.total < 1:
+            raise ValueError("a diagnostic must represent at least one occurrence")
+
+    def occurrence_count(self, severity: DiagnosticSeverity) -> int:
+        """Return exact occurrences of one severity represented by this row."""
+
+        if self.represented_occurrences is not None:
+            return self.represented_occurrences.count(severity)
+        return int(self.severity is severity)
+
+    @property
+    def completeness_failure_count(self) -> int:
+        """Return exact completeness-affecting occurrences represented here."""
+
+        if self.represented_occurrences is not None:
+            return self.represented_occurrences.completeness_failures
+        return int(self.affects_completeness)
 
 
 class DiagnosticBuffer(list[CollectorDiagnostic]):
@@ -60,9 +108,15 @@ class DiagnosticBuffer(list[CollectorDiagnostic]):
         if len(self) < self._limit:
             super().append(diagnostic)
             return
-        self._omitted += 1
-        self._omitted_by_severity[diagnostic.severity] += 1
-        self._omitted_completeness_failures += diagnostic.affects_completeness
+        represented = diagnostic.represented_occurrences
+        if represented is None:
+            self._omitted += 1
+            self._omitted_by_severity[diagnostic.severity] += 1
+        else:
+            self._omitted += represented.total
+            for severity in DiagnosticSeverity:
+                self._omitted_by_severity[severity] += represented.count(severity)
+        self._omitted_completeness_failures += diagnostic.completeness_failure_count
         if self._first_omitted_target is None:
             self._first_omitted_target = diagnostic.target
 
@@ -75,7 +129,7 @@ class DiagnosticBuffer(list[CollectorDiagnostic]):
         """Return retained and omitted error diagnostics."""
 
         return (
-            sum(item.severity is DiagnosticSeverity.ERROR for item in self)
+            sum(item.occurrence_count(DiagnosticSeverity.ERROR) for item in self)
             + self._omitted_by_severity[DiagnosticSeverity.ERROR]
         )
 
@@ -101,8 +155,19 @@ class DiagnosticBuffer(list[CollectorDiagnostic]):
             ),
             hint="Use narrower paths or repair the first reported failures before retrying.",
             affects_completeness=bool(self._omitted_completeness_failures),
+            represented_occurrences=DiagnosticOccurrences(
+                errors=errors,
+                warnings=warnings,
+                infos=infos,
+                completeness_failures=self._omitted_completeness_failures,
+            ),
         )
         return (*self, summary)
 
 
-__all__ = ["CollectorDiagnostic", "DiagnosticBuffer", "DiagnosticSeverity"]
+__all__ = [
+    "CollectorDiagnostic",
+    "DiagnosticBuffer",
+    "DiagnosticOccurrences",
+    "DiagnosticSeverity",
+]

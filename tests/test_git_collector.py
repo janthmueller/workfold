@@ -209,7 +209,7 @@ def test_repository_only_resolution_deduplicates_without_traversing_history(tmp_
 
     class RecordingRunner(GitRunner):
         def __init__(self) -> None:
-            super().__init__()
+            super().__init__(stream_output=False)
             self.commands: list[str] = []
 
         def run(
@@ -272,6 +272,44 @@ def test_linked_worktree_contexts_are_retained_but_shared_history_is_collected_o
     assert result.discovered_commit_ids == 1
     assert len(result.repository_accounting) == 1
     assert result.repository_accounting[0].repository.root == primary.path.resolve()
+
+
+def test_selected_linked_worktree_heads_are_unioned_before_shared_history_deduplication(
+    tmp_path: Path,
+) -> None:
+    primary = GitRepo.create(tmp_path / "primary")
+    root = primary.commit(
+        "root.txt",
+        "root",
+        "root",
+        author_date="1700000000 +0000",
+        committer_date="1700000000 +0000",
+    )
+    linked_path = tmp_path / "linked"
+    primary.run("worktree", "add", "-b", "linked", str(linked_path))
+    linked = GitRepo(linked_path, branch="linked")
+    linked_only = linked.commit(
+        "linked.txt",
+        "linked",
+        "linked only",
+        author_date="1700000100 +0000",
+        committer_date="1700000100 +0000",
+    )
+    linked.detach(linked_only)
+    primary.run("branch", "-D", "linked")
+
+    primary_only = GitCollector().collect((primary.path,), ref_scope=RefScope.HEAD)
+    selected_heads = GitCollector().collect((primary.path, linked_path), ref_scope=RefScope.HEAD)
+    selected_branches = GitCollector().collect(
+        (primary.path, linked_path),
+        ref_scope=RefScope.LOCAL_BRANCHES,
+    )
+
+    assert {item.commit.object_id for item in primary_only.commits} == {root}
+    assert {item.commit.object_id for item in selected_heads.commits} == {root, linked_only}
+    assert {item.commit.object_id for item in selected_branches.commits} == {root, linked_only}
+    assert selected_heads.discovered_commit_ids == 2
+    assert len(selected_heads.repository_accounting) == 1
 
 
 def test_commit_repository_accounting_rejects_invalid_partitions(tmp_path: Path) -> None:
@@ -477,7 +515,7 @@ def test_collector_never_adds_date_pruning_to_git_traversal(tmp_path: Path) -> N
 
     class RecordingRunner(GitRunner):
         def __init__(self) -> None:
-            super().__init__()
+            super().__init__(stream_output=False)
             self.arguments: list[tuple[str, ...]] = []
 
         def run(
@@ -658,7 +696,7 @@ def test_collector_accounts_for_discovery_and_object_failures(
                 output = f"{object_id} commit {len(malformed)}\n".encode() + malformed + b"\n"
             return subprocess.CompletedProcess(arguments, 0, stdout=output, stderr=b"")
 
-    result = GitCollector(FaultRunner()).collect((repo.path,))
+    result = GitCollector(FaultRunner(stream_output=False)).collect((repo.path,))
 
     assert [item.code for item in result.diagnostics] == [expected_code]
     assert not result.commits

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import argparse
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import Enum, IntFlag
 from pathlib import Path
+
+from workfold.models import Weekday
 
 
 class UsageError(ValueError):
@@ -33,6 +34,30 @@ class CollectionProfile(str, Enum):
     STANDARD = "standard"
     PORTABLE = "portable"
     FULL = "full"
+
+
+class MarkerStyle(str, Enum):
+    SOURCE = "source"
+    IDENTITY = "identity"
+
+
+class GridStyle(str, Enum):
+    NONE = "none"
+    VERTICAL = "vertical"
+    HORIZONTAL = "horizontal"
+    BOTH = "both"
+
+    @property
+    def has_vertical_lines(self) -> bool:
+        """Return whether weekday columns have vertical separators."""
+
+        return self in {GridStyle.VERTICAL, GridStyle.BOTH}
+
+    @property
+    def has_horizontal_lines(self) -> bool:
+        """Return whether logical time clusters have horizontal separators."""
+
+        return self in {GridStyle.HORIZONTAL, GridStyle.BOTH}
 
 
 class GitMode(str, Enum):
@@ -104,6 +129,20 @@ class DisplayHours:
 
 
 @dataclass(frozen=True, slots=True)
+class RollingDuration:
+    """A fixed elapsed duration selected relative to one captured clock value."""
+
+    duration: timedelta
+    label: str
+
+    def __post_init__(self) -> None:
+        if self.duration <= timedelta(0):
+            raise ValueError("a rolling duration must be positive")
+        if not self.label:
+            raise ValueError("a rolling duration label must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
 class RawOptions:
     """Validated CLI values before environment/timezone resolution."""
 
@@ -112,6 +151,7 @@ class RawOptions:
     from_date: date | None
     to_date: date | None
     all_dates: bool
+    rolling_duration: RollingDuration | None
     profile: CollectionProfile
     source: SourceMode
     git_mode: GitMode
@@ -127,7 +167,11 @@ class RawOptions:
     hours: str
     timezone_name: str | None
     cluster_window: timedelta
+    marker_style: MarkerStyle
+    grid_style: GridStyle
     display_hours: DisplayHours | None
+    hide_days: tuple[Weekday, ...]
+    hide_empty_days: tuple[Weekday, ...]
     no_color: bool
     list_outside: bool
     limit: int
@@ -136,12 +180,78 @@ class RawOptions:
     verbose: bool
 
 
+@dataclass(frozen=True, slots=True)
+class UnresolvedOptions:
+    """Typed, presentation-agnostic inputs awaiting domain validation."""
+
+    paths: tuple[Path, ...]
+    time_selectors: tuple[str, ...]
+    modes: tuple[str, ...]
+    profiles: tuple[str, ...]
+    git_records: str | None
+    commit_times: str | None
+    commits_from: str | None
+    git_identities: tuple[str, ...]
+    filesystem_times: str | None
+    filesystem_entries: str | None
+    include_ignored: bool
+    exclusions: tuple[str, ...]
+    hours: str
+    timezone_name: str | None
+    cluster_window: str
+    marker_style: str
+    grid_style: str
+    display_hours: str | None
+    hide_days: tuple[str, ...]
+    hide_empty_days: tuple[str, ...]
+    no_color: bool
+    list_outside: bool
+    limit: int
+    coverage: bool
+    strict: bool
+    verbose: bool
+    explicit_names: frozenset[str] = frozenset()
+
+
 _ISO_WEEK = re.compile(r"^(?P<year>[0-9]{4})-W(?P<week>[0-9]{2})$")
 _TIME = re.compile(r"^(?P<hour>[0-9]{2}):(?P<minute>[0-9]{2})$")
 _DURATION_PART = re.compile(r"(?P<amount>[0-9]+)(?P<unit>[hms])")
+_ROLLING_DURATION_PART = re.compile(r"(?P<amount>[0-9]+)(?P<unit>[wdhm])")
 DEFAULT_HOURS = "Mo-Fr 08:00-16:30"
 DEFAULT_CLUSTER_WINDOW = timedelta(hours=1)
 _MAX_CLUSTER_WINDOW = timedelta(days=1)
+_WEEKDAY_ALIASES: dict[str, Weekday] = {
+    "mo": Weekday.MONDAY,
+    "mon": Weekday.MONDAY,
+    "monday": Weekday.MONDAY,
+    "tu": Weekday.TUESDAY,
+    "tue": Weekday.TUESDAY,
+    "tuesday": Weekday.TUESDAY,
+    "we": Weekday.WEDNESDAY,
+    "wed": Weekday.WEDNESDAY,
+    "wednesday": Weekday.WEDNESDAY,
+    "th": Weekday.THURSDAY,
+    "thu": Weekday.THURSDAY,
+    "thursday": Weekday.THURSDAY,
+    "fr": Weekday.FRIDAY,
+    "fri": Weekday.FRIDAY,
+    "friday": Weekday.FRIDAY,
+    "sa": Weekday.SATURDAY,
+    "sat": Weekday.SATURDAY,
+    "saturday": Weekday.SATURDAY,
+    "su": Weekday.SUNDAY,
+    "sun": Weekday.SUNDAY,
+    "sunday": Weekday.SUNDAY,
+}
+_WEEKDAYS = tuple(day for day in Weekday if not day.is_weekend)
+_WEEKEND = tuple(day for day in Weekday if day.is_weekend)
+_WEEKDAY_SCOPES = {
+    "weekday": _WEEKDAYS,
+    "weekdays": _WEEKDAYS,
+    "weekend": _WEEKEND,
+    "weekends": _WEEKEND,
+    "all": tuple(Weekday),
+}
 
 
 def _parse_date(value: str, option: str) -> date:
@@ -170,7 +280,7 @@ def validate_iso_week(value: str) -> str:
 
 def parse_time_selectors(
     values: Sequence[str],
-) -> tuple[tuple[str, ...], date | None, date | None, bool]:
+) -> tuple[tuple[str, ...], date | None, date | None, bool, RollingDuration | None]:
     """Resolve public time selectors into the application's date-range fields."""
     selectors = tuple(values)
     if not selectors:
@@ -179,15 +289,15 @@ def parse_time_selectors(
         if any(_ISO_WEEK.fullmatch(value) is None for value in selectors):
             raise UsageError("--time may be repeated only to form a union of ISO weeks")
         weeks = tuple(dict.fromkeys(validate_iso_week(value) for value in selectors))
-        return weeks, None, None, False
+        return weeks, None, None, False, None
 
     selector = next(iter(selectors))
     if selector == "this-week":
-        return (), None, None, False
+        return (), None, None, False, None
     if selector == "all":
-        return (), None, None, True
+        return (), None, None, True, None
     if _ISO_WEEK.fullmatch(selector) is not None:
-        return (validate_iso_week(selector),), None, None, False
+        return (validate_iso_week(selector),), None, None, False, None
     if selector.count("..") == 1:
         start_text, end_text = selector.split("..", maxsplit=1)
         if not start_text and not end_text:
@@ -196,10 +306,30 @@ def parse_time_selectors(
         to_date = _parse_date(end_text, "--time range end") if end_text else None
         if from_date is not None and to_date is not None and from_date > to_date:
             raise UsageError("--time range start cannot be after its end")
-        return (), from_date, to_date, False
+        return (), from_date, to_date, False, None
+    if any(unit in selector for unit in "wdhm"):
+        return (), None, None, False, parse_rolling_duration(selector)
     raise UsageError(
-        "--time must be this-week, all, an ISO week (YYYY-Www), or an inclusive date range "
+        "--time must be this-week, all, an ISO week (YYYY-Www), a rolling duration "
+        "(for example 2w3d or 6h30m), or an inclusive date range "
         "(START..END, START.., or ..END)"
+    )
+
+
+def parse_rolling_duration(value: str) -> RollingDuration:
+    """Parse an ordered fixed duration using weeks, days, hours, and minutes."""
+
+    parsed = _parse_ordered_duration(
+        value,
+        pattern=_ROLLING_DURATION_PART,
+        unit_seconds={"w": 7 * 86_400, "d": 86_400, "h": 3_600, "m": 60},
+        reject_zero_parts=True,
+    )
+    if parsed is not None:
+        duration, label = parsed
+        return RollingDuration(duration, label)
+    raise UsageError(
+        "--time rolling durations must be positive and use ordered w, d, h, and m units (for example 2w3d or 6h30m)"
     )
 
 
@@ -228,44 +358,80 @@ def parse_display_hours(value: str) -> DisplayHours:
     return DisplayHours(start, end)
 
 
+def parse_weekday_scopes(values: Sequence[str], *, option: str) -> tuple[Weekday, ...]:
+    """Expand repeated comma-separated weekday names and groups."""
+
+    selected: set[Weekday] = set()
+    for value in values:
+        parts = [part.strip().casefold() for part in value.split(",")]
+        if not parts or any(not part for part in parts):
+            raise UsageError(f"{option} must contain one or more weekday scopes")
+        for part in parts:
+            days = _WEEKDAY_SCOPES.get(part)
+            if days is not None:
+                selected.update(days)
+                continue
+            try:
+                selected.add(_WEEKDAY_ALIASES[part])
+            except KeyError as error:
+                raise UsageError(
+                    f"unknown {option} value {part!r}; use all, weekdays, weekend, or a weekday name"
+                ) from error
+    return tuple(sorted(selected))
+
+
 def parse_cluster_window(value: str) -> timedelta:
-    """Parse an ordered, positive h/m/s duration shorter than one day."""
+    """Parse an ordered h/m/s duration from one minute up to one day."""
+    parsed = _parse_ordered_duration(
+        value,
+        pattern=_DURATION_PART,
+        unit_seconds={"h": 3_600, "m": 60, "s": 1},
+        reject_zero_parts=False,
+    )
+    if parsed is not None and timedelta(minutes=1) <= parsed[0] < _MAX_CLUSTER_WINDOW:
+        return parsed[0]
+
+    raise UsageError(
+        "--cluster-window must be at least 1m and shorter than 24h with ordered h, m, and s units "
+        "(for example 10m, 1m30s, or '1h 5m')"
+    )
+
+
+def _parse_ordered_duration(
+    value: str,
+    *,
+    pattern: re.Pattern[str],
+    unit_seconds: dict[str, int],
+    reject_zero_parts: bool,
+) -> tuple[timedelta, str] | None:
+    """Parse complete ordered components for public duration grammars."""
+
     text = value.strip()
     cursor = 0
     total_seconds = 0
+    label_parts: list[str] = []
     previous_unit_order = -1
-    unit_order = {"h": 0, "m": 1, "s": 2}
-    unit_seconds = {"h": 60 * 60, "m": 60, "s": 1}
-    found_part = False
-
-    for match in _DURATION_PART.finditer(text):
+    unit_order = {unit: order for order, unit in enumerate(unit_seconds)}
+    for match in pattern.finditer(text):
         separator = text[cursor : match.start()]
-        if cursor == 0:
-            if separator:
-                break
-        elif separator and not separator.isspace():
-            break
-
+        if separator and not separator.isspace():
+            return None
         unit = match.group("unit")
+        amount = int(match.group("amount"))
         order = unit_order[unit]
-        if order <= previous_unit_order:
-            break
+        if order <= previous_unit_order or (reject_zero_parts and amount == 0):
+            return None
         previous_unit_order = order
-        try:
-            amount = int(match.group("amount"))
-        except ValueError:
-            break
         total_seconds += amount * unit_seconds[unit]
+        label_parts.append(f"{amount}{unit}")
         cursor = match.end()
-        found_part = True
-    else:
-        if found_part and cursor == len(text) and 0 < total_seconds < int(_MAX_CLUSTER_WINDOW.total_seconds()):
-            return timedelta(seconds=total_seconds)
-
-    raise UsageError(
-        "--cluster-window must be a positive duration shorter than 24h with ordered h, m, and s units "
-        "(for example 10m or '1h 5m')"
-    )
+    if not label_parts or cursor != len(text) or total_seconds <= 0:
+        return None
+    try:
+        duration = timedelta(seconds=total_seconds)
+    except OverflowError:
+        return None
+    return duration, "".join(label_parts)
 
 
 def parse_filesystem_times(value: str) -> tuple[FilesystemTime, ...]:
@@ -352,18 +518,18 @@ def parse_commit_times(value: str) -> GitDateMode:
     return GitDateMode(next(iter(selected)))
 
 
-def _explicit(namespace: argparse.Namespace, name: str) -> bool:
-    return getattr(namespace, name) is not None
+def _explicit(values: UnresolvedOptions, name: str) -> bool:
+    return name in values.explicit_names
 
 
-def options_from_namespace(namespace: argparse.Namespace) -> RawOptions:
-    """Validate argparse output and expand defaults/presets."""
-    weeks, from_date, to_date, all_dates = parse_time_selectors(namespace.time_selectors)
-    modes = tuple(namespace.modes)
+def resolve_options(values: UnresolvedOptions) -> RawOptions:
+    """Validate typed setting values and expand collection profiles."""
+    weeks, from_date, to_date, all_dates, rolling_duration = parse_time_selectors(values.time_selectors)
+    modes = values.modes
     if len(modes) > 1:
         raise UsageError("--mode may be supplied only once")
     mode = modes[0] if modes else "git"
-    profiles = tuple(namespace.profiles)
+    profiles = values.profiles
     if len(profiles) > 1:
         raise UsageError("--profile may be supplied only once")
     profile = CollectionProfile(profiles[0] if profiles else CollectionProfile.STANDARD.value)
@@ -378,16 +544,15 @@ def options_from_namespace(namespace: argparse.Namespace) -> RawOptions:
 
     preset = None if profile is CollectionProfile.STANDARD else f"--profile {profile.value}"
     controlled = {
-        "--git-records": namespace.git_records,
-        "--git-commit-times": namespace.commit_times,
-        "--git-commits-from": namespace.commits_from,
-        "--fs-times": namespace.filesystem_times,
-        "--fs-entries": namespace.filesystem_entries,
-        "--respect-gitignore": namespace.respect_gitignore,
-        "--include-ignored": namespace.include_ignored,
+        "--git-records": "git_records",
+        "--git-commit-times": "commit_times",
+        "--git-commits-from": "commits_from",
+        "--fs-times": "filesystem_times",
+        "--fs-entries": "filesystem_entries",
+        "--include-ignored/--respect-gitignore": "include_ignored",
     }
     if preset is not None:
-        conflicts = [flag for flag, value in controlled.items() if value is not None]
+        conflicts = [flag for flag, name in controlled.items() if _explicit(values, name)]
         if conflicts:
             raise UsageError(f"{preset} controls {', '.join(conflicts)}; remove the scope option(s)")
 
@@ -411,40 +576,32 @@ def options_from_namespace(namespace: argparse.Namespace) -> RawOptions:
         filesystem_times = (FilesystemTime.CREATED, FilesystemTime.MODIFIED)
         filesystem_entries = (FilesystemEntry.FILE,)
     else:
-        git_records_value = namespace.git_records if namespace.git_records is not None else "commit"
-        commit_times_value = namespace.commit_times if namespace.commit_times is not None else "author"
-        filesystem_times_value = (
-            namespace.filesystem_times if namespace.filesystem_times is not None else "birth,modified"
-        )
-        filesystem_entries_value = namespace.filesystem_entries if namespace.filesystem_entries is not None else "file"
+        git_records_value = values.git_records if values.git_records is not None else "commit"
+        commit_times_value = values.commit_times if values.commit_times is not None else "author"
+        filesystem_times_value = values.filesystem_times if values.filesystem_times is not None else "birth,modified"
+        filesystem_entries_value = values.filesystem_entries if values.filesystem_entries is not None else "file"
         git_mode, git_records = parse_git_records(git_records_value)
         git_date = parse_commit_times(commit_times_value)
         filesystem_times = parse_filesystem_times(filesystem_times_value)
         filesystem_entries = parse_filesystem_entries(filesystem_entries_value)
 
-    if namespace.commits_from is not None:
+    if values.commits_from is not None:
         ref_scope = {
             "head": RefScope.HEAD,
             "local-branches": RefScope.LOCAL_BRANCHES,
             "all-refs": RefScope.ALL_REFS,
-        }[namespace.commits_from]
+        }[values.commits_from]
     elif profile in {CollectionProfile.PORTABLE, CollectionProfile.FULL}:
         ref_scope = RefScope.ALL_REFS
     else:
         ref_scope = RefScope.LOCAL_BRANCHES
 
-    explicit_git = any(_explicit(namespace, name) for name in ("git_records", "commit_times", "commits_from")) or bool(
-        namespace.git_identities
+    explicit_git = any(_explicit(values, name) for name in ("git_records", "commit_times", "commits_from")) or bool(
+        values.git_identities
     )
     explicit_filesystem = any(
-        (
-            _explicit(namespace, "filesystem_times"),
-            _explicit(namespace, "filesystem_entries"),
-            _explicit(namespace, "respect_gitignore"),
-            _explicit(namespace, "include_ignored"),
-            bool(namespace.exclusions),
-        )
-    )
+        _explicit(values, name) for name in ("filesystem_times", "filesystem_entries", "include_ignored")
+    ) or bool(values.exclusions)
     if source is SourceMode.FILESYSTEM and explicit_git:
         raise UsageError("Git-specific options cannot be used with --mode fs")
     if source is SourceMode.GIT and explicit_filesystem:
@@ -452,42 +609,44 @@ def options_from_namespace(namespace: argparse.Namespace) -> RawOptions:
 
     if not git_records.includes_commits:
         irrelevant: list[str] = []
-        if _explicit(namespace, "commit_times"):
+        if _explicit(values, "commit_times"):
             irrelevant.append("--git-commit-times")
-        if _explicit(namespace, "commits_from"):
+        if _explicit(values, "commits_from"):
             irrelevant.append("--git-commits-from")
         if irrelevant:
             raise UsageError(f"{', '.join(irrelevant)} require commit or file-change records to be enabled")
 
-    git_identities = tuple(value.strip() for value in namespace.git_identities)
+    git_identities = tuple(value.strip() for value in values.git_identities)
     if any(not value for value in git_identities):
         raise UsageError("--git-identity values cannot be empty")
-    exclusions = tuple(value.strip() for value in namespace.exclusions)
+    exclusions = tuple(value.strip() for value in values.exclusions)
     if any(not value for value in exclusions):
         raise UsageError("--exclude values cannot be empty")
     if any(value.startswith("!") for value in exclusions):
         raise UsageError("--exclude patterns cannot be negated; explicit exclusions always win")
 
-    if namespace.limit is not None and not namespace.list_outside:
+    if _explicit(values, "limit") and not values.list_outside:
         raise UsageError("--limit requires --list-outside")
-    limit = namespace.limit if namespace.limit is not None else 50
+    limit = values.limit
     if limit < 1:
         raise UsageError("--limit must be at least 1")
 
-    if namespace.respect_gitignore and namespace.include_ignored:
-        raise UsageError("--respect-gitignore and --include-ignored are mutually exclusive")
-    include_ignored = bool(
-        (profile is CollectionProfile.FULL and source.includes_filesystem) or namespace.include_ignored
-    )
+    include_ignored = bool((profile is CollectionProfile.FULL and source.includes_filesystem) or values.include_ignored)
     respect_gitignore = not include_ignored
 
-    paths = tuple(Path(value) for value in namespace.paths) or (Path("."),)
+    hide_days = parse_weekday_scopes(values.hide_days, option="--hide-days")
+    if hide_days == tuple(Weekday):
+        raise UsageError("--hide-days cannot hide all seven weekday columns")
+    hide_empty_days = parse_weekday_scopes(values.hide_empty_days, option="--hide-empty-days")
+
+    paths = values.paths or (Path("."),)
     return RawOptions(
         paths=paths,
         weeks=weeks,
         from_date=from_date,
         to_date=to_date,
         all_dates=all_dates,
+        rolling_duration=rolling_duration,
         profile=profile,
         source=source,
         git_mode=git_mode,
@@ -500,14 +659,18 @@ def options_from_namespace(namespace: argparse.Namespace) -> RawOptions:
         include_ignored=include_ignored,
         respect_gitignore=respect_gitignore,
         exclusions=exclusions,
-        hours=namespace.hours or DEFAULT_HOURS,
-        timezone_name=namespace.timezone_name,
-        cluster_window=parse_cluster_window(namespace.cluster_window),
-        display_hours=parse_display_hours(namespace.display_hours) if namespace.display_hours else None,
-        no_color=bool(namespace.no_color),
-        list_outside=bool(namespace.list_outside),
+        hours=values.hours or DEFAULT_HOURS,
+        timezone_name=values.timezone_name,
+        cluster_window=parse_cluster_window(values.cluster_window),
+        marker_style=MarkerStyle(values.marker_style),
+        grid_style=GridStyle(values.grid_style),
+        display_hours=parse_display_hours(values.display_hours) if values.display_hours else None,
+        hide_days=hide_days,
+        hide_empty_days=hide_empty_days,
+        no_color=values.no_color,
+        list_outside=values.list_outside,
         limit=limit,
-        coverage=bool(namespace.coverage),
-        strict=bool(namespace.strict),
-        verbose=bool(namespace.verbose),
+        coverage=values.coverage,
+        strict=values.strict,
+        verbose=values.verbose,
     )

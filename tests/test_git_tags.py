@@ -160,7 +160,7 @@ def test_aliases_share_one_batched_tag_object_read(tmp_path: Path) -> None:
 
     class RecordingRunner(GitRunner):
         def __init__(self) -> None:
-            super().__init__()
+            super().__init__(stream_output=False)
             self.cat_file_inputs: list[bytes] = []
 
         def run(
@@ -402,7 +402,7 @@ def test_tag_collector_structures_discovery_and_object_failures(
                 output = f"{object_id} blob 0\n\n".encode()
             return subprocess.CompletedProcess(arguments, 0, stdout=output, stderr=b"")
 
-    result = GitTagCollector(FaultRunner()).collect((repository,))
+    result = GitTagCollector(FaultRunner(stream_output=False)).collect((repository,))
 
     assert result.is_partial
     assert [item.code for item in result.diagnostics] == [expected_code]

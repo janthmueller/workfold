@@ -29,7 +29,8 @@ from workfold.collectors.git_reflogs import (
 from workfold.collectors.git_tags import CollectedGitTag, GitTagCollectionResult, GitTagCollector
 from workfold.config import FilesystemEntry, RawOptions, UsageError
 from workfold.coverage import Capability
-from workfold.pipeline import ObservationConsumer
+from workfold.models import TimestampObservation
+from workfold.pipeline import ObservationBatch, ObservationConsumer
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +71,9 @@ def collect(
     filesystem_result: FilesystemCollectionResult | None = None
     repository_resolution: GitRepositoryResolutionResult | None = None
 
+    def emit(observations: Sequence[TimestampObservation]) -> None:
+        observation_consumer(ObservationBatch.create(observations))
+
     if options.source.includes_git:
         if options.git_records.includes_commits:
             timestamp_kinds = git_timestamp_kinds(options.git_date)
@@ -78,12 +82,12 @@ def collect(
 
             def consume_file_changes(changes: tuple[CollectedGitFileChange, ...]) -> None:
                 for item in changes:
-                    observation_consumer(tuple(item.to_observation(kind) for kind in timestamp_kinds))
+                    emit(tuple(item.to_observation(kind) for kind in timestamp_kinds))
 
             def consume_commits(commits: tuple[CollectedGitCommit, ...]) -> None:
                 if options.git_mode.includes_commit_markers:
                     for item in commits:
-                        observation_consumer(tuple(item.to_observation(kind) for kind in timestamp_kinds))
+                        emit(tuple(item.to_observation(kind) for kind in timestamp_kinds))
                 if options.git_mode.includes_file_changes:
                     file_results.append(
                         resolved_file_change_collector.collect(
@@ -115,7 +119,7 @@ def collect(
             def consume_tags(tags: tuple[CollectedGitTag, ...]) -> None:
                 for item in tags:
                     if item.tagger is not None:
-                        observation_consumer((item.to_observation(),))
+                        emit((item.to_observation(),))
 
             tag_result = (tag_collector or GitTagCollector()).collect(
                 repositories,
@@ -128,7 +132,7 @@ def collect(
 
             def consume_reflogs(entries: tuple[CollectedGitReflog, ...]) -> None:
                 for item in entries:
-                    observation_consumer((item.to_observation(),))
+                    emit((item.to_observation(),))
 
             reflog_result = (reflog_collector or GitReflogCollector()).collect(
                 repositories,
@@ -149,7 +153,7 @@ def collect(
                 respect_gitignore=options.respect_gitignore,
                 include_ignored=options.include_ignored,
                 exclusions=options.exclusions,
-                observation_consumer=observation_consumer,
+                observation_consumer=emit,
                 retain_entries=False,
                 retain_observations=False,
             )

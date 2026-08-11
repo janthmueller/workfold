@@ -1,15 +1,14 @@
-"""Incremental observation selection, classification, and chart aggregation."""
+"""Incremental observation selection and schedule classification."""
 
 from __future__ import annotations
 
 import os
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from datetime import timedelta
+from dataclasses import dataclass
 from typing import TypeAlias
 from zoneinfo import ZoneInfo
 
-from workfold.aggregation import Aggregation, AggregationBuilder
 from workfold.coverage import (
     PlottingDisposition,
     SelectionDisposition,
@@ -17,6 +16,7 @@ from workfold.coverage import (
 )
 from workfold.models import (
     ActivityMarker,
+    ClassifiedMarker,
     RecordKind,
     Source,
     TimestampKind,
@@ -26,13 +26,35 @@ from workfold.models import (
 from workfold.schedule import Schedule, classify_marker
 from workfold.time_ranges import InstantRangeUnion
 
-ObservationConsumer: TypeAlias = Callable[[Sequence[TimestampObservation]], None]
+
+@dataclass(frozen=True, slots=True)
+class ObservationBatch:
+    """A validated, non-empty set of timestamps from one source record."""
+
+    observations: tuple[TimestampObservation, ...]
+
+    def __post_init__(self) -> None:
+        if not self.observations:
+            raise ValueError("an observation batch cannot be empty")
+        origin_id = self.observations[0].origin.record_id
+        if any(item.origin.record_id != origin_id for item in self.observations):
+            raise ValueError("an observation batch must belong to one source record")
+        if len({item.observation_id for item in self.observations}) != len(self.observations):
+            raise ValueError("an observation batch contains duplicate identities")
+
+    @classmethod
+    def create(cls, observations: Sequence[TimestampObservation]) -> ObservationBatch:
+        return cls(tuple(observations))
+
+
+ObservationConsumer: TypeAlias = Callable[[ObservationBatch], None]
+ClassifiedMarkerConsumer: TypeAlias = Callable[[ClassifiedMarker], None]
 SelectionCountKey: TypeAlias = tuple[TimestampCoverageKey, SelectionDisposition]
 PlottingCountKey: TypeAlias = tuple[TimestampCoverageKey, PlottingDisposition]
 
 
-class ActivityPipeline:
-    """Consume record-local observations without retaining the full inventory."""
+class ActivityClassifier:
+    """Select and classify record-local observations into a caller-owned sink."""
 
     def __init__(
         self,
@@ -41,23 +63,16 @@ class ActivityPipeline:
         identity_filters: tuple[str, ...],
         timezone_value: ZoneInfo,
         schedule: Schedule,
-        cluster_window: timedelta,
-        display_range: tuple[int, int] | None,
-        outside_limit: int,
+        marker_consumer: ClassifiedMarkerConsumer,
     ) -> None:
         self._selected_range = selected_range
         self._identity_filters = tuple(value.casefold() for value in identity_filters)
         self._timezone = timezone_value
         self._schedule = schedule
+        self._marker_consumer = marker_consumer
         self._selection_counts: Counter[SelectionCountKey] = Counter()
         self._plotting_counts: Counter[PlottingCountKey] = Counter()
         self._coverage_keys: dict[tuple[Source, str, RecordKind, TimestampKind], TimestampCoverageKey] = {}
-        self._aggregation = AggregationBuilder(
-            cluster_window=cluster_window,
-            schedule_bounds=schedule.bounds,
-            display_range=display_range,
-            outside_limit=outside_limit,
-        )
 
     @property
     def selection_counts(self) -> Mapping[SelectionCountKey, int]:
@@ -67,21 +82,14 @@ class ActivityPipeline:
     def plotting_counts(self) -> Mapping[PlottingCountKey, int]:
         return self._plotting_counts
 
-    def consume(self, observations: Sequence[TimestampObservation]) -> None:
+    def consume(self, batch: ObservationBatch) -> None:
         """Process one source record's observations and release its provenance."""
 
-        batch = tuple(observations)
-        if not batch:
-            return
-        origin_id = batch[0].origin.record_id
-        if any(item.origin.record_id != origin_id for item in batch):
-            raise RuntimeError("an observation batch must belong to one source record")
-        if len({item.observation_id for item in batch}) != len(batch):
-            raise RuntimeError("an observation batch contains duplicate identities")
+        observations = batch.observations
 
         included: list[TimestampObservation] = []
         coverage_keys: dict[str, TimestampCoverageKey] = {}
-        for observation in batch:
+        for observation in observations:
             coverage_key = self._coverage_key(observation)
             coverage_keys[observation.observation_id] = coverage_key
             if not self._selected_range.contains(observation.instant_utc_ns):
@@ -99,14 +107,14 @@ class ActivityPipeline:
 
         markers = (
             tuple(ActivityMarker.create((observation,)) for observation in included)
-            if batch[0].origin.source is Source.FILESYSTEM
+            if observations[0].origin.source is Source.FILESYSTEM
             else coalesce_observations(included)
         )
         for marker in markers:
             for index, observation in enumerate(marker.observations):
                 plotting = PlottingDisposition.MARKER if index == 0 else PlottingDisposition.COALESCED_INTO_MARKER
                 self._plotting_counts[(coverage_keys[observation.observation_id], plotting)] += 1
-            self._aggregation.add(classify_marker(marker, self._timezone, self._schedule))
+            self._marker_consumer(classify_marker(marker, self._timezone, self._schedule))
 
     def _coverage_key(self, observation: TimestampObservation) -> TimestampCoverageKey:
         origin = observation.origin
@@ -123,11 +131,6 @@ class ActivityPipeline:
             self._coverage_keys[partition] = key
         return key
 
-    def build(self) -> Aggregation:
-        """Finish the bounded chart aggregation."""
-
-        return self._aggregation.build()
-
 
 def _matches_git_identity(observation: TimestampObservation, filters: tuple[str, ...]) -> bool:
     haystacks = tuple(
@@ -137,7 +140,9 @@ def _matches_git_identity(observation: TimestampObservation, filters: tuple[str,
 
 
 __all__ = [
-    "ActivityPipeline",
+    "ActivityClassifier",
+    "ClassifiedMarkerConsumer",
+    "ObservationBatch",
     "ObservationConsumer",
     "PlottingCountKey",
     "SelectionCountKey",

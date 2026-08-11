@@ -4,6 +4,7 @@ from workfold.collectors.ignores.exclusions import ExplicitExcluder
 from workfold.collectors.ignores.models import (
     ExclusionPatternError,
     GitFilesystemInventory,
+    GitFilesystemInventoryView,
     GitFilesystemInventoryVisit,
     GitIgnoreCommandError,
     GitIgnoreMatches,
@@ -27,6 +28,7 @@ __all__ = [
     "ExclusionPatternError",
     "ExplicitExcluder",
     "GitFilesystemInventory",
+    "GitFilesystemInventoryView",
     "GitFilesystemInventoryVisit",
     "GitIgnoreCommandError",
     "GitIgnoreMatches",

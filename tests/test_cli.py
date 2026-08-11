@@ -74,11 +74,22 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     normalized_help = " ".join(help_text.split())
     public_options = {option for action in parser._actions for option in action.option_strings}
 
-    assert {"-t", "--time", "-m", "--mode", "-p", "--profile"} <= public_options
+    assert {
+        "--config",
+        "--no-config",
+        "--show-config",
+        "-t",
+        "--time",
+        "-m",
+        "--mode",
+        "-p",
+        "--profile",
+    } <= public_options
     assert "--time SELECTOR" in normalized_help
+    assert "rolling duration such as 2w3d" in normalized_help
     assert "--mode {git,fs,all}" in normalized_help
     assert "--profile {standard,portable,full}" in normalized_help
-    assert "standard (default)" in normalized_help
+    assert "standard (built-in default)" in normalized_help
     assert "author, committer, and tagger" in normalized_help
     assert "no file changes or reflogs" in normalized_help
     assert "selected mode for full (not all time)" in normalized_help
@@ -86,12 +97,18 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     assert "--git-records KINDS" in help_text
     assert "--git-commit-times KINDS" in help_text
     assert "--git-commits-from {head,local-branches,all-refs}" in normalized_help
-    assert "standard default: local-branches; portable/full: all-refs" in normalized_help
+    assert "standard built-in: local-branches; portable/full: all-refs" in normalized_help.replace("- ", "-")
     assert "--git-identity VALUE" in normalized_help
+    assert "--marker-style {source,identity}" in normalized_help
+    assert "--grid {none,vertical,horizontal,both}" in normalized_help
+    assert "-H SCOPE, --hide-days SCOPE" in normalized_help
+    assert "-E SCOPE, --hide-empty-days SCOPE" in normalized_help
     assert "author, committer, tagger, or reflog identity" in normalized_help
     assert "--fs-times KINDS" in help_text
     assert "--fs-entries KINDS" in help_text
     assert "show the detailed coverage ledger" in normalized_help
+    assert "Built-in defaults may be overridden" in normalized_help
+    assert "--show-config to inspect effective values and origins" in normalized_help
     assert {
         "--week",
         "--from",
@@ -164,8 +181,8 @@ def test_help_describes_the_cluster_window_duration() -> None:
     normalized_help = " ".join(help_text.split())
 
     assert "--cluster-window DURATION" in help_text
-    assert "default: 1h" in normalized_help
-    assert "30s, 10m, '1h 5m'" in normalized_help
+    assert "built-in default: 1h" in normalized_help
+    assert "1m30s, 10m, '1h 5m'" in normalized_help
     assert "--bin" not in help_text
 
 

@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
+      target_sha: ${{ steps.check.outputs.target_sha }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -39,6 +40,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = workflow_dispatch ]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "target_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -46,6 +48,7 @@ jobs:
           CURRENT_SHA="$(git rev-parse origin/main)"
           if [ "$TESTED_SHA" = "$CURRENT_SHA" ]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "target_sha=$TESTED_SHA" >> "$GITHUB_OUTPUT"
           else
             echo "Tested SHA $TESTED_SHA is no longer current main ($CURRENT_SHA); skipping release."
             echo "should_release=false" >> "$GITHUB_OUTPUT"
@@ -62,7 +65,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: main
+          ref: ${{ needs.guard.outputs.target_sha }}
+      - name: Prepare the tested main revision
+        env:
+          TARGET_SHA: ${{ needs.guard.outputs.target_sha }}
+        run: |
+          git switch -C main "$TARGET_SHA"
+          git branch --set-upstream-to=origin/main main
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
       - name: Require successful tests for a manual release
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -74,13 +84,16 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
-      - run: python -m pip install ".[release]"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+      - run: uv sync --locked --extra release
       - name: Version and build release
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
-        run: semantic-release version --as-prerelease --prerelease-token alpha
+        run: uv run --locked semantic-release version --as-prerelease --prerelease-token alpha
       - name: Detect release
         id: release_state
         shell: bash
@@ -93,7 +106,7 @@ jobs:
             echo "No new release artifacts were produced; skipping publish jobs."
           fi
       - if: steps.release_state.outputs.released == 'true'
-        run: python -m twine check dist/*
+        run: uv run --locked python -m twine check dist/*
       - name: Preserve Python distributions
         if: steps.release_state.outputs.released == 'true'
         uses: actions/upload-artifact@v7
@@ -105,7 +118,7 @@ jobs:
         if: steps.release_state.outputs.released == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
-        run: semantic-release publish
+        run: uv run --locked semantic-release publish
 
   pypi:
     needs: release
@@ -120,13 +133,13 @@ jobs:
         with:
           name: python-distributions
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@v1.13.0
+      - uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
         with:
           skip-existing: true
 
   binaries:
-    needs: [release, pypi]
-    if: needs.release.outputs.released == 'true' && needs.pypi.result == 'success'
+    needs: release
+    if: needs.release.outputs.released == 'true'
     uses: ./.github/workflows/binaries.yml
     with:
       tag: ${{ needs.release.outputs.tag }}

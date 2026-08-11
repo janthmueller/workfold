@@ -12,7 +12,10 @@ from workfold.config import (
     GitDateMode,
     GitMode,
     GitRecords,
+    GridStyle,
+    MarkerStyle,
     RefScope,
+    RollingDuration,
     SourceMode,
     UsageError,
     parse_clock_minutes,
@@ -21,9 +24,12 @@ from workfold.config import (
     parse_filesystem_entries,
     parse_filesystem_times,
     parse_git_records,
+    parse_rolling_duration,
     parse_time_selectors,
+    parse_weekday_scopes,
     validate_iso_week,
 )
+from workfold.models import Weekday
 
 
 def test_default_options_are_the_quick_git_view_for_this_week() -> None:
@@ -35,6 +41,7 @@ def test_default_options_are_the_quick_git_view_for_this_week() -> None:
     assert options.from_date is None
     assert options.to_date is None
     assert not options.all_dates
+    assert options.rolling_duration is None
     assert options.profile is CollectionProfile.STANDARD
     assert options.git_mode is GitMode.COMMITS
     assert options.git_date is GitDateMode.AUTHOR
@@ -45,6 +52,10 @@ def test_default_options_are_the_quick_git_view_for_this_week() -> None:
     assert options.filesystem_entries == (FilesystemEntry.FILE,)
     assert options.respect_gitignore
     assert options.cluster_window == timedelta(hours=1)
+    assert options.marker_style is MarkerStyle.SOURCE
+    assert options.grid_style is GridStyle.NONE
+    assert options.hide_days == ()
+    assert options.hide_empty_days == ()
 
 
 def test_explicit_this_week_matches_the_implicit_default() -> None:
@@ -116,8 +127,111 @@ def test_invalid_time_selectors_are_rejected(selector: str) -> None:
 
 
 def test_time_selector_parser_defaults_to_this_week() -> None:
-    assert parse_time_selectors(()) == ((), None, None, False)
+    assert parse_time_selectors(()) == ((), None, None, False, None)
     assert validate_iso_week("2026-W31") == "2026-W31"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected", "label"),
+    [
+        ("2w", timedelta(weeks=2), "2w"),
+        ("2w3d", timedelta(weeks=2, days=3), "2w3d"),
+        ("6h30m", timedelta(hours=6, minutes=30), "6h30m"),
+        ("1w 2d 3h 4m", timedelta(weeks=1, days=2, hours=3, minutes=4), "1w2d3h4m"),
+    ],
+)
+def test_rolling_time_selector_uses_fixed_ordered_units(
+    value: str,
+    expected: timedelta,
+    label: str,
+) -> None:
+    parsed = parse_rolling_duration(value)
+    options = parse_options(["--time", value])
+
+    assert parsed == RollingDuration(expected, label)
+    assert options.rolling_duration == parsed
+    assert not options.all_dates
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["0m", "-2w", "1.5d", "2d1w", "2w3w", "1h 30", "1s", "1mo", "999999999999999999999w"],
+)
+def test_invalid_rolling_time_selectors_are_rejected(value: str) -> None:
+    with pytest.raises(UsageError, match="--time"):
+        parse_options([f"--time={value}"])
+
+
+def test_rolling_time_selector_cannot_be_repeated_or_mixed() -> None:
+    with pytest.raises(UsageError, match="repeated only"):
+        parse_options(["--time", "2w", "--time", "2026-W31"])
+
+
+def test_identity_marker_style_is_opt_in() -> None:
+    assert parse_options(["--marker-style", "identity"]).marker_style is MarkerStyle.IDENTITY
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("none", GridStyle.NONE),
+        ("vertical", GridStyle.VERTICAL),
+        ("horizontal", GridStyle.HORIZONTAL),
+        ("both", GridStyle.BOTH),
+    ],
+)
+def test_grid_style_is_explicit_and_enum_backed(value: str, expected: GridStyle) -> None:
+    assert parse_options(["--grid", value]).grid_style is expected
+
+
+def test_grid_style_does_not_accept_all_as_an_alias_for_both() -> None:
+    with pytest.raises(SystemExit):
+        parse_options(["--grid", "all"])
+
+
+def test_weekday_scope_parser_accepts_aliases_groups_commas_and_repetition() -> None:
+    assert parse_weekday_scopes(("Mo,wednesday", "weekend"), option="--hide-days") == (
+        Weekday.MONDAY,
+        Weekday.WEDNESDAY,
+        Weekday.SATURDAY,
+        Weekday.SUNDAY,
+    )
+    assert parse_options(["--hide-empty-days", "all"]).hide_empty_days == tuple(Weekday)
+    assert parse_options(["--hide-days", "weekend", "--hide-days", "fri"]).hide_days == (
+        Weekday.FRIDAY,
+        Weekday.SATURDAY,
+        Weekday.SUNDAY,
+    )
+    scoped_before_path = parse_options(["--hide-empty-days", "weekend", "repository"])
+    assert scoped_before_path.paths == (Path("repository"),)
+    short_options = parse_options(["-H", "weekend", "-E", "all"])
+    assert short_options.hide_days == (Weekday.SATURDAY, Weekday.SUNDAY)
+    assert short_options.hide_empty_days == tuple(Weekday)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--hide-days", ""],
+        ["--hide-empty-days", "mon,"],
+        ["--hide-days", "workday"],
+    ],
+)
+def test_invalid_weekday_scopes_are_rejected(arguments: list[str]) -> None:
+    with pytest.raises(UsageError):
+        parse_options(arguments)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--hide-days", "all"],
+        ["--hide-days", "weekdays", "--hide-days", "weekend"],
+    ],
+)
+def test_unconditional_day_hiding_must_leave_one_column(arguments: list[str]) -> None:
+    with pytest.raises(UsageError, match="all seven"):
+        parse_options(arguments)
 
 
 def test_mode_selects_collectors_without_changing_collection_depth() -> None:
@@ -318,7 +432,8 @@ def test_display_hours_are_half_open_and_non_overnight() -> None:
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        ("30s", timedelta(seconds=30)),
+        ("1m", timedelta(minutes=1)),
+        ("1m30s", timedelta(minutes=1, seconds=30)),
         ("10m", timedelta(minutes=10)),
         ("1h", timedelta(hours=1)),
         ("1h5m", timedelta(hours=1, minutes=5)),
@@ -333,9 +448,24 @@ def test_cluster_window_accepts_compact_ordered_durations(value: str, expected: 
 
 @pytest.mark.parametrize(
     "value",
-    ["", "10", "0s", "-10m", "1.5h", "1d", "5m1h", "1h2h", "1h 5m 2m", "1 h", "24h", "23h60m"],
+    [
+        "",
+        "10",
+        "0s",
+        "30s",
+        "59s",
+        "-10m",
+        "1.5h",
+        "1d",
+        "5m1h",
+        "1h2h",
+        "1h 5m 2m",
+        "1 h",
+        "24h",
+        "23h60m",
+    ],
 )
-def test_cluster_window_rejects_invalid_or_day_sized_durations(value: str) -> None:
+def test_cluster_window_rejects_subminute_invalid_or_day_sized_durations(value: str) -> None:
     with pytest.raises(UsageError, match="--cluster-window"):
         parse_cluster_window(value)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import re
 from dataclasses import dataclass
 from typing import Final
@@ -93,6 +94,18 @@ class BatchParseResult:
 
 def _decode_losslessly(value: bytes) -> str:
     return value.decode("utf-8", errors="surrogateescape")
+
+
+def _decode_commit_text(value: bytes, declared_encoding: str | None) -> str:
+    if declared_encoding is None:
+        return _decode_losslessly(value)
+    try:
+        codecs.lookup(declared_encoding)
+        return value.decode(declared_encoding, errors="surrogateescape")
+    except (LookupError, UnicodeError):
+        # The raw bytes and declared value remain preserved even when a
+        # malformed/unknown encoding cannot be honored.
+        return _decode_losslessly(value)
 
 
 def _parse_object_id(value: bytes, *, field: str, object_id: str) -> str:
@@ -250,15 +263,16 @@ def parse_commit_object(object_id: str, data: bytes) -> ParsedCommit:
     committer = parse_git_signature(singleton_headers[b"committer"], role="committer", object_id=object_id)
     raw_subject = message.split(b"\n", 1)[0]
     encoding_raw = singleton_headers.get(b"encoding")
+    declared_encoding = _decode_losslessly(encoding_raw) if encoding_raw is not None else None
     return ParsedCommit(
         object_id=object_id,
         tree_id=tree_id,
         parent_ids=parent_ids,
         author=author,
         committer=committer,
-        subject=_decode_losslessly(raw_subject),
+        subject=_decode_commit_text(raw_subject, declared_encoding),
         raw_subject=raw_subject,
-        declared_encoding=_decode_losslessly(encoding_raw) if encoding_raw is not None else None,
+        declared_encoding=declared_encoding,
     )
 
 

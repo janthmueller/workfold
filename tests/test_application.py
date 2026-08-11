@@ -84,6 +84,165 @@ def test_git_commit_flows_through_selection_schedule_and_terminal_report(tmp_pat
     assert "timestamp observations included: 1" in rendered
 
 
+def test_rolling_time_selector_uses_one_half_open_elapsed_window(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    now = datetime(2026, 8, 11, 12, 0, tzinfo=ZoneInfo("UTC"))
+    start = datetime(2026, 8, 9, 12, 0, tzinfo=ZoneInfo("UTC"))
+    repo.commit(
+        "included.txt",
+        "one",
+        "exactly at rolling start",
+        author_date=_git_date(start),
+        committer_date=_git_date(start),
+    )
+    repo.commit(
+        "excluded.txt",
+        "two",
+        "exactly at captured now",
+        author_date=_git_date(now),
+        committer_date=_git_date(now),
+    )
+    output = StringIO()
+    options = parse_options([str(repo.path), "--time", "2d", "--timezone", "UTC", "--no-color", "--verbose"])
+
+    assert run(options, now=now, stdout=output, stderr=StringIO(), terminal_width=80) == 0
+
+    rendered = output.getvalue()
+    _assert_summary_count(rendered, "Events", 1)
+    assert "Period: last 2d · UTC" in rendered
+
+
+def test_identity_marker_style_uses_recorded_git_identity_letters(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    instant = datetime(2026, 8, 3, 10, 0, tzinfo=BERLIN)
+    repo.commit(
+        "ada.txt",
+        "one",
+        "Ada event",
+        author_date=_git_date(instant),
+        committer_date=_git_date(instant),
+        author_name="Ada Person",
+        author_email="ada@example.test",
+    )
+    repo.commit(
+        "alice.txt",
+        "two",
+        "Alice event",
+        author_date=_git_date(instant.replace(minute=1)),
+        committer_date=_git_date(instant.replace(minute=1)),
+        author_name="Alice Person",
+        author_email="alice@example.test",
+    )
+    output = StringIO()
+    options = parse_options(
+        [
+            str(repo.path),
+            "--time",
+            "all",
+            "--timezone",
+            "Europe/Berlin",
+            "--marker-style",
+            "identity",
+            "--no-color",
+        ]
+    )
+
+    assert run(options, stdout=output, stderr=StringIO(), terminal_width=100) == 0
+
+    rendered = output.getvalue()
+    assert "A1A2" in rendered
+    assert "A1 Ada Person <ada@example.test>" in rendered
+    assert "A2 Alice Person <alice@example.test>" in rendered
+    assert "●" not in rendered and "○" not in rendered
+
+
+def test_day_column_controls_flow_from_cli_without_changing_event_totals(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    for filename, instant in (
+        ("monday.txt", datetime(2026, 8, 3, 10, 0, tzinfo=BERLIN)),
+        ("saturday.txt", datetime(2026, 8, 8, 10, 0, tzinfo=BERLIN)),
+    ):
+        repo.commit(
+            filename,
+            filename,
+            filename,
+            author_date=_git_date(instant),
+            committer_date=_git_date(instant),
+        )
+
+    hidden_output = StringIO()
+    hidden = parse_options(
+        [
+            str(repo.path),
+            "--time",
+            "all",
+            "--timezone",
+            "Europe/Berlin",
+            "--hide-days",
+            "weekend",
+            "--no-color",
+        ]
+    )
+    assert run(hidden, stdout=hidden_output, stderr=StringIO(), terminal_width=80) == 0
+
+    hidden_rendered = hidden_output.getvalue()
+    hidden_header = hidden_rendered.splitlines()[0]
+    assert "Sat" not in hidden_header and "Sun" not in hidden_header
+    assert re.search(r"^Events\s+2$", hidden_rendered, re.MULTILINE)
+    assert re.search(r"^Hidden\s+1 event in Sat column$", hidden_rendered, re.MULTILINE)
+
+    conditional_output = StringIO()
+    conditional = parse_options(
+        [
+            str(repo.path),
+            "--time",
+            "all",
+            "--timezone",
+            "Europe/Berlin",
+            "--hide-empty-days",
+            "weekend",
+            "--no-color",
+        ]
+    )
+    assert run(conditional, stdout=conditional_output, stderr=StringIO(), terminal_width=80) == 0
+
+    conditional_rendered = conditional_output.getvalue()
+    conditional_header = conditional_rendered.splitlines()[0]
+    assert "Sat" in conditional_header and "Sun" not in conditional_header
+    assert not re.search(r"^Hidden\s+", conditional_rendered, re.MULTILINE)
+
+
+def test_grid_style_flows_from_cli_to_terminal_rendering(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    instant = datetime(2026, 8, 3, 10, 0, tzinfo=BERLIN)
+    repo.commit(
+        "work.txt",
+        "grid",
+        "grid",
+        author_date=_git_date(instant),
+        committer_date=_git_date(instant),
+    )
+    output = StringIO()
+    options = parse_options(
+        [
+            str(repo.path),
+            "--time",
+            "all",
+            "--timezone",
+            "Europe/Berlin",
+            "--grid",
+            "both",
+            "--no-color",
+        ]
+    )
+
+    assert run(options, stdout=output, stderr=StringIO(), terminal_width=80) == 0
+
+    chart_lines = output.getvalue().split("\n\n", maxsplit=1)[0].splitlines()
+    assert "│" in chart_lines[0]
+    assert "┼" in chart_lines[1]
+
+
 def test_git_identity_filter_is_case_insensitive_literal_or_and_accounted(tmp_path: Path) -> None:
     repo = GitRepo.create(tmp_path / "repo")
     instant = datetime(2026, 8, 3, 10, 0, tzinfo=BERLIN)

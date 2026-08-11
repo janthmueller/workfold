@@ -42,6 +42,7 @@ def collect_git_inventory_stream(
     ignore_service: GitIgnoreService,
     lstat_reader: LstatReader,
     eligible_consumer: Callable[[PendingEntry], None],
+    nested_repository_consumer: Callable[[RootSnapshot, ExplicitExcluder], None],
 ) -> GitFilesystemInventoryVisit:
     """Consume the default Git inventory through its bounded disk spool."""
 
@@ -59,16 +60,16 @@ def collect_git_inventory_stream(
             diagnostics.append(stat_diagnostic(root, path, error, is_root=False))
             return
 
-        accounting.discover(root)
         candidate_type = entry_type(snapshot.st_mode)
         candidate_origin = origin(root, path, candidate_type)
         relative = PurePosixPath(relative_path)
-        if is_semantic_git_admin(path, repository) or (
-            candidate_type is EntryType.DIRECTORY and is_nested_repository_boundary(path, selected_root=root)
-        ):
+        if is_semantic_git_admin(path, repository):
             disposition = RecordDisposition.SEMANTIC_GIT_ADMIN
         elif excluder.matches(relative, is_directory=candidate_type is EntryType.DIRECTORY):
             disposition = RecordDisposition.EXPLICITLY_EXCLUDED
+        elif candidate_type is EntryType.DIRECTORY and is_nested_repository_boundary(path, selected_root=root):
+            nested_repository_consumer(RootSnapshot(path, snapshot), excluder.scoped(relative))
+            return
         elif entry_is_in_scope(
             candidate_type,
             include_regular_files=include_regular_files,
@@ -78,12 +79,39 @@ def collect_git_inventory_stream(
             disposition = RecordDisposition.ELIGIBLE
         else:
             disposition = RecordDisposition.EXCLUDED_ENTRY_TYPE
+        # A nested repository owns its root and descendants. Only records that
+        # remain in the parent partition are discovered by that partition.
+        accounting.discover(root)
         accounting.record(root, disposition)
         retain_entry(entries, candidate_origin, disposition)
         if disposition is RecordDisposition.ELIGIBLE:
             eligible_consumer(PendingEntry(root, path, snapshot, candidate_origin, candidate_type))
 
     def consume_ignored(relative_path: str, is_directory: bool) -> None:
+        path = root / relative_path
+        if is_directory and not excluder.matches(relative_path, is_directory=True):
+            try:
+                snapshot = lstat_reader(path)
+            except (FileNotFoundError, NotADirectoryError):
+                pass
+            except OSError as error:
+                accounting.discover(root)
+                accounting.record(root, RecordDisposition.RECORD_ERROR)
+                diagnostics.append(stat_diagnostic(root, path, error, is_root=False))
+                return
+            else:
+                if entry_type(snapshot.st_mode) is EntryType.DIRECTORY and is_nested_repository_boundary(
+                    path,
+                    selected_root=root,
+                ):
+                    # Parent ignore rules stop at an embedded repository
+                    # boundary. The nested repository decides the visibility of
+                    # its own tracked and untracked files.
+                    nested_repository_consumer(
+                        RootSnapshot(path, snapshot),
+                        excluder.scoped(PurePosixPath(relative_path)),
+                    )
+                    return
         disposition = (
             RecordDisposition.EXPLICITLY_EXCLUDED
             if excluder.matches(relative_path, is_directory=is_directory)

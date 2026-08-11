@@ -56,6 +56,22 @@ def test_parse_commit_preserves_exact_signatures_and_subject() -> None:
     assert parsed.declared_encoding == "UTF-8"
 
 
+def test_parse_commit_honors_declared_message_encoding_without_losing_raw_bytes() -> None:
+    raw_subject = "Grüße".encode("iso-8859-1")
+
+    parsed = parse_commit_object(
+        COMMIT_ID,
+        make_commit_data(
+            extra_headers=b"encoding ISO-8859-1\n",
+            message=raw_subject + b"\n",
+        ),
+    )
+
+    assert parsed.subject == "Grüße"
+    assert parsed.raw_subject == raw_subject
+    assert parsed.declared_encoding == "ISO-8859-1"
+
+
 @pytest.mark.parametrize(
     ("data", "code"),
     [

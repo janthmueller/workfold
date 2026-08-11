@@ -6,13 +6,10 @@ import os
 import shutil
 import sys
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import TextIO
 
-from workfold.app.collection import collect
-from workfold.app.coverage import build_coverage
-from workfold.app.report_context import build_report_context
-from workfold.app.resolution import resolve_date_range, resolve_schedule, resolve_timezone_selection
+from workfold.app.execution import execute
 from workfold.collectors.base import CollectorDiagnostic, DiagnosticSeverity
 from workfold.collectors.filesystem import FilesystemCollector
 from workfold.collectors.git import GitCollector, GitRepositoryResolver
@@ -20,9 +17,7 @@ from workfold.collectors.git_changes import GitFileChangeCollector
 from workfold.collectors.git_reflogs import GitReflogCollector
 from workfold.collectors.git_tags import GitTagCollector
 from workfold.config import RawOptions
-from workfold.pipeline import ActivityPipeline
 from workfold.renderers.terminal import TerminalOptions, terminal_color_enabled, write_terminal
-from workfold.reports import build_report
 from workfold.sanitization import sanitize_terminal_text
 
 _USAGE_COLLECTION_FAILURE_CODES = frozenset({"git_not_found", "not_git_repository", "path_not_found"})
@@ -48,28 +43,10 @@ def run(
     output = sys.stdout if stdout is None else stdout
     errors = sys.stderr if stderr is None else stderr
     environment = os.environ if environ is None else environ
-    clock_value = datetime.now(timezone.utc) if now is None else now
-
-    timezone_value = resolve_timezone_selection(options, environment)
-    selected_range, range_label = resolve_date_range(options, timezone_value, clock_value)
-    schedule = resolve_schedule(options)
-    display_range = (
-        (options.display_hours.start_minute, options.display_hours.end_minute)
-        if options.display_hours is not None
-        else None
-    )
-    pipeline = ActivityPipeline(
-        selected_range=selected_range,
-        identity_filters=options.git_identities,
-        timezone_value=timezone_value,
-        schedule=schedule,
-        cluster_window=options.cluster_window,
-        display_range=display_range,
-        outside_limit=options.limit if options.list_outside else 0,
-    )
-    collection = collect(
+    execution = execute(
         options,
-        observation_consumer=pipeline.consume,
+        now=now,
+        environ=environ,
         git_collector=git_collector,
         repository_resolver=repository_resolver,
         file_change_collector=file_change_collector,
@@ -77,32 +54,10 @@ def run(
         reflog_collector=reflog_collector,
         filesystem_collector=filesystem_collector,
     )
-    if not collection.any_collector_succeeded:
+    collection = execution.collection
+    if execution.report is None:
         _write_diagnostics(collection.diagnostics, errors, strict=options.strict)
         return _failed_collection_exit_status(collection.diagnostics)
-
-    aggregation = pipeline.build()
-    ledger = build_coverage(
-        collection,
-        options,
-        selection=pipeline.selection_counts,
-        plotting=pipeline.plotting_counts,
-    )
-    if ledger.markers_plotted != aggregation.event_count:
-        raise RuntimeError("coverage marker totals do not match the classified marker stream")
-
-    error_diagnostics = tuple(item for item in collection.diagnostics if item.severity is DiagnosticSeverity.ERROR)
-    report = build_report(
-        aggregation,
-        build_report_context(
-            collection,
-            options,
-            ledger,
-            range_label=range_label,
-            timezone_label=timezone_value.key,
-            schedule_label=str(schedule),
-        ),
-    )
 
     width = terminal_width if terminal_width is not None else shutil.get_terminal_size(fallback=(80, 24)).columns
     presentation = TerminalOptions(
@@ -114,8 +69,10 @@ def run(
         ),
         list_outside=options.list_outside,
         verbose=options.verbose,
+        marker_style=options.marker_style,
+        grid_style=options.grid_style,
     )
-    write_terminal(report, output, options=presentation)
+    write_terminal(execution.report, output, options=presentation)
     if collection.diagnostics:
         _write_diagnostics(
             collection.diagnostics,
@@ -123,8 +80,7 @@ def run(
             strict=options.strict,
             leading_blank_line=True,
         )
-    is_partial = bool(error_diagnostics) or ledger.has_operational_errors
-    return 1 if options.strict and is_partial else 0
+    return 1 if options.strict and execution.is_partial else 0
 
 
 def _write_diagnostics(

@@ -3,26 +3,23 @@
 from __future__ import annotations
 
 import os
-import re
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
 
 from workfold.collectors.base import CollectorDiagnostic, DiagnosticBuffer
 from workfold.collectors.git_core.repository import (
     GitRepository,
     GitRepositoryResolver,
-    unique_semantic_repositories,
+    group_semantic_repositories,
 )
+from workfold.collectors.git_core.revisions import iter_commit_ids_for_contexts
 from workfold.collectors.git_core.runner import GitCommandError, GitRunner, command_diagnostic
 from workfold.collectors.git_objects import GitObjectParseError, ParsedCommit, parse_cat_file_batch, parse_commit_object
 from workfold.config import RefScope
 from workfold.iterables import batched
 from workfold.models import RecordKind, RecordOrigin, Source, TimestampKind, TimestampObservation
 from workfold.provenance import git_commit_id
-
-OID_TEXT_RE: Final[re.Pattern[str]] = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,95 +129,6 @@ class GitCollectionResult:
         return bool(self.diagnostics)
 
 
-def parse_commit_ids(output: bytes, *, repository: GitRepository) -> tuple[tuple[str, ...], int]:
-    ids: list[str] = []
-    seen: set[str] = set()
-    duplicates = 0
-    for raw_line in output.splitlines():
-        try:
-            object_id = raw_line.decode("ascii")
-        except UnicodeDecodeError as error:
-            raise GitCommandError(
-                code="invalid_git_output",
-                message="git rev-list returned a non-ASCII object ID",
-                command=("rev-list",),
-                cwd=repository.root,
-            ) from error
-        if not OID_TEXT_RE.fullmatch(object_id):
-            raise GitCommandError(
-                code="invalid_git_output",
-                message="git rev-list returned an invalid object ID",
-                command=("rev-list",),
-                cwd=repository.root,
-            )
-        if object_id in seen:
-            duplicates += 1
-            continue
-        seen.add(object_id)
-        ids.append(object_id)
-    return tuple(ids), duplicates
-
-
-def enumerate_commit_ids(
-    repository: GitRepository,
-    runner: GitRunner,
-    ref_scope: RefScope,
-) -> tuple[tuple[str, ...], int]:
-    if ref_scope is RefScope.ALL_REFS:
-        output = runner.run(("rev-list", "--all"), cwd=repository.root).stdout
-    else:
-        head = runner.run(
-            ("rev-parse", "--verify", "--quiet", "HEAD^{commit}"),
-            cwd=repository.root,
-            allowed_returncodes=(0, 1),
-        )
-        if ref_scope is RefScope.HEAD:
-            if head.returncode == 1:
-                return (), 0
-            output = runner.run(("rev-list", "HEAD"), cwd=repository.root).stdout
-        else:
-            revisions = ("rev-list", "--branches", "HEAD") if head.returncode == 0 else ("rev-list", "--branches")
-            output = runner.run(revisions, cwd=repository.root).stdout
-    return parse_commit_ids(output, repository=repository)
-
-
-def iter_commit_ids(repository: GitRepository, runner: GitRunner, ref_scope: RefScope) -> Iterator[str]:
-    if ref_scope is RefScope.ALL_REFS:
-        revisions = ("rev-list", "--all")
-    else:
-        head = runner.run(
-            ("rev-parse", "--verify", "--quiet", "HEAD^{commit}"),
-            cwd=repository.root,
-            allowed_returncodes=(0, 1),
-        )
-        if ref_scope is RefScope.HEAD:
-            if head.returncode == 1:
-                return
-            revisions = ("rev-list", "HEAD")
-        else:
-            revisions = ("rev-list", "--branches", "HEAD") if head.returncode == 0 else ("rev-list", "--branches")
-
-    for raw_line in runner.iter_stdout_lines(revisions, cwd=repository.root):
-        raw_object_id = raw_line.rstrip(b"\r\n")
-        try:
-            object_id = raw_object_id.decode("ascii")
-        except UnicodeDecodeError as error:
-            raise GitCommandError(
-                code="invalid_git_output",
-                message="git rev-list returned a non-ASCII object ID",
-                command=revisions,
-                cwd=repository.root,
-            ) from error
-        if not OID_TEXT_RE.fullmatch(object_id):
-            raise GitCommandError(
-                code="invalid_git_output",
-                message="git rev-list returned an invalid object ID",
-                command=revisions,
-                cwd=repository.root,
-            )
-        yield object_id
-
-
 class GitCollector:
     """Collect unique raw commit records from one or more selected paths."""
 
@@ -245,9 +153,11 @@ class GitCollector:
         commits: list[CollectedGitCommit] = []
         repository_accounting: list[GitCommitRepositoryAccounting] = []
 
-        for repository in unique_semantic_repositories(repositories):
+        for repository_contexts in group_semantic_repositories(repositories):
+            repository = repository_contexts[0]
             accounting = _collect_repository_commits(
                 repository,
+                repository_contexts=repository_contexts,
                 runner=self._runner,
                 ref_scope=ref_scope,
                 object_batch_size=self._object_batch_size,
@@ -277,6 +187,7 @@ class GitCollector:
 def _collect_repository_commits(
     repository: GitRepository,
     *,
+    repository_contexts: Sequence[GitRepository],
     runner: GitRunner,
     ref_scope: RefScope,
     object_batch_size: int,
@@ -294,7 +205,10 @@ def _collect_repository_commits(
     object_read_failed = False
     try:
         try:
-            for object_id_batch in batched(iter_commit_ids(repository, runner, ref_scope), object_batch_size):
+            for object_id_batch in batched(
+                iter_commit_ids_for_contexts(repository_contexts, runner, ref_scope),
+                object_batch_size,
+            ):
                 object_ids = tuple(object_id_batch)
                 discovered += len(object_ids)
                 input_data = b"".join(object_id.encode("ascii") + b"\n" for object_id in object_ids)

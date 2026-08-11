@@ -17,6 +17,7 @@ from workfold.models import (
     TimestampObservation,
     coalesce_observations,
 )
+from workfold.pipeline import ObservationBatch
 from workfold.provenance import (
     absolute_filesystem_entry_id,
     activity_marker_id,
@@ -124,6 +125,19 @@ def test_origin_and_observation_factories_preserve_roles() -> None:
     assert observation.timestamp_kind.source is Source.GIT
     assert observation.epoch_ns == 1_000_000_000
     assert observation.raw_timestamp == "1 +0000"
+
+
+def test_observation_batch_enforces_one_nonempty_record_without_duplicate_slots() -> None:
+    author = _observation(TimestampKind.GIT_AUTHOR)
+    committer = _observation(TimestampKind.GIT_COMMITTER)
+    assert ObservationBatch.create((author, committer)).observations == (author, committer)
+
+    with pytest.raises(ValueError, match="cannot be empty"):
+        ObservationBatch.create(())
+    with pytest.raises(ValueError, match="one source record"):
+        ObservationBatch.create((author, _observation(TimestampKind.GIT_AUTHOR, origin=_git_origin("other"))))
+    with pytest.raises(ValueError, match="duplicate"):
+        ObservationBatch.create((author, author))
 
 
 def test_origin_rejects_inconsistent_semantics() -> None:

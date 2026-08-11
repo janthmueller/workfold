@@ -36,9 +36,15 @@ jobs:
         shell: bash
         env:
           REQUESTED_TAG: ${{ inputs.tag }}
+          CHECKOUT_REF: ${{ inputs.checkout_ref }}
+          UPLOAD_RELEASE: ${{ inputs.upload }}
         run: |
           if [[ ! "$REQUESTED_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
             echo "Expected a semantic-version release tag, got: $REQUESTED_TAG" >&2
+            exit 2
+          fi
+          if [ "$UPLOAD_RELEASE" = true ] && [ -n "$CHECKOUT_REF" ]; then
+            echo "checkout_ref may be used only for non-uploading test builds" >&2
             exit 2
           fi
           echo "RELEASE_TAG=$REQUESTED_TAG" >> "$GITHUB_ENV"
@@ -51,14 +57,25 @@ jobs:
           echo "BINARY_ARCH=$BINARY_ARCH" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           ref: ${{ inputs.checkout_ref || inputs.tag }}
+      - name: Verify uploaded source matches the release tag
+        if: inputs.upload
+        shell: bash
+        run: |
+          TAG_SHA="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          test "$HEAD_SHA" = "$TAG_SHA"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
-      - run: python -m pip install pyinstaller .
-      - run: pyinstaller --noconfirm --clean --paths . --name workfold workfold/__main__.py
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+      - run: uv sync --locked --extra release
+      - run: uv run --locked pyinstaller --noconfirm --clean --paths . --name workfold workfold/__main__.py
       - name: Add project and dependency notices
-        run: python .github/scripts/prepare_binary_bundle.py dist/workfold
+        run: uv run --locked python .github/scripts/prepare_binary_bundle.py dist/workfold
       - name: Verify version
         shell: bash
         env:
@@ -66,9 +83,9 @@ jobs:
         run: |
           if [ "$UPLOAD_RELEASE" = true ]; then
             TAG_VERSION="${RELEASE_TAG#v}"
-            EXPECTED="$(python -c 'import sys; from packaging.version import Version; print(Version(sys.argv[1]))' "$TAG_VERSION")"
+            EXPECTED="$(uv run --locked python -c 'import sys; from packaging.version import Version; print(Version(sys.argv[1]))' "$TAG_VERSION")"
           else
-            EXPECTED="$(python -c 'from importlib.metadata import version; print(version("workfold"))')"
+            EXPECTED="$(uv run --locked python -c 'from importlib.metadata import version; print(version("workfold"))')"
           fi
           if [ "${{ runner.os }}" = Windows ]; then
             BINARY=dist/workfold/workfold.exe
@@ -89,7 +106,7 @@ jobs:
           grep -Eq '^Events[[:space:]]+2[[:space:]]*$' combined-report.txt
           grep -F "Git commits discovered: 1" combined-report.txt
           grep -F "filesystem entries discovered: 2; eligible=1, Git admin excluded=1" combined-report.txt
-          python -c 'from pathlib import Path; assert b"\x1b" not in Path("combined-report.txt").read_bytes()'
+          uv run --locked python -c 'from pathlib import Path; assert b"\x1b" not in Path("combined-report.txt").read_bytes()'
           test -f dist/workfold/LICENSE
           test -f dist/workfold/README.md
           test -f dist/workfold/THIRD_PARTY_NOTICES.md
@@ -124,7 +141,7 @@ jobs:
           "$hash  $([IO.Path]::GetFileName($archive))" | Set-Content -Encoding ascii $checksum
           "archive=$archive" >> $env:GITHUB_OUTPUT
           "checksum=$checksum" >> $env:GITHUB_OUTPUT
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         if: inputs.upload
         with:
           tag_name: ${{ env.RELEASE_TAG }}

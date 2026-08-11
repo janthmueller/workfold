@@ -29,7 +29,7 @@ from support.git_repo import GitRepo
 
 class QueueRunner(GitIgnoreRunner):
     def __init__(self, outcomes: Sequence[subprocess.CompletedProcess[bytes] | GitIgnoreCommandError]) -> None:
-        super().__init__()
+        super().__init__(stream_output=False)
         self.outcomes = list(outcomes)
         self.calls: list[tuple[tuple[str, ...], Path, bytes | None, Collection[int]]] = []
 
@@ -331,6 +331,37 @@ def test_streamed_git_inventory_is_deduplicated_and_callback_driven(tmp_path: Pa
     assert result.ignored_paths == 2
     assert included == ["tracked.txt", "line\nbreak.txt"]
     assert ignored == [("generated.log", False), ("ignored-dir/file.txt", False)]
+
+
+def test_disk_backed_inventory_membership_streams_only_unseen_ignored_paths(tmp_path: Path) -> None:
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    runner = QueueRunner(
+        (
+            completed(0, b"tracked.txt\0"),
+            completed(0, b"ignored.log\0ignored-dir/file.txt\0"),
+            completed(0, b"ignored-dir/\0"),
+        )
+    )
+    states: list[tuple[bool, bool]] = []
+    unseen: list[tuple[str, bool]] = []
+
+    result = GitIgnoreService(runner).inspect_inventory(
+        GitIgnoreRepository(repository_root.resolve(), False),
+        repository_root,
+        inventory_consumer=lambda inventory: states.extend(
+            (
+                inventory.ignore_state("tracked.txt"),
+                inventory.ignore_state("ignored.log"),
+                inventory.ignore_state("ignored-dir"),
+            )
+        ),
+        unseen_ignored_consumer=lambda path, is_directory: unseen.append((path, is_directory)),
+    )
+
+    assert result.error is None
+    assert states == [(False, False), (True, False), (False, True)]
+    assert unseen == [("ignored-dir/file.txt", False)]
 
 
 @pytest.mark.parametrize(

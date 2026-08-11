@@ -35,13 +35,19 @@ Common views:
 ```bash
 workfold . -t 2026-W31                         # one ISO week
 workfold . -t 2026-W30 -t 2026-W31            # several weeks, folded together
+workfold . -t 2w3d                             # rolling elapsed window
 workfold . -t 2026-07-01..2026-07-31          # inclusive date range
 workfold . -t all -m fs                        # filesystem metadata
 workfold . -t all -m git -p portable           # portable Git-object timestamps
 workfold . -t all -m all -p full               # exhaustive local view
 workfold . --git-identity jan@example.com      # only that recorded Git identity
+workfold . --marker-style identity             # identity codes instead of circles
 workfold . --timezone Europe/Berlin
 workfold . --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
+workfold . -E all                              # keep only occupied day columns
+workfold . -E weekend                          # remove empty weekend columns
+workfold . -H weekend                          # always hide weekend columns
+workfold . --grid vertical                     # add column separators
 workfold . --list-outside --limit 50
 ```
 
@@ -49,7 +55,7 @@ The three main selectors are independent:
 
 | Selector | Purpose | Values |
 | --- | --- | --- |
-| `-t`, `--time` | Date scope | `this-week`, `YYYY-Www`, `DATE..DATE`, `all` |
+| `-t`, `--time` | Date scope | `this-week`, `2w3d`, `YYYY-Www`, `DATE..DATE`, `all` |
 | `-m`, `--mode` | Evidence source | `git`, `fs`, `all` |
 | `-p`, `--profile` | Collection depth | `standard`, `portable`, `full` |
 
@@ -68,12 +74,47 @@ Use `--cluster-window 10m`, `--cluster-window 1h5m`, or another duration to tune
 row clustering. Use `--no-color` or the standard `NO_COLOR` environment
 variable for colorless output.
 
+## Configuration
+
+Put personal defaults in the platform configuration directory, or project
+defaults in `workfold.toml`:
+
+```toml
+timezone = "Europe/Berlin"
+hours = "Mo-Thu 08:00-16:30; Fr 08:00-14:00"
+mode = "git"
+profile = "portable"
+grid = "vertical"
+hide-empty-days = ["weekend"]
+```
+
+Python projects may use `[tool.workfold]` in `pyproject.toml` instead. Values
+resolve as built-in → global → nearest project → CLI. Inspect the result and
+each value's origin without collecting timestamps:
+
+```bash
+workfold . --show-config
+```
+
+Use `--config FILE` for one exact file or `--no-config` for built-ins plus CLI
+only. The [usage guide](https://janthmueller.github.io/workfold/guides/usage/#configuration-files)
+documents locations, discovery, merging, and every supported key.
+
 ## Reading the chart
 
 - Circles are Git events; squares are filesystem events.
+- `--marker-style identity` replaces Git circles with mapped codes such as `J`
+  or the collision-safe `J1`, `J2`, and `J3`.
 - Green and blue are inside the configured schedule; red is outside.
+- Filled/uppercase markers are inside; hollow/lowercase markers are outside.
+- The key maps each visible identity/source once and adds an outside-hours cue
+  only when needed.
 - One symbol is one event. Busy cells use exact `×N` counts.
 - Empty time is omitted. A `⋮` row reports a compressed gap.
+- Day-column hiding changes only the matrix; totals continue to cover every
+  selected event.
+- `--grid vertical|horizontal|both` adds optional internal chart lines; the
+  uncluttered default is `none`.
 
 The summary independently splits all events by schedule and by calendar day.
 Weekend events can therefore also be outside working hours.

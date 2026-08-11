@@ -20,6 +20,7 @@ from workfold.time_ranges import (
     parse_iso_week,
     resolve_local_timezone,
     resolve_timezone,
+    rolling_duration_range,
     utc_ns_to_datetime,
 )
 
@@ -153,6 +154,24 @@ def test_current_week_uses_selected_timezone() -> None:
     assert selected.ranges[0].start_utc_ns == datetime_to_utc_ns(expected_monday)
     with pytest.raises(TimeRangeError, match="timezone-aware"):
         current_week_range(datetime(2026, 8, 3), BERLIN)
+
+
+def test_rolling_duration_is_half_open_and_uses_elapsed_time_across_dst() -> None:
+    now = datetime(2026, 3, 30, 12, 0, tzinfo=BERLIN)
+    selected = rolling_duration_range(now, timedelta(days=2))
+    start = datetime(2026, 3, 28, 11, 0, tzinfo=BERLIN)
+
+    assert selected.ranges == (InstantRange(datetime_to_utc_ns(start), datetime_to_utc_ns(now)),)
+    assert datetime_to_utc_ns(start) in selected
+    assert datetime_to_utc_ns(now) not in selected
+
+
+def test_rolling_duration_rejects_invalid_clock_and_duration() -> None:
+    now = datetime(2026, 8, 11, tzinfo=UTC)
+    with pytest.raises(TimeRangeError, match="timezone-aware"):
+        rolling_duration_range(datetime(2026, 8, 11), timedelta(days=1))
+    with pytest.raises(TimeRangeError, match="positive"):
+        rolling_duration_range(now, timedelta(0))
 
 
 def test_timezone_and_calendar_parsers_are_actionable() -> None:

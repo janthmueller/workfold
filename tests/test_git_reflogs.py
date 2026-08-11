@@ -600,7 +600,6 @@ def test_semantic_reflog_reader_rejects_a_symlink_swap_before_open(
 )
 def test_reflog_collector_accounts_for_discovery_path_read_and_parse_failures(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     fault: str,
     expected_code: str,
     expected_stage: str,
@@ -613,6 +612,7 @@ def test_reflog_collector_accounts_for_discovery_path_read_and_parse_failures(
     reflog_path.write_bytes(b"bad\n" if fault == "parse-error" else valid_payload)
     repository = GitRepository(tmp_path, metadata, metadata, False)
 
+    changed_reader = None
     if fault == "changed-during-read":
 
         def changed_read(
@@ -622,7 +622,7 @@ def test_reflog_collector_accounts_for_discovery_path_read_and_parse_failures(
         ) -> tuple[bytes, bool]:
             return valid_payload, True
 
-        monkeypatch.setattr(reflog_module, "read_semantic_reflog", changed_read)
+        changed_reader = changed_read
 
     class FaultRunner(GitRunner):
         def run(
@@ -661,7 +661,16 @@ def test_reflog_collector_accounts_for_discovery_path_read_and_parse_failures(
                 output = os.fsencode(reflog_path) + b"\n"
             return subprocess.CompletedProcess(arguments, 0, stdout=output, stderr=b"")
 
-    result = GitReflogCollector(FaultRunner()).collect((repository,))
+    collector = (
+        GitReflogCollector(
+            FaultRunner(),
+            reflog_reader=changed_reader,
+            reflog_visitor=None,
+        )
+        if changed_reader is not None
+        else GitReflogCollector(FaultRunner())
+    )
+    result = collector.collect((repository,))
 
     assert result.is_partial
     assert result.successful_repositories == 0

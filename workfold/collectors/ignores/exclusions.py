@@ -17,6 +17,7 @@ class ExplicitExcluder:
 
     patterns: tuple[str, ...]
     _spec: GitIgnoreSpec
+    _scope: PurePosixPath = PurePosixPath(".")
 
     @classmethod
     def compile(cls, patterns: Sequence[str]) -> ExplicitExcluder:
@@ -32,6 +33,15 @@ class ExplicitExcluder:
                 raise ExclusionPatternError("explicit exclusion patterns cannot contain NUL bytes")
         return cls(normalized, GitIgnoreSpec.from_lines(normalized))
 
+    def scoped(self, relative_root: PurePosixPath | str) -> ExplicitExcluder:
+        """Preserve the original selected-root scope below a nested scan root."""
+
+        relative = relative_root if isinstance(relative_root, PurePosixPath) else PurePosixPath(relative_root)
+        if not relative.parts or relative == PurePosixPath("."):
+            return self
+        scope = relative if self._scope == PurePosixPath(".") else self._scope / relative
+        return ExplicitExcluder(self.patterns, self._spec, scope)
+
     def matches(self, relative_path: PurePosixPath | str, *, is_directory: bool) -> bool:
         """Return whether a root-relative path is explicitly excluded."""
 
@@ -39,6 +49,8 @@ class ExplicitExcluder:
         value = value.lstrip("/")
         if not value or value == ".":
             return False
+        if self._scope != PurePosixPath("."):
+            value = (self._scope / value).as_posix()
         if is_directory and not value.endswith("/"):
             value += "/"
         return self._spec.match_file(value)

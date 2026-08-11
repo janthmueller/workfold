@@ -7,12 +7,9 @@ import stat
 from pathlib import Path, PurePosixPath
 
 from workfold.collectors.base import CollectorDiagnostic, DiagnosticSeverity
-from workfold.collectors.filesystem.accounting import AccountingBuilder
 from workfold.collectors.filesystem.models import CollectedFilesystemEntry
 from workfold.collectors.filesystem.types import DirectorySafetyError
 from workfold.collectors.ignores import (
-    ExplicitExcluder,
-    GitFilesystemInventory,
     GitIgnoreProbe,
     GitIgnoreRepository,
     is_git_admin_name,
@@ -32,46 +29,6 @@ def retain_entry(
 ) -> None:
     if entries is not None:
         entries.append(CollectedFilesystemEntry(origin, disposition))
-
-
-def account_inventory_warning(
-    root: Path,
-    inventory: GitFilesystemInventory,
-    *,
-    accounting: AccountingBuilder,
-    diagnostics: list[CollectorDiagnostic],
-) -> None:
-    if inventory.warning is None:
-        return
-    accounting.discover(root)
-    accounting.record(root, RecordDisposition.RECORD_ERROR)
-    diagnostics.append(ignore_diagnostic(root, inventory.warning, warning=False))
-
-
-def account_inventory_ignored(
-    root: Path,
-    inventory: GitFilesystemInventory,
-    *,
-    seen: set[str],
-    excluder: ExplicitExcluder,
-    accounting: AccountingBuilder,
-) -> None:
-    unseen = (
-        inventory.ignored_relative_paths
-        if not seen
-        else tuple(path for path in inventory.ignored_relative_paths if path not in seen)
-    )
-    ignored_count = len(unseen)
-    accounting.discover(root, ignored_count)
-    if not excluder.patterns:
-        accounting.record(root, RecordDisposition.IGNORED, ignored_count)
-        return
-    explicitly_excluded = sum(
-        excluder.matches(relative_path, is_directory=relative_path in inventory.ignored_directory_paths)
-        for relative_path in unseen
-    )
-    accounting.record(root, RecordDisposition.EXPLICITLY_EXCLUDED, explicitly_excluded)
-    accounting.record(root, RecordDisposition.IGNORED, ignored_count - explicitly_excluded)
 
 
 def entry_type(mode: int) -> EntryType | None:
@@ -149,6 +106,8 @@ def is_lexical_descendant(path: Path, parent: Path) -> bool:
 
 
 def crosses_nested_repository(path: Path, parent: Path) -> bool:
+    """Return whether deduplicating *path* would cross a repository boundary."""
+
     candidate = path
     while candidate != parent and is_lexical_descendant(candidate, parent):
         if is_nested_repository_boundary(candidate, selected_root=parent):

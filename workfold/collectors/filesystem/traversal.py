@@ -24,7 +24,7 @@ from workfold.collectors.filesystem.models import CollectedFilesystemEntry
 from workfold.collectors.filesystem.types import DirectorySafetyError, PendingEntry, RootSnapshot, ScandirReader
 from workfold.collectors.ignores import (
     ExplicitExcluder,
-    GitFilesystemInventory,
+    GitFilesystemInventoryView,
     GitIgnoreRepository,
     is_nested_repository_boundary,
 )
@@ -96,9 +96,9 @@ def discover_entries(
     entries: list[CollectedFilesystemEntry] | None,
     diagnostics: list[CollectorDiagnostic],
     repository: GitIgnoreRepository | None,
-    inventory: GitFilesystemInventory | None,
-    inventory_ignored_seen: set[str],
+    inventory: GitFilesystemInventoryView | None,
     pending_consumer: Callable[[PendingEntry], None] | None,
+    nested_repository_consumer: Callable[[RootSnapshot, ExplicitExcluder], None],
     include_directories: bool,
 ) -> list[PendingEntry]:
     """Discover current entries lexically without following symlink targets."""
@@ -129,10 +129,6 @@ def discover_entries(
     if root_type is not EntryType.DIRECTORY:
         return pending
 
-    inventory_ignored_paths: set[str] = set(inventory.ignored_relative_paths) if inventory is not None else set()
-    inventory_directory_paths: frozenset[str] = (
-        inventory.ignored_directory_paths if inventory is not None else frozenset()
-    )
     admin_relative_parts = repository_admin_relative_parts(root, repository)
     root_relative = PurePosixPath(".")
     directories = [(root, root_relative)]
@@ -158,9 +154,9 @@ def discover_entries(
                             PurePosixPath(name) if directory_relative == root_relative else directory_relative / name
                         )
                         relative_text = relative.as_posix()
-                        inventory_ignored = relative_text in inventory_ignored_paths
-                        if inventory_ignored:
-                            inventory_ignored_seen.add(relative_text)
+                        inventory_ignored, inventory_directory = (
+                            inventory.ignore_state(relative_text) if inventory is not None else (False, False)
+                        )
                         if is_semantic_git_admin(
                             path,
                             repository,
@@ -180,14 +176,16 @@ def discover_entries(
                             path,
                             selected_root=root,
                         ):
-                            accounting.discover(root)
-                            accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
-                            retain_entry(entries, candidate_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
+                            # A nested worktree is user data, not Git administrative
+                            # storage. Give it a separate scan context so its own
+                            # tracked/untracked and ignore semantics apply. Its .git
+                            # entry will still be excluded by that context.
+                            nested_repository_consumer(RootSnapshot(path, snapshot), excluder.scoped(relative))
                             continue
-                        if inventory_ignored or (
-                            candidate_type is EntryType.DIRECTORY and relative_text in inventory_directory_paths
-                        ):
+                        if inventory_ignored or (candidate_type is EntryType.DIRECTORY and inventory_directory):
                             if candidate_type is not EntryType.DIRECTORY or include_directories:
+                                if candidate_type is EntryType.DIRECTORY:
+                                    accounting.prune_ignored_subtree()
                                 accounting.discover(root)
                                 accounting.record(root, RecordDisposition.IGNORED)
                                 retain_entry(entries, candidate_origin, RecordDisposition.IGNORED)

@@ -68,10 +68,17 @@ narrow for that representation, a cell switches to exact per-symbol `×N` counts
 very busy cells may make that same exact-count switch before rendering so their
 visual sequence cannot grow memory without bound. The underlying event,
 source/schedule, and coverage totals are unchanged.
-Chart band labels deliberately use minute-only `HH:MM` endpoints, including for
-second-level events and cluster windows. This display choice does not round or
-overwrite the normalized instant: exact seconds and available nanoseconds remain
-in provenance and exact outside-event listings.
+Chart band labels use minute-only `HH:MM` endpoints. The cluster window is at
+least one minute, preventing distinct clusters from receiving the same displayed
+minute. This display choice does not round or overwrite the normalized instant:
+exact seconds and available nanoseconds remain in provenance and exact
+outside-event listings.
+
+Rolling `-t` durations are fixed elapsed windows ending at one clock value
+captured at run start. Their start is inclusive and captured `now` is exclusive;
+weeks mean seven 24-hour days and days mean 24 hours, including across a local
+daylight-saving transition. Workfold does not reinterpret them as calendar
+weeks, dates, or months.
 
 ## Source-specific limitations
 
@@ -98,9 +105,11 @@ in provenance and exact outside-event listings.
   path exists, its entry type, and all of its timestamps. Never-staged,
   non-ignored files are included; index-only paths absent from the worktree are
   not filesystem events.
-- Ignored leaf candidates are counted without reading their metadata. The full
-  profile and `--include-ignored` instead traverse and stat those entries because
-  their timestamps are explicitly in scope.
+- Ignored leaf candidates and ignored subtree boundaries are counted without
+  reading their metadata. When directories are requested, coverage separately
+  reports each pruned ignored subtree and states that descendant directories
+  were not enumerated. The full profile and `--include-ignored` instead traverse
+  and stat those entries because their timestamps are explicitly in scope.
 - A directory visited only so a file-only scan can reach descendant files is
   traversal structure, not a discovered metadata record. It enters record and
   timestamp coverage when directories are requested; explicit exclusion and
@@ -118,6 +127,10 @@ in provenance and exact outside-event listings.
 Collection is not an atomic snapshot. A repository or tree changing during a
 run can produce partial coverage; Workfold reports detected failures but does
 not lock the user's working tree.
+
+Weekday-column controls are presentation-only. `--hide-days` may omit occupied
+columns from the matrix, but those events remain in summary, coverage, and
+outside-event accounting and receive a compact hidden-event count.
 
 ## Privacy and security
 

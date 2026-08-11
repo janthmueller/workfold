@@ -45,7 +45,7 @@ def write_terminal(
     )
     sections: list[Iterable[Text]] = [
         render_chart(report, resolved),
-        render_legend(report, resolved.width),
+        render_legend(report, resolved),
         plain_section(render_summary(report, resolved.width)),
     ]
     if resolved.verbose:

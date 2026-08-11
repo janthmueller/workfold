@@ -5,9 +5,6 @@ from workfold.collectors.git_core.commits import (
     GitCollectionResult,
     GitCollector,
     GitCommitRepositoryAccounting,
-    enumerate_commit_ids,
-    iter_commit_ids,
-    parse_commit_ids,
 )
 from workfold.collectors.git_core.repository import (
     GitRepository,
@@ -16,6 +13,7 @@ from workfold.collectors.git_core.repository import (
     resolve_repository,
     unique_semantic_repositories,
 )
+from workfold.collectors.git_core.revisions import enumerate_commit_ids, iter_commit_ids, parse_commit_ids
 from workfold.collectors.git_core.runner import GitCommandError, GitRunner
 from workfold.config import RefScope
 

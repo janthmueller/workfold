@@ -54,18 +54,25 @@ def coverage_status_label(
 ) -> str:
     """Summarize whether enabled collectors completed their requested scope."""
 
-    error_count = sum(item.severity is DiagnosticSeverity.ERROR for item in collection.diagnostics)
-    filesystem_inventory_incomplete = any(
-        item.code == "git_filesystem_inventory_incomplete" for item in collection.diagnostics
+    error_count = sum(item.occurrence_count(DiagnosticSeverity.ERROR) for item in collection.diagnostics)
+    filesystem_inventory_incomplete = sum(
+        item.completeness_failure_count
+        for item in collection.diagnostics
+        if item.code == "git_filesystem_inventory_incomplete"
     )
     other_partial_warning_count = sum(
-        item.affects_completeness and item.code != "git_filesystem_inventory_incomplete"
+        item.completeness_failure_count
         for item in collection.diagnostics
+        if item.code != "git_filesystem_inventory_incomplete"
     )
     if error_count or filesystem_inventory_incomplete or other_partial_warning_count or ledger.has_operational_errors:
         reasons: list[str] = []
         if filesystem_inventory_incomplete:
-            reasons.append("filesystem inventory incomplete")
+            reasons.append(
+                "filesystem inventory incomplete"
+                if filesystem_inventory_incomplete == 1
+                else f"{filesystem_inventory_incomplete:,} filesystem inventories incomplete"
+            )
         if error_count:
             reasons.append(_counted(error_count, "collection error"))
         if other_partial_warning_count:
@@ -80,6 +87,13 @@ def coverage_status_label(
         qualifiers.append("Git timestamps explicitly filtered by identity")
     if options.exclusions:
         qualifiers.append("explicit exclusions active")
+    pruned_ignored_subtrees = (
+        collection.filesystem_result.accounting.pruned_ignored_subtrees
+        if collection.filesystem_result is not None
+        else 0
+    )
+    if pruned_ignored_subtrees:
+        qualifiers.append(_pruned_ignored_subtree_label(pruned_ignored_subtrees))
     unsupported_capabilities: dict[str, str | None] = {}
     for capability in collection.capabilities:
         if capability.status is CapabilityStatus.UNSUPPORTED:
@@ -89,6 +103,12 @@ def coverage_status_label(
         if note:
             qualifier += f": {note}"
         qualifiers.append(qualifier)
+    unavailable_by_kind = Counter[TimestampKind]()
+    for item in ledger.timestamps:
+        unavailable_by_kind[item.key.timestamp_kind] += item.unavailable
+    unavailable_by_kind += Counter()
+    if unavailable_by_kind:
+        qualifiers.append(_unavailable_timestamp_label(unavailable_by_kind))
     if qualifiers:
         label += "; " + "; ".join(qualifiers)
     return label
@@ -96,6 +116,25 @@ def coverage_status_label(
 
 def _counted(count: int, singular: str) -> str:
     return f"{count:,} {singular if count == 1 else singular + 's'}"
+
+
+def _pruned_ignored_subtree_label(count: int) -> str:
+    noun = "subtree" if count == 1 else "subtrees"
+    return f"{count:,} ignored filesystem {noun} pruned; descendant directories not counted"
+
+
+def _unavailable_timestamp_label(counts: Mapping[TimestampKind, int]) -> str:
+    total = sum(counts.values())
+    if len(counts) == 1:
+        kind, count = next(iter(counts.items()))
+        noun = "timestamp" if count == 1 else "timestamps"
+        record_noun = "source record" if count == 1 else "source records"
+        return f"{count:,} {_timestamp_label(kind)} {noun} unavailable on {record_noun}"
+    details = ", ".join(
+        f"{count:,} {_timestamp_label(kind)}" for kind, count in sorted(counts.items(), key=lambda item: item[0].value)
+    )
+    noun = "timestamp slot" if total == 1 else "timestamp slots"
+    return f"{total:,} {noun} unavailable on source records ({details})"
 
 
 def coverage_details(
@@ -140,6 +179,10 @@ def coverage_details(
         )
         extras = [f"{label}={counts[name]:,}" for name, label in outcomes if counts[name]]
         details.append(line + ("; " + ", ".join(extras) if extras else ""))
+    if collection.filesystem_result is not None:
+        pruned = collection.filesystem_result.accounting.pruned_ignored_subtrees
+        if pruned:
+            details.append(_pruned_ignored_subtree_label(pruned))
 
     timestamp_counts: dict[TimestampKind, Counter[str]] = {}
     for item in ledger.timestamps:
@@ -279,9 +322,13 @@ def coverage_details(
             note = f" ({capability.note})" if capability.note else ""
             details.append(f"{capability.name}: {capability.status.value}{note}")
     if collection.diagnostics:
-        errors = sum(item.severity is DiagnosticSeverity.ERROR for item in collection.diagnostics)
-        warnings = len(collection.diagnostics) - errors
-        details.append(f"operational diagnostics: {errors:,} error(s), {warnings:,} warning(s)")
+        errors = sum(item.occurrence_count(DiagnosticSeverity.ERROR) for item in collection.diagnostics)
+        warnings = sum(item.occurrence_count(DiagnosticSeverity.WARNING) for item in collection.diagnostics)
+        infos = sum(item.occurrence_count(DiagnosticSeverity.INFO) for item in collection.diagnostics)
+        counts = [f"{errors:,} error(s)", f"{warnings:,} warning(s)"]
+        if infos:
+            counts.append(f"{infos:,} info message(s)")
+        details.append("operational diagnostics: " + ", ".join(counts))
     return tuple(details)
 
 

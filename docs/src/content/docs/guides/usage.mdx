@@ -36,6 +36,116 @@ Git collection invokes the local `git` executable and never fetches or contacts
 a remote. Use `--git-commits-from head` to limit history to the currently
 checked-out branch or detached `HEAD`.
 
+## Configuration files
+
+Workfold can load personal and project defaults without changing the meaning of
+its CLI flags. Resolution is deterministic:
+
+```text
+built-in → global config → nearest project config → explicit CLI
+```
+
+Each layer overrides only the keys it contains. Arrays replace earlier arrays;
+they are not concatenated. Unknown keys, wrong TOML types, malformed values,
+and invalid final option combinations are usage errors rather than silently
+ignored settings.
+
+The automatic global file is platform-specific:
+
+| Platform | Location |
+| --- | --- |
+| Linux and other Unix | `${XDG_CONFIG_HOME:-~/.config}/workfold/workfold.toml` |
+| macOS | `~/Library/Application Support/workfold/workfold.toml` |
+| Windows | `%APPDATA%\workfold\workfold.toml` |
+
+Starting at each selected `PATH`, Workfold searches upward for the nearest
+`workfold.toml` or a `pyproject.toml` containing `[tool.workfold]`. A standalone
+`workfold.toml` wins if both exist in the same directory. Multiple input paths
+must resolve to the same project configuration because one chart has one
+timezone, schedule, and rendering policy; otherwise Workfold asks for an
+explicit choice.
+
+A standalone file stores keys at its root:
+
+```toml title="workfold.toml"
+time = "this-week"
+mode = "git"
+profile = "standard"
+
+timezone = "Europe/Berlin"
+hours = "Mo-Thu 08:00-16:30; Fr 08:00-14:00"
+cluster-window = "1h"
+marker-style = "identity"
+grid = "vertical"
+hide-empty-days = ["weekend"]
+```
+
+The same settings fit inside a Python project file:
+
+```toml title="pyproject.toml"
+[tool.workfold]
+timezone = "Europe/Berlin"
+hours = "Mo-Fr 08:00-16:30"
+grid = "vertical"
+```
+
+Repeatable and comma-separated CLI selections use TOML arrays. `time` also
+accepts one string for its common single-selector form:
+
+```toml
+mode = "all"
+time = ["2026-W30", "2026-W31"]
+git-records = ["commit", "tag"]
+git-commit-times = ["author", "committer"]
+git-identity = ["jan@example.com", "Jan Müller"]
+fs-times = ["birth", "modified"]
+fs-entries = ["file"]
+exclude = ["node_modules", "*.log"]
+hide-days = []
+hide-empty-days = ["weekend"]
+```
+
+Git-only and filesystem-only scope keys must agree with the effective `mode`;
+use `mode = "all"` when configuring both families in one default view. A
+higher-precedence mode selection can replace lower-layer settings from the
+collector it disables.
+
+Other configurable keys are `git-commits-from`, `include-ignored`,
+`display-hours`, `no-color`, `list-outside`, `limit`, `coverage`, `strict`, and
+`verbose`. Boolean values use TOML `true`/`false`. Positional paths and the
+configuration-control flags themselves are deliberately not configurable.
+Use `timezone = "local"` for the operating-system local zone and
+`display-hours = "auto"` for an automatic chart range; these values can also
+reset a global setting from a nearer layer. Omit `git-commits-from` for the
+selected profile's default.
+
+The locked `portable` and `full` profiles keep their CLI semantics. A
+higher-precedence profile replaces granular scope defaults inherited from a
+lower layer; granular Git/filesystem scope settings from the same or a higher
+layer are rejected while that locked profile remains selected.
+
+Inspect the fully validated result without collecting Git or filesystem data:
+
+```bash
+workfold . --show-config
+workfold . --grid both --show-config  # includes this CLI override and its origin
+```
+
+`--show-config` prints the loaded files followed by every effective value and
+whether it came from a built-in, global file, local file, exact config file, or
+the CLI. `--help` remains stable and describes built-in defaults; it does not
+pretend configured values are universal defaults.
+
+Use one exact file and disable automatic global/project discovery with
+`--config FILE`. An explicitly named `pyproject.toml` still reads
+`[tool.workfold]`; any other filename uses the standalone root schema. Use
+`--no-config` for built-ins plus CLI only:
+
+```bash
+workfold . --config ~/workfold/client.toml
+workfold . --no-config
+```
+
 ## Select dates
 
 `-t/--time` defaults to `this-week` and accepts one selector kind at a time:
@@ -50,6 +160,11 @@ workfold . -t 2026-07-01..2026-07-31
 workfold . -t 2026-01-01..
 workfold . -t ..2026-07-31
 
+# A rolling elapsed window ending when this run starts
+workfold . -t 2w
+workfold . -t 2w3d
+workfold . -t 6h30m
+
 # Every available date for the otherwise selected mode/evidence scope
 workfold . -t all
 ```
@@ -58,6 +173,14 @@ workfold . -t all
 mixing selector kinds is invalid. All selected dates still fold onto one
 Monday-to-Sunday chart. Internally, Workfold converts inclusive calendar choices
 to half-open instant ranges so a boundary event is not counted twice.
+
+Rolling selectors are also single-use and form the half-open instant range
+`[captured-now - duration, captured-now)`. Workfold captures `now` once for the
+run. Components use ordered, nonrepeating `w`, `d`, `h`, and `m` units;
+`w` is seven elapsed 24-hour days, `d` is 24 elapsed hours, and `m` means
+minutes. This fixed-duration behavior remains exact across daylight-saving
+changes. Calendar months are intentionally not accepted because their length
+and boundary semantics differ from elapsed durations.
 
 ## Configure timezone and schedule
 
@@ -87,25 +210,67 @@ Workfold sorts visible events by localized wall-clock time, uses the earliest
 unassigned event as an anchor, assigns every weekday's events in the half-open
 interval `[anchor, anchor + cluster-window)`, and repeats. The anchor never
 moves when a later event joins the band, and an event exactly on the end starts
-or joins the next band. All seven weekday columns share these bands, so rows
-remain comparable. A row label shows its first through last observed event, not
-the entire assignment window. Its endpoint labels always use `HH:MM`; seconds
-are deliberately omitted even for second-level windows or events. Exact seconds
-and nanoseconds remain in normalized provenance and exact outside-event rows.
+or joins the next band. All visible weekday columns share these bands, so rows
+remain comparable. A row label shows its first through last visible event, not
+the entire assignment window. Its endpoint labels use `HH:MM`. Because the
+minimum window is one minute, distinct clusters cannot receive the same
+minute-only label. Exact seconds and nanoseconds remain in normalized provenance
+and exact outside-event rows.
 
-`--cluster-window` accepts a positive duration below 24 hours. Components use
+`--cluster-window` accepts a duration from `1m` up to, but not including, 24
+hours. Components use
 `h`, `m`, and `s` in that order without repeating a unit. Whitespace is optional
 between complete components, but a spaced value must be quoted as one CLI
-argument. The default is `1h`; smaller values such as `30s` and `10m` are custom
+argument. The default is `1h`; smaller values such as `1m30s` and `10m` are custom
 views:
 
 ```bash
-workfold . --cluster-window 30s
+workfold . --cluster-window 1m30s
 workfold . --cluster-window 10m
 workfold . --cluster-window 1h
 workfold . --cluster-window 1h5m
 workfold . --cluster-window '1h 5m'
 ```
+
+Internal grid lines are optional:
+
+```bash
+workfold . --grid none        # default
+workfold . --grid vertical
+workfold . --grid horizontal
+workfold . --grid both
+```
+
+Vertical lines separate the time band from each visible weekday column.
+Horizontal lines appear below the header and between logical time clusters;
+they never split a wrapped continuation row. When clusters have a compressed
+gap, its `⋮` duration is embedded into their shared boundary instead of becoming
+a separate row. Grid styles use dim internal lines without an outer box.
+
+Weekday columns are independently controllable without filtering the event
+scope:
+
+```bash
+workfold . -E all
+workfold . -H weekend
+workfold . --hide-empty-days weekend
+workfold . --hide-empty-days weekdays
+workfold . --hide-empty-days mon,wed,sunday
+workfold . --hide-days weekend --hide-empty-days weekdays
+```
+
+`-H` is short for `--hide-days`; `-E` is short for `--hide-empty-days`. Both
+options are repeatable and accept comma-separated, case-insensitive
+two-letter, three-letter, or full weekday names plus the `weekdays` and
+`weekend` groups. `--hide-empty-days` also accepts `all`. Empty means no marker
+remains in that column after selection and `--display-hours` cropping. An
+occupied day is therefore always preserved by `--hide-empty-days`.
+
+`--hide-days` is unconditional. Its events disappear from the matrix but remain
+in Events, Schedule, Calendar, coverage, and `--list-outside`; a compact
+`Hidden` line accounts for occupied columns. Empty-column hiding needs no such
+notice because it omits no visible event. Column projection happens before
+clustering, so hidden weekdays cannot anchor or stretch a visible time band.
 
 Events are ordered by local wall time, actual instant, canonical source (Git
 before filesystem for simultaneous ties), and stable marker ID; weekdays only
@@ -119,12 +284,39 @@ cell; they are counts, not density estimates. Empty bands are always omitted,
 and a gap of at least one hour between consecutive observed cluster endpoints
 gets one dim duration cue.
 
+Use `--marker-style identity` when contributor recognition matters more than a
+single Git source symbol:
+
+```bash
+workfold . -t 2w --marker-style identity
+```
+
+Each visible Git marker then uses a deterministic code derived from the exact
+recorded name/email pair. The key maps every visible code back to that full,
+unverified Git identity exactly once, using its canonical uppercase code in
+green. It never adds a lowercase entry for each identity; the single red `a–z`
+outside-hours cue explains every lowercase occurrence compactly.
+An identity uses the first ASCII letter in its normalized name, then its email
+as a fallback, and `I` if neither contains one. A unique initial remains one
+letter; every member of a shared initial group is numbered from `1`, such as
+`J1`, `J2`, and `J3`. This remains unbounded and adjacent markers are
+self-delimiting without spaces: `J1J2j3` is two inside-hours identities followed
+by the outside-hours form of `J3`.
+When one marker coalesces identical author and committer instants belonging to
+different identities, it receives `◆` (then `◆2`, `◆3`, if several such
+groups are visible) rather than arbitrarily choosing one person. Filesystem
+markers remain squares. In every color mode, uppercase/lowercase identity codes
+mean inside/outside; composite codes use `◆`/`◇` for the same distinction.
+
 Terminal output starts directly with the matrix; there is no title or context
 subtitle above it. A content-aware symbol key follows without a heading. It
 names only categories actually visible after display cropping and explains
-`×N` only when exact-count tokens occur. The configured schedule follows on an
-independent left-aligned `Working hours:` line. Three statistic rows then appear
-without a Summary heading: Events is the common total, Schedule is its
+`×N` only when exact-count tokens occur. One conditional outside-hours cue uses
+the hollow shapes or lowercase classes actually present; the entire cue is red
+when color is available. It never repeats one contributor's marker as a global
+example. The configured schedule follows on an independent left-aligned
+`Working hours:` line. Three statistic rows then appear without a Summary
+heading: Events is the common total, Schedule is its
 inside/outside split, and Calendar is its independent weekday/weekend split.
 Both split rows show counts and percentages of Events; a weekend event can also
 be outside the schedule. Use `--verbose` for scope, period, the complete successful
@@ -243,7 +435,11 @@ workfold . -m fs --exclude node_modules --exclude '*.log'
 ```
 
 Tracked files remain included even if a current ignore pattern matches them.
-Explicit exclusions are applied after discovery and always win.
+Explicit exclusions are applied after discovery and always win. When directory
+entries are requested, the default ignore-respecting scan reports each ignored
+subtree it prunes and states that descendant directories were not enumerated.
+Use `--include-ignored` or the full profile when those entries and their
+timestamps should be included.
 
 ## Choose an evidence profile
 
@@ -324,11 +520,15 @@ status and verbose output.
 ## Control terminal detail
 
 ```bash
-workfold . --cluster-window 30s
+workfold . --cluster-window 1m30s
 workfold . --cluster-window 10m
 workfold . --cluster-window 1h
 workfold . --cluster-window 1h5m
 workfold . --cluster-window '1h 5m'
+workfold . --marker-style identity
+workfold . --grid both
+workfold . --hide-empty-days all
+workfold . --hide-days weekend
 workfold . --no-color
 NO_COLOR=1 workfold .
 workfold . --list-outside --limit 50
@@ -337,9 +537,12 @@ workfold . --strict
 workfold . --verbose
 ```
 
-With color disabled, circle/square still identifies Git/filesystem and
-filled/hollow still identifies inside/outside hours; no `G`, `F`, `M`, density,
-or color-only distinction is required.
+With the default source markers, every output keeps circle/square for
+Git/filesystem and filled/hollow for inside/outside hours. In identity-marker
+mode, single identities use uppercase/lowercase for inside/outside, while
+composite identities use `◆`/`◇`. Color reinforces these forms rather than
+replacing them. Identity mappings themselves remain independent of schedule
+state: each canonical code and full recorded identity appears once in the key.
 
 `--verbose` appends operational details after the compact summary: cluster and
 compression policy, Scope (mode plus profile), Period (range plus timezone), the

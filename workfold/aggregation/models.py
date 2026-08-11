@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TypeVar
 
+from workfold.identities import MarkerIdentity
 from workfold.models import ClassifiedMarker, RecordKind, Source, Weekday
 
 MINUTES_PER_DAY = 24 * 60
@@ -24,10 +25,15 @@ class MarkerRun:
     source: Source
     within_schedule: bool
     count: int
+    identity_id: int | None = None
 
     def __post_init__(self) -> None:
         if self.count < 1:
             raise ValueError("a marker run must contain at least one event")
+        if self.identity_id is not None and self.identity_id < 0:
+            raise ValueError("a marker identity ID must not be negative")
+        if self.identity_id is not None and self.source is not Source.GIT:
+            raise ValueError("only Git marker runs may carry an identity ID")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +48,9 @@ class ClusterCell:
         if not self.runs:
             raise ValueError("a cluster cell must contain at least one marker")
         if any(
-            first.source is second.source and first.within_schedule == second.within_schedule
+            first.source is second.source
+            and first.within_schedule == second.within_schedule
+            and first.identity_id == second.identity_id
             for first, second in zip(self.runs, self.runs[1:])
         ):
             raise ValueError("adjacent equivalent marker runs must be coalesced")
@@ -103,12 +111,14 @@ class HiddenMarkers:
 
 @dataclass(frozen=True, slots=True)
 class Aggregation:
-    """Sparse occupied rows plus exact full-scope summary state."""
+    """Projected sparse rows plus exact full-scope summary state."""
 
     cluster_window: timedelta
     display_start_minute: int
     display_end_minute: int
     display_is_explicit: bool
+    visible_weekdays: tuple[Weekday, ...]
+    hidden_weekday_counts: tuple[tuple[Weekday, int], ...]
     clusters: Sequence[TimeCluster]
     event_count: int
     _displayed_event_count: int
@@ -118,12 +128,44 @@ class Aggregation:
     source_counts: tuple[tuple[Source, int], ...]
     record_kind_counts: tuple[tuple[RecordKind, int], ...]
     visual_counts: tuple[tuple[tuple[Source, bool], int], ...]
+    identities: tuple[MarkerIdentity, ...]
+    identity_counts: tuple[tuple[int, int], ...]
     max_cell_event_count: int
     has_multi_minute_cluster: bool
     hidden_before: HiddenMarkers
     hidden_after: HiddenMarkers
     retained_outside_markers: tuple[ClassifiedMarker, ...]
     outside_marker_count: int
+
+    def __post_init__(self) -> None:
+        if self.visible_weekdays != tuple(sorted(set(self.visible_weekdays))):
+            raise ValueError("visible weekdays must be unique and ordered")
+        if any(count < 1 for _weekday, count in self.hidden_weekday_counts):
+            raise ValueError("hidden weekday counts must be positive")
+        hidden_weekdays = tuple(weekday for weekday, _count in self.hidden_weekday_counts)
+        if hidden_weekdays != tuple(sorted(set(hidden_weekdays))):
+            raise ValueError("hidden weekday counts must be unique and ordered")
+        if set(self.visible_weekdays) & set(hidden_weekdays):
+            raise ValueError("visible and explicitly hidden occupied weekdays cannot overlap")
+        if sum(count for _visual, count in self.visual_counts) != self._displayed_event_count:
+            raise ValueError("visual counts must reconcile with displayed markers")
+        if (
+            self._displayed_event_count
+            + self.hidden_weekday_event_count
+            + self.hidden_before.total
+            + self.hidden_after.total
+            != self.event_count
+        ):
+            raise ValueError("displayed and hidden markers must reconcile with the full event count")
+        if any(count < 1 for _identity_id, count in self.identity_counts):
+            raise ValueError("identity counts must be positive")
+        identity_ids = tuple(identity_id for identity_id, _count in self.identity_counts)
+        if identity_ids != tuple(range(len(self.identities))):
+            raise ValueError("identity counts must cover the ordered identity registry exactly")
+        if self.identities and sum(count for _identity_id, count in self.identity_counts) != sum(
+            count for (source, _within_schedule), count in self.visual_counts if source is Source.GIT
+        ):
+            raise ValueError("identity counts must reconcile with displayed Git markers")
 
     @property
     def outside_omitted_count(self) -> int:
@@ -136,6 +178,12 @@ class Aggregation:
         """Return the count represented by the sparse chart rows."""
 
         return self._displayed_event_count
+
+    @property
+    def hidden_weekday_event_count(self) -> int:
+        """Return events omitted from the matrix by explicit weekday hiding."""
+
+        return sum(count for _weekday, count in self.hidden_weekday_counts)
 
     def count_for_source(self, source: Source) -> int:
         """Return the total marker count for *source*."""
@@ -158,6 +206,11 @@ class Aggregation:
             ),
             0,
         )
+
+    def count_for_identity(self, identity_id: int) -> int:
+        """Return the displayed marker count for one compact identity ID."""
+
+        return next((count for candidate, count in self.identity_counts if candidate == identity_id), 0)
 
 
 def freeze_counter(counter: dict[_CountKey, int]) -> tuple[tuple[_CountKey, int], ...]:

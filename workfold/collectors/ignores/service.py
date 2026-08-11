@@ -7,10 +7,11 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from workfold.collectors.ignores.exclusions import ExplicitExcluder
-from workfold.collectors.ignores.inventory import build_inventory, visit_inventory
+from workfold.collectors.ignores.inventory import build_inventory, inspect_inventory, visit_inventory
 from workfold.collectors.ignores.models import (
     ExclusionPatternError,
     GitFilesystemInventory,
+    GitFilesystemInventoryView,
     GitFilesystemInventoryVisit,
     GitIgnoreCommandError,
     GitIgnoreMatches,
@@ -31,12 +32,40 @@ from workfold.collectors.ignores.paths import (
 )
 from workfold.collectors.ignores.runner import GitIgnoreRunner
 
+InventoryBuilder = Callable[[GitIgnoreRunner, GitIgnoreRepository, Path], GitFilesystemInventory]
+InventoryVisitor = Callable[..., GitFilesystemInventoryVisit]
+InventoryInspector = Callable[..., GitFilesystemInventoryVisit]
+
 
 class GitIgnoreService:
     """Discover worktrees and ask Git for its authoritative ignore decisions."""
 
-    def __init__(self, runner: GitIgnoreRunner | None = None) -> None:
+    def __init__(
+        self,
+        runner: GitIgnoreRunner | None = None,
+        *,
+        inventory_builder: InventoryBuilder = build_inventory,
+        inventory_visitor: InventoryVisitor | None = visit_inventory,
+        inventory_inspector: InventoryInspector | None = None,
+        transactional_inventory: bool = True,
+    ) -> None:
         self._runner = runner or GitIgnoreRunner()
+        self._inventory_builder = inventory_builder
+        self._inventory_visitor = inventory_visitor
+        self._inventory_inspector = (
+            inventory_inspector
+            if inventory_inspector is not None
+            else inspect_inventory
+            if transactional_inventory
+            else None
+        )
+        self._transactional_inventory = transactional_inventory
+
+    @property
+    def transactional_inventory(self) -> bool:
+        """Whether an inventory failure is guaranteed to precede callbacks."""
+
+        return self._transactional_inventory
 
     def probe(self, path: Path, *, is_directory: bool) -> GitIgnoreProbe:
         """Locate the containing worktree without treating non-repos as errors."""
@@ -194,7 +223,7 @@ class GitIgnoreService:
         must validate every included path with a current no-follow stat.
         """
 
-        return build_inventory(self._runner, repository, selected_root)
+        return self._inventory_builder(self._runner, repository, selected_root)
 
     def visit_inventory(
         self,
@@ -209,11 +238,11 @@ class GitIgnoreService:
         Git output is parsed into an ephemeral SQLite spool first. Consumers
         run only after all three commands and every path validate, so a late
         command or parse failure can fall back without duplicating records.
-        Subclasses overriding :meth:`inventory` retain their interception
-        behavior through the materialized compatibility path.
+        A deliberately injected materialized visitor remains available for
+        tests and integrations that cannot stream.
         """
 
-        if type(self).inventory is not GitIgnoreService.inventory:
+        if self._inventory_visitor is None:
             inventory = self.inventory(repository, selected_root)
             if inventory.error is not None:
                 return GitFilesystemInventoryVisit(error=inventory.error)
@@ -227,13 +256,64 @@ class GitIgnoreService:
                 warning=inventory.warning,
             )
 
-        return visit_inventory(
+        return self._inventory_visitor(
             self._runner,
             repository,
             selected_root,
             included_consumer=included_consumer,
             ignored_consumer=ignored_consumer,
         )
+
+    def inspect_inventory(
+        self,
+        repository: GitIgnoreRepository,
+        selected_root: Path,
+        *,
+        inventory_consumer: Callable[[GitFilesystemInventoryView], None],
+        unseen_ignored_consumer: Callable[[str, bool], None],
+    ) -> GitFilesystemInventoryVisit:
+        """Provide bounded ignore membership while a native traversal runs."""
+
+        if self._inventory_inspector is None:
+            inventory = self.inventory(repository, selected_root)
+            if inventory.error is not None:
+                return GitFilesystemInventoryVisit(error=inventory.error)
+            view = _MaterializedInventoryView(inventory)
+            inventory_consumer(view)
+            for path, is_directory in view.unseen_ignored():
+                unseen_ignored_consumer(path, is_directory)
+            return GitFilesystemInventoryVisit(
+                included_paths=len(inventory.included_relative_paths),
+                ignored_paths=len(inventory.ignored_relative_paths),
+                warning=inventory.warning,
+            )
+
+        return self._inventory_inspector(
+            self._runner,
+            repository,
+            selected_root,
+            inventory_consumer=inventory_consumer,
+            unseen_ignored_consumer=unseen_ignored_consumer,
+        )
+
+
+class _MaterializedInventoryView:
+    """Compatibility membership view for injected non-streaming inventories."""
+
+    def __init__(self, inventory: GitFilesystemInventory) -> None:
+        self._ignored = {os.path.normcase(path): path for path in inventory.ignored_relative_paths}
+        self._directories = {os.path.normcase(path) for path in inventory.ignored_directory_paths}
+        self._seen: set[str] = set()
+
+    def ignore_state(self, relative_path: str) -> tuple[bool, bool]:
+        key = os.path.normcase(relative_path)
+        ignored = key in self._ignored
+        if ignored:
+            self._seen.add(key)
+        return ignored, key in self._directories
+
+    def unseen_ignored(self) -> tuple[tuple[str, bool], ...]:
+        return tuple((path, key in self._directories) for key, path in self._ignored.items() if key not in self._seen)
 
 
 def _mapping_error(

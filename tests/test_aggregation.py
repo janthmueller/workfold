@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from workfold.aggregation import NANOSECONDS_PER_MINUTE, AggregationBuilder, MarkerRun, aggregate_markers
+from workfold.aggregation.spill import ChartMarkerStore
 from workfold.models import (
     ActivityMarker,
     ClassifiedMarker,
@@ -26,6 +27,8 @@ def _classified(
     source: Source = Source.GIT,
     within_schedule: bool = True,
     submicrosecond_ns: int = 0,
+    actor_name: str = "Fixture",
+    actor_email: str = "fixture@example.test",
 ) -> ClassifiedMarker:
     if not 0 <= submicrosecond_ns < 1_000:
         raise ValueError("test remainder must be sub-microsecond")
@@ -50,8 +53,8 @@ def _classified(
         instant_ns,
         str(instant_ns),
         original_offset_minutes=0 if source is Source.GIT else None,
-        actor_name="Fixture" if source is Source.GIT else None,
-        actor_email="fixture@example.test" if source is Source.GIT else None,
+        actor_name=actor_name if source is Source.GIT else None,
+        actor_email=actor_email if source is Source.GIT else None,
     )
     marker = ActivityMarker.create((observation,))
     return ClassifiedMarker(marker=marker, local_datetime=local_datetime, within_schedule=within_schedule)
@@ -80,6 +83,8 @@ def test_sparse_aggregation_preserves_exact_events_and_summary_dimensions() -> N
     )
     assert monday_cell.event_count == 2
     assert result.event_count == result.displayed_event_count == 3
+    assert result.visible_weekdays == tuple(Weekday)
+    assert result.hidden_weekday_counts == ()
     assert result.within_schedule_count == 1
     assert result.outside_schedule_count == 2
     assert result.weekend_count == 1
@@ -122,15 +127,15 @@ def test_anchored_clustering_does_not_chain_neighboring_events() -> None:
     assert result.clusters[1].start_time_ns == (9 * 60 + 18) * NANOSECONDS_PER_MINUTE
 
 
-def test_cluster_window_supports_sub_minute_precision() -> None:
+def test_cluster_window_preserves_subsecond_precision_above_one_minute() -> None:
     base = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
     markers = [
         _classified("anchor", base),
-        _classified("inside", base.replace(second=30, microsecond=499999), submicrosecond_ns=999),
-        _classified("boundary", base.replace(second=30, microsecond=500000)),
+        _classified("inside", base.replace(minute=1, second=30, microsecond=499999), submicrosecond_ns=999),
+        _classified("boundary", base.replace(minute=1, second=30, microsecond=500000)),
     ]
 
-    result = aggregate_markers(markers, cluster_window=timedelta(seconds=30, microseconds=500_000))
+    result = aggregate_markers(markers, cluster_window=timedelta(minutes=1, seconds=30, microseconds=500_000))
 
     assert [cluster.event_count for cluster in result.clusters] == [2, 1]
 
@@ -154,11 +159,11 @@ def test_visual_runs_are_exact_and_independent_of_input_order() -> None:
 
     forward = aggregate_markers(
         (later_week, exact_later, earlier_week),
-        cluster_window=timedelta(seconds=1),
+        cluster_window=timedelta(minutes=1),
     )
     reverse = aggregate_markers(
         (earlier_week, exact_later, later_week),
-        cluster_window=timedelta(seconds=1),
+        cluster_window=timedelta(minutes=1),
     )
 
     forward_markers = forward.clusters[0].cell(Weekday.MONDAY)
@@ -242,6 +247,107 @@ def test_cropping_happens_before_clustering() -> None:
     assert result.clusters[0].event_count == 2
 
 
+def test_explicitly_hidden_days_keep_totals_but_do_not_anchor_visible_clusters() -> None:
+    markers = [
+        _classified(
+            "hidden-saturday",
+            datetime(2026, 8, 8, 7, 59, tzinfo=timezone.utc),
+            within_schedule=False,
+        ),
+        _classified("visible-monday", datetime(2026, 8, 3, 8, 0, tzinfo=timezone.utc)),
+        _classified("visible-monday-two", datetime(2026, 8, 3, 8, 9, tzinfo=timezone.utc)),
+    ]
+
+    result = aggregate_markers(
+        markers,
+        cluster_window=timedelta(minutes=10),
+        hide_days=(Weekday.SATURDAY, Weekday.SUNDAY),
+        outside_limit=1,
+    )
+
+    assert result.visible_weekdays == tuple(day for day in Weekday if not day.is_weekend)
+    assert result.event_count == 3
+    assert result.displayed_event_count == 2
+    assert result.weekend_count == 1
+    assert result.hidden_weekday_counts == ((Weekday.SATURDAY, 1),)
+    assert result.hidden_weekday_event_count == 1
+    assert [marker.marker.marker_id for marker in result.retained_outside_markers] == [markers[0].marker.marker_id]
+    assert len(result.clusters) == 1
+    assert result.clusters[0].start_time_ns == 8 * 60 * NANOSECONDS_PER_MINUTE
+
+
+def test_empty_day_hiding_is_conditional_and_composable_by_scope() -> None:
+    markers = [
+        _classified("monday", datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)),
+        _classified("saturday", datetime(2026, 8, 8, 9, 0, tzinfo=timezone.utc)),
+    ]
+
+    weekend_only = aggregate_markers(
+        markers,
+        cluster_window=timedelta(minutes=10),
+        hide_empty_days=(Weekday.SATURDAY, Weekday.SUNDAY),
+    )
+    all_empty = aggregate_markers(
+        markers,
+        cluster_window=timedelta(minutes=10),
+        hide_empty_days=tuple(Weekday),
+    )
+
+    assert weekend_only.visible_weekdays == (
+        Weekday.MONDAY,
+        Weekday.TUESDAY,
+        Weekday.WEDNESDAY,
+        Weekday.THURSDAY,
+        Weekday.FRIDAY,
+        Weekday.SATURDAY,
+    )
+    assert all_empty.visible_weekdays == (Weekday.MONDAY, Weekday.SATURDAY)
+    assert weekend_only.hidden_weekday_event_count == all_empty.hidden_weekday_event_count == 0
+    assert weekend_only.displayed_event_count == all_empty.displayed_event_count == 2
+
+
+def test_empty_day_hiding_uses_the_visible_time_crop() -> None:
+    result = aggregate_markers(
+        (_classified("cropped-tuesday", datetime(2026, 8, 4, 5, 0, tzinfo=timezone.utc)),),
+        cluster_window=timedelta(minutes=10),
+        display_range=(6 * 60, 22 * 60),
+        hide_empty_days=tuple(Weekday),
+    )
+
+    assert result.visible_weekdays == ()
+    assert result.event_count == 1
+    assert result.displayed_event_count == 0
+    assert result.hidden_before.total == 1
+    assert result.hidden_weekday_event_count == 0
+
+
+def test_hidden_day_identities_are_not_retained_in_the_visible_registry() -> None:
+    markers = [
+        _classified(
+            "visible-ada",
+            datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc),
+            actor_name="Ada",
+            actor_email="ada@example.test",
+        ),
+        _classified(
+            "hidden-bob",
+            datetime(2026, 8, 8, 9, 0, tzinfo=timezone.utc),
+            actor_name="Bob",
+            actor_email="bob@example.test",
+        ),
+    ]
+
+    result = aggregate_markers(
+        markers,
+        cluster_window=timedelta(minutes=10),
+        retain_git_identities=True,
+        hide_days=(Weekday.SATURDAY, Weekday.SUNDAY),
+    )
+
+    assert [identity.members[0].name for identity in result.identities] == ["Ada"]
+    assert result.identity_counts == ((0, 1),)
+
+
 def test_outside_list_retains_only_most_recent_markers_in_chronological_order() -> None:
     markers = [
         _classified(
@@ -261,9 +367,15 @@ def test_outside_list_retains_only_most_recent_markers_in_chronological_order() 
 
 @pytest.mark.parametrize(
     "cluster_window",
-    [timedelta(0), timedelta(microseconds=-1), timedelta(days=1), timedelta(days=2)],
+    [
+        timedelta(0),
+        timedelta(microseconds=-1),
+        timedelta(seconds=59, microseconds=999_999),
+        timedelta(days=1),
+        timedelta(days=2),
+    ],
 )
-def test_cluster_window_must_be_positive_and_shorter_than_a_day(cluster_window: timedelta) -> None:
+def test_cluster_window_must_be_at_least_one_minute_and_shorter_than_a_day(cluster_window: timedelta) -> None:
     with pytest.raises(ValueError, match="cluster_window"):
         aggregate_markers((), cluster_window=cluster_window)
 
@@ -285,6 +397,10 @@ def test_aggregation_validates_other_public_options() -> None:
             cluster_window=timedelta(minutes=10),
             cluster_materialization_threshold=-1,
         )
+    with pytest.raises(ValueError, match="leave at least one"):
+        aggregate_markers((), cluster_window=timedelta(minutes=10), hide_days=tuple(Weekday))
+    with pytest.raises(TypeError, match="Weekday values"):
+        aggregate_markers((), cluster_window=timedelta(minutes=10), hide_empty_days=(7,))  # type: ignore[arg-type]
 
 
 def test_empty_aggregation_has_no_rows_and_uses_full_day_without_schedule_bounds() -> None:
@@ -325,6 +441,102 @@ def test_spilled_sort_matches_in_memory_sort_and_cleans_up() -> None:
         builder.build()
     with pytest.raises(RuntimeError, match="cannot be reused"):
         builder.add(markers[0])
+
+
+def test_aggregation_builder_can_be_closed_idempotently_after_an_aborted_run() -> None:
+    builder = AggregationBuilder(cluster_window=timedelta(minutes=5), spill_threshold=1)
+    builder.add(
+        _classified(
+            "first",
+            datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc),
+        )
+    )
+    builder.add(
+        _classified(
+            "second",
+            datetime(2026, 8, 3, 9, 1, tzinfo=timezone.utc),
+        )
+    )
+
+    assert builder.did_spill
+    builder.close()
+    builder.close()
+
+    with pytest.raises(RuntimeError, match="cannot be reused"):
+        builder.add(
+            _classified(
+                "third",
+                datetime(2026, 8, 3, 9, 2, tzinfo=timezone.utc),
+            )
+        )
+
+
+def test_aggregation_builder_cleans_up_spill_when_snapshot_creation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builder = AggregationBuilder(cluster_window=timedelta(minutes=5), spill_threshold=1)
+    builder.add(_classified("first", datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)))
+    builder.add(_classified("second", datetime(2026, 8, 3, 9, 1, tzinfo=timezone.utc)))
+    close_count = 0
+    original_close = ChartMarkerStore.close
+
+    def recording_close(store: ChartMarkerStore) -> None:
+        nonlocal close_count
+        close_count += 1
+        original_close(store)
+
+    def fail_resolution(_builder: AggregationBuilder) -> tuple[Weekday, ...]:
+        raise RuntimeError("snapshot failed")
+
+    monkeypatch.setattr(ChartMarkerStore, "close", recording_close)
+    monkeypatch.setattr(AggregationBuilder, "_resolve_visible_weekdays", fail_resolution)
+
+    with pytest.raises(RuntimeError, match="snapshot failed"):
+        builder.build()
+
+    assert close_count == 1
+
+
+def test_identity_registry_is_deterministic_and_survives_sqlite_spill() -> None:
+    markers = [
+        _classified(
+            "bob",
+            datetime(2026, 8, 3, 9, 1, tzinfo=timezone.utc),
+            actor_name="Bob",
+            actor_email="bob@example.test",
+        ),
+        _classified(
+            "ada",
+            datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc),
+            actor_name="Ada",
+            actor_email="ada@example.test",
+        ),
+        _classified(
+            "bob-two",
+            datetime(2026, 8, 3, 9, 2, tzinfo=timezone.utc),
+            actor_name="Bob",
+            actor_email="bob@example.test",
+        ),
+    ]
+    expected = aggregate_markers(
+        reversed(markers),
+        cluster_window=timedelta(minutes=5),
+        retain_git_identities=True,
+    )
+    builder = AggregationBuilder(
+        cluster_window=timedelta(minutes=5),
+        retain_git_identities=True,
+        spill_threshold=2,
+    )
+    for marker in markers:
+        builder.add(marker)
+
+    actual = builder.build()
+
+    assert builder.did_spill
+    assert actual == expected
+    assert [identity.members[0].name for identity in actual.identities] == ["Ada", "Bob"]
+    assert actual.identity_counts == ((0, 1), (1, 2))
 
 
 def test_pathologically_alternating_cell_is_compacted_to_bounded_counts() -> None:

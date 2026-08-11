@@ -40,6 +40,8 @@ def test_diagnostic_buffer_retains_a_bounded_sample_and_exact_omitted_counts() -
     assert snapshot[-1].target == "target-3"
     assert "errors=1" in snapshot[-1].message
     assert "info=1" in snapshot[-1].message
+    assert snapshot[-1].occurrence_count(DiagnosticSeverity.ERROR) == 1
+    assert snapshot[-1].occurrence_count(DiagnosticSeverity.INFO) == 1
 
 
 def test_diagnostic_buffer_validates_its_limit_and_omits_no_summary_when_complete() -> None:
@@ -64,3 +66,22 @@ def test_diagnostic_buffer_preserves_completeness_impact_when_sample_is_truncate
     assert summary.code == "diagnostics_truncated"
     assert summary.severity is DiagnosticSeverity.WARNING
     assert summary.affects_completeness
+    assert summary.completeness_failure_count == 1
+
+
+def test_diagnostic_buffer_preserves_nested_truncation_summary_counts() -> None:
+    inner = DiagnosticBuffer(limit=1)
+    inner.append(_diagnostic(1, DiagnosticSeverity.ERROR))
+    inner.append(_diagnostic(2, DiagnosticSeverity.WARNING, affects_completeness=True))
+    inner.append(_diagnostic(3, DiagnosticSeverity.INFO))
+
+    outer = DiagnosticBuffer(limit=1)
+    outer.append(_diagnostic(4, DiagnosticSeverity.INFO))
+    outer.extend(inner.snapshot())
+    summary = outer.snapshot()[-1]
+
+    assert summary.occurrence_count(DiagnosticSeverity.ERROR) == 1
+    assert summary.occurrence_count(DiagnosticSeverity.WARNING) == 1
+    assert summary.occurrence_count(DiagnosticSeverity.INFO) == 1
+    assert summary.completeness_failure_count == 1
+    assert summary.message.startswith("3 additional diagnostic(s) omitted")

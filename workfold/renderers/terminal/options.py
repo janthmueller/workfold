@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from workfold.config import GridStyle, MarkerStyle
+
 
 @dataclass(frozen=True, slots=True)
 class TerminalOptions:
@@ -14,6 +16,8 @@ class TerminalOptions:
     color: bool = False
     list_outside: bool = False
     verbose: bool = False
+    marker_style: MarkerStyle = MarkerStyle.SOURCE
+    grid_style: GridStyle = GridStyle.NONE
 
     def __post_init__(self) -> None:
         if self.width < 60:

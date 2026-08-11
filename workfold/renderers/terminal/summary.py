@@ -12,11 +12,7 @@ from workfold.sanitization import sanitize_terminal_text
 
 def render_summary(report: Report, width: int) -> str:
     facts = list(_summary_stat_facts(report))
-    hidden_parts: list[str] = []
-    if report.aggregation.hidden_before.total:
-        hidden_parts.append(f"before display {report.aggregation.hidden_before.total:,}")
-    if report.aggregation.hidden_after.total:
-        hidden_parts.append(f"after display {report.aggregation.hidden_after.total:,}")
+    hidden_parts = _hidden_event_parts(report)
     if hidden_parts:
         facts.append(("Hidden", " · ".join(hidden_parts)))
     coverage_status = _default_coverage_status(report.context.coverage_status)
@@ -40,11 +36,7 @@ def render_details(report: Report, width: int) -> str:
     lines.extend(fact_lines("Schedule", context.schedule_label, width))
     lines.extend(fact_lines("Coverage", context.coverage_status, width))
 
-    hidden_parts: list[str] = []
-    if aggregation.hidden_before.total:
-        hidden_parts.append(f"before display {aggregation.hidden_before.total:,}")
-    if aggregation.hidden_after.total:
-        hidden_parts.append(f"after display {aggregation.hidden_after.total:,}")
+    hidden_parts = _hidden_event_parts(report)
     if hidden_parts:
         lines.extend(fact_lines("Hidden events", " · ".join(hidden_parts), width))
 
@@ -82,6 +74,24 @@ def _summary_stat_facts(report: Report) -> tuple[tuple[str, str], ...]:
             f"{aggregation.weekend_count:,} weekend ({weekend_percentage})",
         ),
     )
+
+
+def _hidden_event_parts(report: Report) -> list[str]:
+    aggregation = report.aggregation
+    parts: list[str] = []
+    if aggregation.hidden_before.total:
+        parts.append(f"before display {aggregation.hidden_before.total:,}")
+    if aggregation.hidden_after.total:
+        parts.append(f"after display {aggregation.hidden_after.total:,}")
+    if aggregation.hidden_weekday_counts:
+        total = aggregation.hidden_weekday_event_count
+        day_names = ", ".join(
+            ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[int(day)] for day, _ in aggregation.hidden_weekday_counts
+        )
+        event_word = "event" if total == 1 else "events"
+        column_word = "column" if len(aggregation.hidden_weekday_counts) == 1 else "columns"
+        parts.append(f"{total:,} {event_word} in {day_names} {column_word}")
+    return parts
 
 
 def _scope_label(sources: tuple[Source, ...], profile: str) -> str:

@@ -65,8 +65,11 @@ class FilesystemAccounting:
 
     records: tuple[RecordCoverage, ...]
     timestamps: tuple[TimestampExtractionCoverage, ...]
+    pruned_ignored_subtrees: int = 0
 
     def __post_init__(self) -> None:
+        if self.pruned_ignored_subtrees < 0:
+            raise ValueError("pruned ignored subtree count must be non-negative")
         if len({item.key for item in self.records}) != len(self.records):
             raise ValueError("filesystem record accounting contains duplicate keys")
         if len({item.key for item in self.timestamps}) != len(self.timestamps):

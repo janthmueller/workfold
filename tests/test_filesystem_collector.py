@@ -23,6 +23,7 @@ from workfold.collectors.ignores import (
     GitIgnoreMatches,
     GitIgnoreProbe,
     GitIgnoreRepository,
+    GitIgnoreRunner,
     GitIgnoreService,
     IgnoreCandidate,
 )
@@ -58,7 +59,25 @@ class FixedIgnoreService(GitIgnoreService):
         probe: GitIgnoreProbe,
         matches: GitIgnoreMatches = GitIgnoreMatches(frozenset()),
     ) -> None:
-        super().__init__()
+        def disabled_inventory(
+            _runner: GitIgnoreRunner,
+            _repository: GitIgnoreRepository,
+            selected_root: Path,
+        ) -> GitFilesystemInventory:
+            return GitFilesystemInventory(
+                error=GitIgnoreCommandError(
+                    code="test_inventory_disabled",
+                    message="inventory disabled by fixture",
+                    cwd=selected_root,
+                    command=("ls-files",),
+                )
+            )
+
+        super().__init__(
+            inventory_builder=disabled_inventory,
+            inventory_visitor=None,
+            transactional_inventory=False,
+        )
         self.probe_result = probe
         self.matches_result = matches
         self.ignored_calls: list[tuple[GitIgnoreRepository, tuple[IgnoreCandidate, ...]]] = []
@@ -81,14 +100,25 @@ class FixedIgnoreService(GitIgnoreService):
 class NativeOnlyIgnoreService(GitIgnoreService):
     """Force the reference traversal/check-ignore path for equivalence tests."""
 
-    def inventory(self, repository: GitIgnoreRepository, selected_root: Path) -> GitFilesystemInventory:
-        return GitFilesystemInventory(
-            error=GitIgnoreCommandError(
-                code="test_inventory_disabled",
-                message="inventory disabled by fixture",
-                cwd=selected_root,
-                command=("ls-files",),
+    def __init__(self) -> None:
+        def disabled_inventory(
+            _runner: GitIgnoreRunner,
+            _repository: GitIgnoreRepository,
+            selected_root: Path,
+        ) -> GitFilesystemInventory:
+            return GitFilesystemInventory(
+                error=GitIgnoreCommandError(
+                    code="test_inventory_disabled",
+                    message="inventory disabled by fixture",
+                    cwd=selected_root,
+                    command=("ls-files",),
+                )
             )
+
+        super().__init__(
+            inventory_builder=disabled_inventory,
+            inventory_visitor=None,
+            transactional_inventory=False,
         )
 
 
@@ -252,6 +282,54 @@ def test_git_inventory_prunes_ignored_directories_but_keeps_visible_empty_direct
     assert visible_empty in {item.path for item in result.eligible_origins}
     assert ignored not in opened
     assert result.accounting.records[0].ignored == 101
+    assert result.accounting.pruned_ignored_subtrees == 1
+    assert not result.diagnostics
+
+
+def test_pruned_ignored_subtree_makes_unenumerated_descendant_directories_explicit(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    ignored = repo.path / "ignored"
+    nested = ignored / "one" / "two"
+    nested.mkdir(parents=True)
+    (nested / "artifact.txt").write_text("ignored", encoding="utf-8")
+    (repo.path / ".gitignore").write_text("ignored/\n", encoding="utf-8")
+
+    result = FilesystemCollector().collect(
+        (repo.path,),
+        timestamp_kinds=FS_MODIFIED,
+        include_directories=True,
+    )
+
+    assert result.accounting.pruned_ignored_subtrees == 1
+    assert result.accounting.records[0].ignored == 2
+    assert any(item.origin.path == ignored and item.disposition is RecordDisposition.IGNORED for item in result.entries)
+    assert all(item.origin.path not in {ignored / "one", nested} for item in result.entries)
+
+
+def test_directory_inventory_does_not_materialize_git_paths_in_python(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    (repo.path / "visible").mkdir()
+    (repo.path / "visible" / "work.txt").write_text("work", encoding="utf-8")
+
+    def reject_materialization(
+        _runner: GitIgnoreRunner,
+        _repository: GitIgnoreRepository,
+        _selected_root: Path,
+    ) -> GitFilesystemInventory:
+        raise AssertionError("directory-aware production scans must use the disk-backed inventory")
+
+    service = GitIgnoreService(inventory_builder=reject_materialization)
+    result = FilesystemCollector(ignore_service=service).collect(
+        (repo.path,),
+        timestamp_kinds=FS_MODIFIED,
+        include_directories=True,
+    )
+
+    assert {item.path for item in result.eligible_origins} >= {
+        repo.path,
+        repo.path / "visible",
+        repo.path / "visible" / "work.txt",
+    }
     assert not result.diagnostics
 
 
@@ -420,7 +498,7 @@ def test_exact_file_and_symlink_roots_are_not_expanded(tmp_path: Path) -> None:
     assert exhaustive.observations[0].origin.path == link
 
 
-def test_lexical_overlaps_deduplicate_but_nested_repository_root_remains_exact(tmp_path: Path) -> None:
+def test_lexical_overlaps_deduplicate_and_nested_repository_uses_its_own_context(tmp_path: Path) -> None:
     outer = tmp_path / "outer"
     outer.mkdir()
     (outer / "outer.txt").write_text("outer", encoding="utf-8")
@@ -428,27 +506,163 @@ def test_lexical_overlaps_deduplicate_but_nested_repository_root_remains_exact(t
     (nested.path / "nested.txt").write_text("nested", encoding="utf-8")
 
     result = FilesystemCollector().collect(
-        (outer, outer, outer / "outer.txt", nested.path),
+        (outer, outer, outer / "outer.txt", nested.path, nested.path / "nested.txt"),
         timestamp_kinds=FS_MODIFIED,
         respect_gitignore=False,
         include_ignored=True,
     )
 
-    assert result.requested_roots == (outer, outer, outer / "outer.txt", nested.path)
+    assert result.requested_roots == (outer, outer, outer / "outer.txt", nested.path, nested.path / "nested.txt")
     assert result.scan_roots == (outer, nested.path)
     assert result.successful_roots == (outer, nested.path)
-    assert result.overlapping_roots_deduplicated == 2
+    assert result.overlapping_roots_deduplicated == 3
     assert len(result.accounting.records) == 2
-    outer_nested = next(
-        item for item in result.entries if item.origin.repository_or_root == outer and item.origin.path == nested.path
+    assert not any(
+        item.origin.repository_or_root == outer and item.origin.path == nested.path for item in result.entries
     )
-    assert outer_nested.disposition is RecordDisposition.SEMANTIC_GIT_ADMIN
     nested_file = next(
         item
         for item in result.entries
         if item.origin.repository_or_root == nested.path and item.origin.path == nested.path / "nested.txt"
     )
     assert nested_file.disposition is RecordDisposition.ELIGIBLE
+    assert sum(item.origin.path == nested.path / "nested.txt" for item in result.entries) == 1
+
+
+def test_explicit_nested_repository_remains_scannable_when_covering_root_fails(tmp_path: Path) -> None:
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    nested = GitRepo.create(outer / "nested")
+    nested_file = nested.path / "work.txt"
+    nested_file.write_text("nested", encoding="utf-8")
+
+    @contextmanager
+    def failing_outer_scandir(path: Path) -> Generator[Iterator[os.DirEntry[str]], None, None]:
+        if path == outer:
+            raise PermissionError("covering root is unreadable")
+        with scandir_no_follow(path) as iterator:
+            yield iterator
+
+    result = FilesystemCollector(scandir_reader=failing_outer_scandir).collect(
+        (outer, nested.path),
+        timestamp_kinds=FS_MODIFIED,
+        respect_gitignore=False,
+        include_ignored=True,
+    )
+
+    assert result.scan_roots == (outer, nested.path)
+    assert nested_file in {item.path for item in result.eligible_origins}
+    assert any(
+        item.code == "filesystem_traversal_error" and item.path == os.fspath(outer) for item in result.diagnostics
+    )
+
+
+def test_outer_scan_enters_nested_repository_with_its_own_ignore_semantics(tmp_path: Path) -> None:
+    outer = GitRepo.create(tmp_path / "outer")
+    (outer.path / ".gitignore").write_text("nested/\n", encoding="utf-8")
+    (outer.path / "outer.txt").write_text("outer", encoding="utf-8")
+    outer.run("add", ".gitignore", "outer.txt")
+
+    nested = GitRepo.create(outer.path / "nested")
+    (nested.path / ".gitignore").write_text("*.log\n", encoding="utf-8")
+    (nested.path / "tracked.txt").write_text("tracked", encoding="utf-8")
+    (nested.path / "untracked.txt").write_text("untracked", encoding="utf-8")
+    (nested.path / "secret.txt").write_text("secret", encoding="utf-8")
+    (nested.path / "ignored.log").write_text("ignored", encoding="utf-8")
+    nested.run("add", ".gitignore", "tracked.txt")
+
+    result = FilesystemCollector().collect(
+        (outer.path,),
+        timestamp_kinds=FS_MODIFIED,
+        exclusions=("nested/secret.txt",),
+    )
+
+    assert result.scan_roots == (outer.path, nested.path)
+    assert result.successful_roots == (outer.path, nested.path)
+    nested_eligible = {
+        item.origin.path
+        for item in result.entries
+        if item.origin.repository_or_root == nested.path and item.disposition is RecordDisposition.ELIGIBLE
+    }
+    assert nested.path / ".gitignore" in nested_eligible
+    assert nested.path / "tracked.txt" in nested_eligible
+    assert nested.path / "untracked.txt" in nested_eligible
+    assert nested.path / "secret.txt" not in nested_eligible
+    assert nested.path / "ignored.log" not in nested_eligible
+    assert any(
+        item.origin.repository_or_root == nested.path
+        and item.origin.path == nested.path / "secret.txt"
+        and item.disposition is RecordDisposition.EXPLICITLY_EXCLUDED
+        for item in result.entries
+    )
+    assert any(
+        item.origin.repository_or_root == nested.path
+        and item.origin.path == nested.path / ".git"
+        and item.disposition is RecordDisposition.SEMANTIC_GIT_ADMIN
+        for item in result.entries
+    )
+
+    exhaustive = FilesystemCollector().collect(
+        (outer.path,),
+        timestamp_kinds=FS_MODIFIED,
+        respect_gitignore=False,
+        include_ignored=True,
+    )
+    exhaustive_paths = {
+        item.origin.path
+        for item in exhaustive.entries
+        if item.origin.repository_or_root == nested.path and item.disposition is RecordDisposition.ELIGIBLE
+    }
+    assert nested.path / "ignored.log" in exhaustive_paths
+
+
+def test_visible_nested_repository_transfers_record_ownership_without_an_accounting_gap(tmp_path: Path) -> None:
+    outer = GitRepo.create(tmp_path / "outer")
+    nested = GitRepo.create(outer.path / "nested")
+    nested_file = nested.path / "work.txt"
+    nested_file.write_text("nested", encoding="utf-8")
+
+    result = FilesystemCollector().collect((outer.path,), timestamp_kinds=FS_MODIFIED)
+
+    assert result.scan_roots == (outer.path, nested.path)
+    assert result.successful_roots == (outer.path, nested.path)
+    assert sum(item.path == nested_file for item in result.eligible_origins) == 1
+    assert all(
+        item.origin.repository_or_root != outer.path or item.origin.path != nested.path for item in result.entries
+    )
+    assert not result.diagnostics
+    for record in result.accounting.records:
+        record.validate()
+
+
+def test_initialized_submodule_transfers_record_ownership_without_an_accounting_gap(tmp_path: Path) -> None:
+    source = GitRepo.create(tmp_path / "source")
+    source.commit(
+        "work.txt",
+        "nested",
+        "add nested work",
+        author_date="2026-08-03T10:00:00+02:00",
+        committer_date="2026-08-03T10:00:00+02:00",
+    )
+    outer = GitRepo.create(tmp_path / "outer")
+    outer.run(
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        os.fspath(source.path),
+        "vendor/source",
+    )
+    submodule = outer.path / "vendor" / "source"
+
+    result = FilesystemCollector().collect((outer.path,), timestamp_kinds=FS_MODIFIED)
+
+    assert submodule in result.scan_roots
+    assert sum(item.path == submodule / "work.txt" for item in result.eligible_origins) == 1
+    assert all(item.origin.repository_or_root != outer.path or item.origin.path != submodule for item in result.entries)
+    assert not result.diagnostics
+    for record in result.accounting.records:
+        record.validate()
 
 
 def test_missing_roots_and_traversal_failures_are_structured_partial_results(tmp_path: Path) -> None:
@@ -712,6 +926,8 @@ def test_accounting_value_objects_reject_nonconservation() -> None:
         FilesystemAccounting((record,), (extraction, extraction))
     with pytest.raises(ValueError, match="no record partition"):
         FilesystemAccounting((), (extraction,))
+    with pytest.raises(ValueError, match="pruned ignored subtree"):
+        FilesystemAccounting((), (), -1)
     mismatched_record = RecordCoverage(record_key, discovered=2, eligible=2)
     with pytest.raises(ValueError, match="must equal eligible"):
         FilesystemAccounting((mismatched_record,), (extraction,))

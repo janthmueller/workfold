@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Final
 
 from workfold.collectors.base import CollectorDiagnostic
+from workfold.collectors.process_timeout import streaming_deadline
 
 LOCAL_READ_COMMANDS: Final[frozenset[str]] = frozenset(
     {
@@ -100,14 +101,20 @@ class GitRunner:
         stderr_limit: int = 16_384,
         timeout: float | None = None,
         base_environment: Mapping[str, str] | None = None,
+        stream_output: bool | None = None,
     ) -> None:
         if stderr_limit < 0:
             raise ValueError("stderr_limit must be non-negative")
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout must be positive")
         self._executable = executable
         self._process_runner = process_runner
         self._stderr_limit = stderr_limit
         self._timeout = timeout
         self._base_environment = dict(os.environ if base_environment is None else base_environment)
+        self._stream_output = process_runner is subprocess.run if stream_output is None else stream_output
+        if self._stream_output and process_runner is not subprocess.run:
+            raise ValueError("stream_output requires the default subprocess runner")
 
     def run(
         self,
@@ -180,11 +187,7 @@ class GitRunner:
     ) -> Iterator[bytes]:
         """Yield stdout records without retaining an unbounded Git response."""
 
-        if (
-            self._process_runner is not subprocess.run
-            or type(self).run is not GitRunner.run
-            or self._timeout is not None
-        ):
+        if not self._stream_output:
             yield from self.run(arguments, cwd=cwd, allowed_returncodes=allowed_returncodes).stdout.splitlines(
                 keepends=True
             )
@@ -220,12 +223,25 @@ class GitRunner:
 
             completed = False
             try:
-                if process.stdout is None:
-                    raise RuntimeError("streaming Git process omitted stdout")
-                yield from process.stdout
-                process.stdout.close()
-                returncode = process.wait()
-                completed = True
+                with streaming_deadline(process, self._timeout) as expired:
+                    if process.stdout is None:
+                        raise RuntimeError("streaming Git process omitted stdout")
+                    yield from process.stdout
+                    process.stdout.close()
+                    returncode = process.wait()
+                    if expired.is_set():
+                        stderr_file.seek(0)
+                        stderr = stderr_file.read(self._stderr_limit + 1)
+                        bounded, truncated = self._bounded_stderr(stderr)
+                        raise GitCommandError(
+                            code="git_command_timeout",
+                            message="Git command exceeded the configured timeout",
+                            command=command,
+                            cwd=cwd,
+                            stderr=bounded,
+                            stderr_truncated=truncated,
+                        )
+                    completed = True
             finally:
                 if not completed and process.poll() is None:
                     process.terminate()

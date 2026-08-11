@@ -83,6 +83,27 @@ def fit_plain(line: str, width: int) -> str:
     return truncate_end(line, width)
 
 
+def rich_text_chunks(value: Text, width: int) -> tuple[Text, ...]:
+    """Hard-fold styled text without dropping content or Rich spans."""
+
+    if width < 1:
+        raise ValueError("text width must be positive")
+    if not value:
+        return ()
+    chunks: list[Text] = []
+    start = 0
+    used = 0
+    for index, character in enumerate(value.plain):
+        character_width = display_width(character)
+        if index > start and used + character_width > width:
+            chunks.append(value[start:index])
+            start = index
+            used = 0
+        used += character_width
+    chunks.append(value[start:])
+    return tuple(chunks)
+
+
 def _hard_column_chunks(text: str, width: int) -> list[str]:
     chunks: list[str] = []
     current: list[str] = []

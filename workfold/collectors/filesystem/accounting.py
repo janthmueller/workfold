@@ -30,6 +30,7 @@ class AccountingBuilder:
     _observation_ids: dict[TimestampCoverageKey, list[str]] = field(default_factory=lambda: {})
     _record_keys: dict[Path, RecordCoverageKey] = field(default_factory=lambda: {})
     _timestamp_keys: dict[tuple[Path, TimestampKind], TimestampCoverageKey] = field(default_factory=lambda: {})
+    _pruned_ignored_subtrees: int = 0
 
     def _record_key(self, root: Path) -> RecordCoverageKey:
         key = self._record_keys.get(root)
@@ -65,6 +66,11 @@ class AccountingBuilder:
             raise ValueError("filesystem record count must be non-negative")
         key = (self._record_key(root), disposition)
         self._records[key] = self._records.get(key, 0) + count
+
+    def prune_ignored_subtree(self) -> None:
+        """Account for one ignored directory whose descendants were not walked."""
+
+        self._pruned_ignored_subtrees += 1
 
     def request(self, root: Path, kind: TimestampKind) -> None:
         key = self._timestamp_key(root, kind)
@@ -116,7 +122,7 @@ class AccountingBuilder:
             )
             for key in sorted(timestamp_keys, key=lambda item: (item.target, item.timestamp_kind.value))
         )
-        return FilesystemAccounting(records, timestamps)
+        return FilesystemAccounting(records, timestamps, self._pruned_ignored_subtrees)
 
 
 def record_key(root: Path) -> RecordCoverageKey:

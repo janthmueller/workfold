@@ -18,6 +18,7 @@ from workfold.time_ranges import (
     iso_week_union,
     resolve_local_timezone,
     resolve_timezone,
+    rolling_duration_range,
 )
 
 
@@ -45,6 +46,9 @@ def resolve_date_range(
         if options.from_date is not None or options.to_date is not None:
             label = _calendar_range_label(options.from_date, options.to_date)
             return calendar_date_range(options.from_date, options.to_date, timezone_value), label
+        if options.rolling_duration is not None:
+            rolling = options.rolling_duration
+            return rolling_duration_range(now, rolling.duration), f"last {rolling.label}"
         if options.all_dates:
             return all_time_range(), "all available dates"
         local_now = now.astimezone(timezone_value)

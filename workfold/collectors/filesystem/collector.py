@@ -12,15 +12,13 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from workfold.collectors.base import CollectorDiagnostic, DiagnosticBuffer
 from workfold.collectors.filesystem.accounting import AccountingBuilder
 from workfold.collectors.filesystem.git_inventory import collect_git_inventory_stream
 from workfold.collectors.filesystem.helpers import (
-    account_inventory_ignored,
-    account_inventory_warning,
     crosses_nested_repository,
     entry_is_in_scope,
     entry_type,
@@ -53,7 +51,7 @@ from workfold.collectors.filesystem.types import (
 from workfold.collectors.filesystem_times import FilesystemTimestampAdapter
 from workfold.collectors.ignores import (
     ExplicitExcluder,
-    GitFilesystemInventory,
+    GitFilesystemInventoryView,
     GitIgnoreProbe,
     GitIgnoreService,
     IgnoreCandidate,
@@ -115,7 +113,7 @@ class FilesystemCollector:
             raise ValueError("filesystem collector accepts only filesystem timestamp kinds")
         excluder = ExplicitExcluder.compile(exclusions)
         base = lexical_absolute(cwd or Path.cwd())
-        requested = tuple(lexical_absolute(path, base=base) for path in paths)
+        requested = tuple(lexical_absolute(path.expanduser(), base=base) for path in paths)
 
         diagnostics = DiagnosticBuffer()
         roots, scan_roots, overlap_count = self._prepare_roots(requested, diagnostics)
@@ -124,8 +122,25 @@ class FilesystemCollector:
         capabilities: list[Capability] = []
         accounting = AccountingBuilder(retain_observation_ids=retain_observations)
 
-        for root_snapshot in roots:
+        queued_roots = [(item, excluder) for item in roots]
+        scheduled_roots = {os.path.normcase(os.fspath(item.path)) for item in roots}
+        actual_scan_roots = list(scan_roots)
+        successful_roots: list[Path] = []
+
+        def queue_nested_repository(
+            root_snapshot: RootSnapshot,
+            nested_excluder: ExplicitExcluder,
+        ) -> None:
+            key = os.path.normcase(os.fspath(root_snapshot.path))
+            if key in scheduled_roots:
+                return
+            scheduled_roots.add(key)
+            queued_roots.append((root_snapshot, nested_excluder))
+            actual_scan_roots.append(root_snapshot.path)
+
+        for root_snapshot, root_excluder in queued_roots:
             root = root_snapshot.path
+            successful_roots.append(root)
             accounting.ensure_root(root, kinds)
             capabilities.extend(self._timestamp_adapter.capability(kind, target=os.fspath(root)) for kind in kinds)
             self._collect_root(
@@ -135,13 +150,14 @@ class FilesystemCollector:
                 include_directories=include_directories,
                 include_symlinks=include_symlinks,
                 respect_gitignore=respect_gitignore,
-                excluder=excluder,
+                excluder=root_excluder,
                 accounting=accounting,
                 entries=entries,
                 observations=observations,
                 capabilities=capabilities,
                 diagnostics=diagnostics,
                 observation_consumer=observation_consumer,
+                nested_repository_consumer=queue_nested_repository,
             )
 
         return FilesystemCollectionResult(
@@ -151,8 +167,8 @@ class FilesystemCollector:
             capabilities=tuple(capabilities),
             diagnostics=diagnostics.snapshot(),
             requested_roots=requested,
-            scan_roots=scan_roots,
-            successful_roots=tuple(item.path for item in roots),
+            scan_roots=tuple(actual_scan_roots),
+            successful_roots=tuple(successful_roots),
             overlapping_roots_deduplicated=overlap_count,
         )
 
@@ -177,7 +193,10 @@ class FilesystemCollector:
         scan_roots: list[Path] = []
         covering_directories: list[Path] = []
         for _, path in indexed:
-            covering = next((root for root in covering_directories if is_lexical_descendant(path, root)), None)
+            covering = next(
+                (root for root in reversed(covering_directories) if is_lexical_descendant(path, root)),
+                None,
+            )
             if covering is not None and not crosses_nested_repository(path, covering):
                 overlap_count += 1
                 continue
@@ -209,6 +228,7 @@ class FilesystemCollector:
         capabilities: list[Capability],
         diagnostics: list[CollectorDiagnostic],
         observation_consumer: FilesystemObservationConsumer | None,
+        nested_repository_consumer: Callable[[RootSnapshot, ExplicitExcluder], None],
     ) -> None:
         root = root_snapshot.path
         root_type = entry_type(root_snapshot.snapshot.st_mode)
@@ -247,42 +267,6 @@ class FilesystemCollector:
             capabilities.append(ignore_capability(root, respect_gitignore, probe, error=None))
             return
 
-        inventory: GitFilesystemInventory | None = None
-        if respect_gitignore and probe.repository is not None and root_type is EntryType.DIRECTORY:
-            if not include_directories:
-                visit = collect_git_inventory_stream(
-                    root_snapshot,
-                    repository=probe.repository,
-                    include_regular_files=include_regular_files,
-                    include_symlinks=include_symlinks,
-                    excluder=excluder,
-                    accounting=accounting,
-                    entries=entries,
-                    diagnostics=diagnostics,
-                    ignore_service=self._ignore_service,
-                    lstat_reader=self._lstat,
-                    eligible_consumer=consume_eligible,
-                )
-                if visit.error is None:
-                    capabilities.append(ignore_capability(root, respect_gitignore, probe, error=visit.warning))
-                    return
-                if type(self._ignore_service) is GitIgnoreService:
-                    # The production inventory is transactional: no callbacks
-                    # ran before this failure. Report the unavailable scope
-                    # instead of rebuilding an unbounded in-memory fallback.
-                    accounting.discover(root)
-                    accounting.record(root, RecordDisposition.RECORD_ERROR)
-                    diagnostics.append(ignore_diagnostic(root, visit.error, warning=False))
-                    capabilities.append(ignore_capability(root, respect_gitignore, probe, error=visit.error))
-                    return
-            else:
-                candidate_inventory = self._ignore_service.inventory(probe.repository, root)
-                if candidate_inventory.error is None:
-                    inventory = candidate_inventory
-
-        inventory_ignored_seen: set[str] = set()
-        defer_ignore_evaluation = respect_gitignore and probe.repository is not None and inventory is None
-
         def process_visible_entry(item: PendingEntry) -> None:
             if item.entry_type is EntryType.DIRECTORY and not include_directories:
                 # Directories needed only to reach requested leaves are
@@ -304,6 +288,84 @@ class FilesystemCollector:
             if disposition is RecordDisposition.ELIGIBLE:
                 consume_eligible(item)
 
+        if respect_gitignore and probe.repository is not None and root_type is EntryType.DIRECTORY:
+            if not include_directories:
+                visit = collect_git_inventory_stream(
+                    root_snapshot,
+                    repository=probe.repository,
+                    include_regular_files=include_regular_files,
+                    include_symlinks=include_symlinks,
+                    excluder=excluder,
+                    accounting=accounting,
+                    entries=entries,
+                    diagnostics=diagnostics,
+                    ignore_service=self._ignore_service,
+                    lstat_reader=self._lstat,
+                    eligible_consumer=consume_eligible,
+                    nested_repository_consumer=nested_repository_consumer,
+                )
+                if visit.error is None:
+                    capabilities.append(ignore_capability(root, respect_gitignore, probe, error=visit.warning))
+                    return
+                if self._ignore_service.transactional_inventory:
+                    # The production inventory is transactional: no callbacks
+                    # ran before this failure. Report the unavailable scope
+                    # instead of rebuilding an unbounded in-memory fallback.
+                    accounting.discover(root)
+                    accounting.record(root, RecordDisposition.RECORD_ERROR)
+                    diagnostics.append(ignore_diagnostic(root, visit.error, warning=False))
+                    capabilities.append(ignore_capability(root, respect_gitignore, probe, error=visit.error))
+                    return
+            else:
+
+                def traverse_with_inventory(inventory: GitFilesystemInventoryView) -> None:
+                    pending = discover_entries(
+                        root_snapshot,
+                        scandir_reader=self._scandir,
+                        excluder=excluder,
+                        accounting=accounting,
+                        entries=entries,
+                        diagnostics=diagnostics,
+                        repository=probe.repository,
+                        inventory=inventory,
+                        pending_consumer=process_visible_entry,
+                        nested_repository_consumer=nested_repository_consumer,
+                        include_directories=True,
+                    )
+                    if pending:
+                        raise RuntimeError("streamed directory traversal unexpectedly retained entries")
+
+                def account_unseen_ignored(relative_path: str, is_directory: bool) -> None:
+                    disposition = (
+                        RecordDisposition.EXPLICITLY_EXCLUDED
+                        if excluder.matches(relative_path, is_directory=is_directory)
+                        else RecordDisposition.IGNORED
+                    )
+                    accounting.discover(root)
+                    accounting.record(root, disposition)
+
+                visit = self._ignore_service.inspect_inventory(
+                    probe.repository,
+                    root,
+                    inventory_consumer=traverse_with_inventory,
+                    unseen_ignored_consumer=account_unseen_ignored,
+                )
+                if visit.error is None:
+                    if visit.warning is not None:
+                        accounting.discover(root)
+                        accounting.record(root, RecordDisposition.RECORD_ERROR)
+                        diagnostics.append(ignore_diagnostic(root, visit.warning, warning=False))
+                    capabilities.append(ignore_capability(root, respect_gitignore, probe, error=visit.warning))
+                    return
+                if self._ignore_service.transactional_inventory:
+                    accounting.discover(root)
+                    accounting.record(root, RecordDisposition.RECORD_ERROR)
+                    diagnostics.append(ignore_diagnostic(root, visit.error, warning=False))
+                    capabilities.append(ignore_capability(root, respect_gitignore, probe, error=visit.error))
+                    return
+
+        defer_ignore_evaluation = respect_gitignore and probe.repository is not None
+
         pending = discover_entries(
             root_snapshot,
             scandir_reader=self._scandir,
@@ -312,24 +374,14 @@ class FilesystemCollector:
             entries=entries,
             diagnostics=diagnostics,
             repository=probe.repository,
-            inventory=inventory,
-            inventory_ignored_seen=inventory_ignored_seen,
+            inventory=None,
             pending_consumer=None if defer_ignore_evaluation else process_visible_entry,
+            nested_repository_consumer=nested_repository_consumer,
             include_directories=include_directories,
         )
         ignored: frozenset[Path] = frozenset()
         ignore_error = None
-        if inventory is not None:
-            account_inventory_ignored(
-                root,
-                inventory,
-                seen=inventory_ignored_seen,
-                excluder=excluder,
-                accounting=accounting,
-            )
-            account_inventory_warning(root, inventory, accounting=accounting, diagnostics=diagnostics)
-            ignore_error = inventory.warning
-        elif respect_gitignore and probe.repository is not None:
+        if respect_gitignore and probe.repository is not None:
             matches = self._ignore_service.ignored(
                 probe.repository,
                 tuple(IgnoreCandidate(item.path, item.is_directory) for item in pending),

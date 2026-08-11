@@ -130,6 +130,23 @@ def unique_semantic_repositories(repositories: Sequence[GitRepository]) -> tuple
     return tuple(unique)
 
 
+def group_semantic_repositories(
+    repositories: Sequence[GitRepository],
+) -> tuple[tuple[GitRepository, ...], ...]:
+    """Group worktree-local contexts that share one object/ref database."""
+
+    groups: list[list[GitRepository]] = []
+    indexes: dict[str, int] = {}
+    for repository in repositories:
+        index = indexes.get(repository.identity)
+        if index is None:
+            indexes[repository.identity] = len(groups)
+            groups.append([repository])
+        else:
+            groups[index].append(repository)
+    return tuple(tuple(group) for group in groups)
+
+
 class GitRepositoryResolver:
     """Resolve selected paths without traversing refs or objects."""
 

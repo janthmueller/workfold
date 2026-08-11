@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 
 class ExclusionPatternError(ValueError):
@@ -107,6 +108,15 @@ class GitFilesystemInventory:
                 raise ValueError("Git filesystem inventory cannot place included paths below an ignored directory")
         if self.warning is not None and self.error is not None:
             raise ValueError("Git filesystem inventory cannot carry both a warning and a fatal error")
+
+
+class GitFilesystemInventoryView(Protocol):
+    """Bounded membership view used while traversing a current worktree."""
+
+    def ignore_state(self, relative_path: str) -> tuple[bool, bool]:
+        """Return ``(ignored path, ignored-directory boundary)``."""
+
+        ...
 
 
 @dataclass(frozen=True, slots=True)

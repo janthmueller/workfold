@@ -67,7 +67,7 @@ class ChartMarkerStore:
             """
             SELECT time_of_day_ns, occurred_at_seconds,
                    occurred_at_remainder_ns, source_rank, marker_id,
-                   weekday, within_schedule
+                   weekday, within_schedule, identity_id
               FROM chart_markers
              ORDER BY time_of_day_ns, occurred_at_seconds,
                       occurred_at_remainder_ns, source_rank, marker_id
@@ -105,7 +105,8 @@ class ChartMarkerStore:
                     source_rank INTEGER NOT NULL,
                     marker_id TEXT NOT NULL,
                     weekday INTEGER NOT NULL,
-                    within_schedule INTEGER NOT NULL
+                    within_schedule INTEGER NOT NULL,
+                    identity_id INTEGER
                 )
                 """
             )
@@ -122,7 +123,7 @@ class ChartMarkerStore:
         if connection is None or not self._buffer:
             return
         connection.executemany(
-            "INSERT INTO chart_markers VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO chart_markers VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (chart_marker_row(marker) for marker in self._buffer),
         )
         self._buffer.clear()

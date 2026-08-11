@@ -47,13 +47,20 @@ and classifies against `Mo-Fr 08:00-16:30`.
 
 ```bash
 workfold . -t 2026-W31
+workfold . -t 2w3d
 workfold . -t 2026-07-01..2026-07-31
 workfold . --timezone Europe/Berlin --list-outside
 workfold . -t all -m git -p portable
 workfold . -t all -m all -p full
-workfold . --cluster-window 30s
+workfold . --cluster-window 1m30s
 workfold . --cluster-window 10m
 workfold . --cluster-window 1h5m
+workfold . --marker-style identity
+workfold . --grid vertical
+workfold . --hide-empty-days all
+workfold . --hide-empty-days weekend
+workfold . --hide-days weekend
+workfold . --show-config
 ```
 
 `-p/--profile` defaults to `standard`. The `portable` profile is Git-only commit
@@ -68,19 +75,28 @@ The chart uses anchored time clustering and renders only occupied clusters in
 implicit `00:00`-toward-`24:00` order; it does not add empty day-boundary rows.
 Starting with the earliest unassigned local wall-clock event, Workfold forms one
 globally aligned half-open assignment window of the configured width, assigns
-events from all seven weekdays, then repeats. A displayed label spans the first
-through last observed event in that cluster. Band endpoints always display as
-`HH:MM`, even for second-level windows and events; exact seconds and nanoseconds
-remain in normalized provenance and outside-event rows. Empty bands are
+events from every visible weekday, then repeats. A displayed label spans the
+first through last visible event in that cluster. Band endpoints display as
+`HH:MM`; the one-minute minimum window prevents distinct rows from receiving the
+same minute label. Exact seconds and nanoseconds remain in normalized provenance and outside-event rows. Empty bands are
 omitted, and a gap of at least one hour between observed endpoints uses one dim
 duration cue rather than rows of empty intervals.
 
+The matrix has no grid by default. `--grid vertical`, `horizontal`, or `both`
+adds dim internal separators without drawing an outer box. Horizontal lines
+separate every logical cluster but never split wrapped rows. A compressed `⋮`
+duration is embedded into the boundary between its neighboring clusters.
+
 The matrix is the first terminal output; no title or context line appears above
 it. A content-aware symbol key, left-aligned working-hours line, and three direct
-statistic rows follow. The key has no heading and names only Git, filesystem,
-outside-hours, and exact-count categories actually visible in the matrix. There
-is no Summary heading: Events shows the total, Schedule splits it into
-inside/outside, and Calendar independently splits it into weekday/weekend.
+statistic rows follow. The key has no heading and names only identities, sources,
+outside-hours, and exact-count categories actually visible in the matrix. Each
+identity and source is mapped once. When color is available, one red `Outside
+working hours` cue explains every red marker without repeating a real identity;
+its conditional symbols use the same hollow shapes or lowercase forms as the
+matrix. Colorless output retains that structure without styling. There is no
+Summary heading: Events shows the total, Schedule splits it into inside/outside,
+and Calendar independently splits it into weekday/weekend.
 `--verbose` adds scope, period, the full successful coverage status,
 source/record breakdowns, cluster/compression policy, exact collector choices,
 Git identity scope, collection extents, ignore/exclusion policy, and the detailed
@@ -89,17 +105,34 @@ coverage ledger. Use
 explicit narrowing, unsupported capabilities, and nonzero cropping still appear
 by default as exception notices.
 
+Weekday columns default to Monday through Sunday. `--hide-empty-days all`
+removes every empty column, while the `weekdays`, `weekend`, and individual-day
+scopes apply that condition selectively. `--hide-days` uses the same scopes but
+always hides them. Column controls affect only the matrix: summary, coverage,
+and outside-event rows retain the complete selected event set, and explicitly
+hidden occupied columns receive a compact `Hidden` count.
+
 Each ordinary symbol is one activity marker:
 
 - `●` is an inside-hours Git marker, shown in green;
 - `■` is an inside-hours filesystem marker, shown in blue;
 - `○` and `□` are outside-hours Git/filesystem markers, shown in red.
 
-Circle/square still identifies the source and filled/hollow still identifies
-schedule state with `--no-color`, `NO_COLOR`, redirected output, or a non-color
-terminal. When an unusually busy cell cannot fit individual symbols, exact
-tokens such as `●×12` replace that cell; Workfold never substitutes an
-approximate density band.
+Circle/square identifies the source and filled/hollow identifies schedule state
+in every output mode. Color reinforces those meanings but is never required.
+When an unusually busy cell cannot fit individual symbols, exact tokens such as
+`●×12` replace that cell; Workfold never substitutes an approximate density
+band.
+
+`--marker-style identity` replaces Git circles with deterministic identity codes
+and maps visible codes to the full recorded names/emails in the key. A unique
+initial stays compact (`J`); identities sharing one become `J1`, `J2`, and so
+on. The key uses each canonical uppercase code exactly once and colors that code
+green; the compact red `a–z` cue explains lowercase outside-hours occurrences.
+Uppercase means inside and lowercase means outside whether or not color is
+available; numeric suffixes make adjacent codes self-delimiting. Composite
+identities similarly use green `◆` mappings and the `◇` outside cue. Filesystem
+markers remain squares.
 
 ## Local by design
 

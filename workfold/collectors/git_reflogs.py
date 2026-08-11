@@ -46,7 +46,8 @@ _PER_WORKTREE_REF_PREFIXES: Final[tuple[str, ...]] = (
 )
 
 
-_DEFAULT_READ_SEMANTIC_REFLOG = read_semantic_reflog
+SemanticReflogReader = Callable[..., tuple[bytes, bool]]
+SemanticReflogVisitor = Callable[..., ReflogVisit]
 
 
 def _command_diagnostic(
@@ -92,8 +93,16 @@ def discover_reflog_names(runner: GitRunner, repository: GitRepository) -> tuple
 class GitReflogCollector:
     """Enumerate and read local semantic reflogs without revision-walk loss."""
 
-    def __init__(self, runner: GitRunner | None = None) -> None:
+    def __init__(
+        self,
+        runner: GitRunner | None = None,
+        *,
+        reflog_reader: SemanticReflogReader = read_semantic_reflog,
+        reflog_visitor: SemanticReflogVisitor | None = visit_semantic_reflog,
+    ) -> None:
         self._runner = runner or GitRunner()
+        self._reflog_reader = reflog_reader
+        self._reflog_visitor = reflog_visitor
 
     def collect(
         self,
@@ -182,8 +191,8 @@ class GitReflogCollector:
                         if collected_batch and entry_consumer is not None:
                             entry_consumer(collected_batch)
 
-                    if read_semantic_reflog is _DEFAULT_READ_SEMANTIC_REFLOG:
-                        visit = visit_semantic_reflog(
+                    if self._reflog_visitor is not None:
+                        visit = self._reflog_visitor(
                             reflog_path,
                             repository=repository,
                             ref_name=ref_name,
@@ -195,7 +204,7 @@ class GitReflogCollector:
                             raise RuntimeError("reflog visitor capture accounting did not reconcile")
                     else:
                         # Preserve the public reader as a test/integration seam.
-                        payload, changed = read_semantic_reflog(reflog_path, repository=repository)
+                        payload, changed = self._reflog_reader(reflog_path, repository=repository)
                         raw_record_count = payload.count(b"\n")
                         parsed_entries = parse_reflog_entries(payload, ref_name=ref_name)
                         for start in range(0, len(parsed_entries), 512):

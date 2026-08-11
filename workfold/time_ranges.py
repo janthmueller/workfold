@@ -240,6 +240,18 @@ def current_week_range(now: datetime, timezone: ZoneInfo) -> InstantRangeUnion:
     return InstantRangeUnion((_local_date_interval(monday, following_monday, timezone),))
 
 
+def rolling_duration_range(now: datetime, duration: timedelta) -> InstantRangeUnion:
+    """Resolve a fixed elapsed duration ending at one captured instant."""
+
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise TimeRangeError("current time must be timezone-aware")
+    if duration <= timedelta(0):
+        raise TimeRangeError("rolling duration must be positive")
+    duration_ns = (duration.days * 86_400 + duration.seconds) * NANOSECONDS_PER_SECOND + duration.microseconds * 1_000
+    end_ns = datetime_to_utc_ns(now)
+    return InstantRangeUnion((InstantRange(end_ns - duration_ns, end_ns),))
+
+
 def all_time_range() -> InstantRangeUnion:
     """Return an unbounded selector for all available timestamps."""
 

@@ -23,7 +23,9 @@ class CompactClusterSequence(Sequence[TimeCluster]):
         "_ends",
         "_run_codes",
         "_run_counts",
+        "_run_identity_ids",
         "_starts",
+        "_frozen",
     )
 
     def __init__(self) -> None:
@@ -35,10 +37,14 @@ class CompactClusterSequence(Sequence[TimeCluster]):
         self._cell_run_offsets = array("Q", (0,))
         self._run_codes = array("B")
         self._run_counts = array("Q")
+        self._run_identity_ids = array("I")
+        self._frozen = False
 
-    def append(self, start_time_ns: int, end_time_ns: int, cells: Iterable[ClusterCell]) -> int:
+    def append_cluster(self, start_time_ns: int, end_time_ns: int, cells: Iterable[ClusterCell]) -> int:
         """Append one cluster and return its largest cell event count."""
 
+        if self._frozen:
+            raise RuntimeError("compact cluster storage is immutable after finalization")
         self._starts.append(start_time_ns)
         self._ends.append(end_time_ns)
         largest_cell = 0
@@ -49,9 +55,13 @@ class CompactClusterSequence(Sequence[TimeCluster]):
             for run in cell.runs:
                 self._run_codes.append(VISUAL_ORDER.index((run.source, run.within_schedule)))
                 self._run_counts.append(run.count)
+                self._run_identity_ids.append(0 if run.identity_id is None else run.identity_id + 1)
             self._cell_run_offsets.append(len(self._run_codes))
         self._cluster_cell_offsets.append(len(self._cell_weekdays))
         return largest_cell
+
+    def freeze(self) -> None:
+        self._frozen = True
 
     def __len__(self) -> int:
         return len(self._starts)
@@ -78,6 +88,7 @@ class CompactClusterSequence(Sequence[TimeCluster]):
                 MarkerRun(
                     *VISUAL_ORDER[self._run_codes[run_index]],
                     self._run_counts[run_index],
+                    None if self._run_identity_ids[run_index] == 0 else self._run_identity_ids[run_index] - 1,
                 )
                 for run_index in range(
                     self._cell_run_offsets[cell_index],
@@ -109,6 +120,7 @@ class CompactClusterSequence(Sequence[TimeCluster]):
                     (self._cell_run_offsets, other._cell_run_offsets),
                     (self._run_codes, other._run_codes),
                     (self._run_counts, other._run_counts),
+                    (self._run_identity_ids, other._run_identity_ids),
                 )
             )
         if isinstance(other, Sequence):
@@ -151,7 +163,7 @@ def cluster_ordered_markers(
         displayed_event_count += sum(cell.event_count for cell in cells)
         max_cell_event_count = max(
             max_cell_event_count,
-            compact.append(start_time_ns=anchor, end_time_ns=end_time, cells=cells),
+            compact.append_cluster(start_time_ns=anchor, end_time_ns=end_time, cells=cells),
         )
         has_multi_minute_cluster |= anchor // NANOSECONDS_PER_MINUTE != end_time // NANOSECONDS_PER_MINUTE
 
@@ -163,6 +175,7 @@ def cluster_ordered_markers(
         end_time = marker.time_of_day_ns
         by_weekday.setdefault(marker.weekday, CellRunBuilder()).add(marker)
     finish_cluster()
+    compact.freeze()
     clusters: Sequence[TimeCluster] = tuple(compact) if len(compact) <= materialization_threshold else compact
     return ClusteredLayout(
         clusters=clusters,

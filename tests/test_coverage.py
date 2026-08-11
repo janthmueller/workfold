@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import pytest
+from workfold.app.collection import Collection
+from workfold.app.coverage_text import coverage_status_label
+from workfold.cli import parse_options
 from workfold.coverage import (
     Capability,
     CapabilityStatus,
@@ -171,3 +174,13 @@ def test_capability_retains_platform_availability_context() -> None:
         "not exposed by adapter",
     )
     assert capability.status is CapabilityStatus.UNSUPPORTED
+
+
+def test_default_coverage_status_exposes_accounted_unavailable_timestamp_slots() -> None:
+    ledger = _complete_builder().build()
+    collection = Collection((), (), True)
+    options = parse_options([])
+
+    label = coverage_status_label(collection, ledger, options)
+
+    assert label.endswith("1 Git author timestamp unavailable on source record")

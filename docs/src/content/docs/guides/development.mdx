@@ -104,6 +104,15 @@ Configuration resolves time, mode, and the evidence profile as three independent
 axes. The profile defaults to `standard`; neither portable nor full expansion
 may rewrite time or mode.
 
+TOML defaults are resolved before `RawOptions` validation as built-ins, the
+platform global file, the nearest selected-path project file, and explicit CLI
+values. Each setting retains its origin for `--show-config`; configuration is
+merged as typed data and is never converted into synthetic command-line
+arguments. Standalone `workfold.toml` and `[tool.workfold]` use the same strict
+schema. Keep discovery, parsing, precedence, CLI materialization, and final
+domain validation separate so unknown keys and invalid cross-option states
+cannot be silently ignored.
+
 Filesystem path inventory and filesystem metadata extraction are distinct
 boundaries. For a file/symlink scan that respects ignore rules inside a Git
 worktree, local NUL-delimited `git ls-files` plumbing supplies tracked,
@@ -114,10 +123,12 @@ adapter used by native traversal. An index-only path absent from the current
 worktree is therefore not filesystem evidence. Directory scans combine the
 same inventory's ignored-directory boundaries with the native no-follow walker,
 so current and empty directories remain discoverable without entering ignored
-subtrees. Scans outside Git and scans that include ignored entries use the
-native walker alone. Keep the fast inventory and native reference behavior
-equivalent for requested regular files, and never reintroduce per-entry path
-resolution for repository/admin containment.
+subtrees. Coverage counts each pruned subtree boundary and explicitly states
+that its descendant directories were not enumerated; scans that include ignored
+entries traverse them instead. Scans outside Git and scans that include ignored
+entries use the native walker alone. Keep the fast inventory and native
+reference behavior equivalent for requested regular files, and never
+reintroduce per-entry path resolution for repository/admin containment.
 
 Filesystem record discovery is defined by requested metadata-bearing entry
 kinds, not by walker implementation details. A directory used only to reach
@@ -128,28 +139,49 @@ accounted terminal outcomes. Fast Git inventory and native ignore fallback
 must therefore produce the same eligible-file and coverage counters for the
 same stable tree.
 
-Schedule classification, display cropping, anchored globally aligned time
-clustering, renderer-neutral report construction, and terminal rendering remain
-separate stages. The clusterer emits half-open semantic bands and ordered visual
-runs for ordinary cells. Pathologically busy cells retain exact counts per
-visual kind instead of an unbounded alternating sequence. Chart sorting stays
-in memory for normal runs and transparently spills to an ephemeral local
-disk-backed sorter above its fixed threshold; the temporary data is removed
-when aggregation finishes. Only the renderer creates Rich objects or assigns
-green/blue/red styles.
+Schedule classification, display cropping, weekday-column projection, anchored
+globally aligned time clustering, renderer-neutral report construction, and
+terminal rendering remain separate stages. Full summary and coverage counters
+are updated before projection. Empty-day decisions use post-crop weekday counts;
+only projected markers enter clustering, so an explicitly hidden event cannot
+anchor or stretch a visible row. Explicitly hidden occupied columns retain a
+separate reconciled count. The clusterer emits half-open semantic bands and
+ordered visual runs for ordinary cells. Pathologically busy cells retain exact
+counts per visual kind instead of an unbounded alternating sequence. Chart
+sorting stays in memory for normal runs and transparently spills to an
+ephemeral local disk-backed sorter above its fixed threshold; the temporary
+data is removed when aggregation finishes. Only the renderer creates Rich
+objects or assigns green/blue/red styles. Optional grid lines are likewise
+terminal-only presentation state and never enter the normalized event,
+classification, aggregation, or report model.
+
+Identity-marker mode projects each visible Git marker to a compact registry ID
+before chart sorting. Full recorded names/emails are retained once per distinct
+identity group, while in-memory and SQLite-spilled marker rows carry only that
+integer. Registry IDs are remapped into deterministic identity order before
+clustering. Initial-group numbering, composite diamond allocation, and
+identity-label formatting remain terminal-renderer concerns; collectors and
+normalized observations never store display codes.
 Repository-controlled values must be sanitized and added as literal Rich text,
 never parsed as markup.
 
-The renderer formats sparse band endpoints as `HH:MM` even when classified
-markers or custom cluster windows have second-level precision. Do not round the
-underlying instant to obtain that label: normalized provenance and outside-event
-rows retain exact seconds and available nanoseconds. The renderer must emit the
+The renderer formats sparse band endpoints as `HH:MM`. Cluster windows have a
+one-minute minimum so two distinct clusters cannot collapse to the same visible
+label. Do not round the underlying instant to obtain that label: normalized
+provenance and outside-event rows retain exact seconds and available nanoseconds. The renderer must emit the
 matrix first, without a title or subtitle. After the matrix it emits a
 content-aware symbol key without a heading, a left-aligned working-hours line,
 and three direct statistic rows without a Summary heading: Events, Schedule,
 and Calendar. Both split rows partition Events but answer independent questions.
 The key derives from visible markers after cropping and mentions `×N` only if
-count tokens render. Only `--verbose` adds scope, period, full successful
+count tokens render. Identity/source mappings are independent of schedule state
+and appear once. The matrix and key always use the same structural schedule
+encoding: filled/uppercase inside, hollow/lowercase outside. Color reinforces
+that encoding, and the conditional outside cue is styled red when available;
+it never uses an arbitrary contributor's marker as the global example. Identity
+mappings use the canonical uppercase/filled code in Git green and occur once;
+lowercase/hollow variants remain consolidated in the outside cue. Only
+`--verbose` adds scope, period, full successful
 coverage, source/record breakdowns, cluster/compression policy, exact collector
 choices, Git identity scope, collection extents, and ignore/exclusion policy; it also
 includes the detailed coverage ledger. `--coverage` includes the ledger without

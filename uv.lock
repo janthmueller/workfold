@@ -1356,11 +1356,12 @@ wheels = [
 
 [[package]]
 name = "workfold"
-version = "0.1.0a0"
+version = "0.1.0a2"
 source = { editable = "." }
 dependencies = [
     { name = "pathspec" },
     { name = "rich" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "tzlocal" },
 ]
@@ -1371,6 +1372,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "tomli" },
 ]
 release = [
     { name = "build" },
@@ -1390,6 +1392,8 @@ requires-dist = [
     { name = "python-semantic-release", marker = "extra == 'release'", specifier = ">=10,<11" },
     { name = "rich", specifier = ">=14,<15" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.2,<3" },
+    { name = "tomli", marker = "extra == 'dev'", specifier = ">=2.2,<3" },
     { name = "twine", marker = "extra == 'release'", specifier = ">=5" },
     { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2025.2" },
     { name = "tzlocal", specifier = ">=5,<6" },

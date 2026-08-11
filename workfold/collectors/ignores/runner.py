@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Final
 
 from workfold.collectors.ignores.models import GitIgnoreCommandError
+from workfold.collectors.process_timeout import streaming_deadline
 
 _GIT_SAFETY_OPTIONS: Final[tuple[str, ...]] = (
     "--no-pager",
@@ -38,14 +39,20 @@ class GitIgnoreRunner:
         base_environment: Mapping[str, str] | None = None,
         timeout: float | None = None,
         stderr_limit: int = 16_384,
+        stream_output: bool | None = None,
     ) -> None:
         if stderr_limit < 0:
             raise ValueError("stderr_limit must be non-negative")
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout must be positive")
         self._executable = executable
         self._process_runner = process_runner
         self._base_environment = dict(os.environ if base_environment is None else base_environment)
         self._timeout = timeout
         self._stderr_limit = stderr_limit
+        self._stream_output = process_runner is subprocess.run if stream_output is None else stream_output
+        if self._stream_output and process_runner is not subprocess.run:
+            raise ValueError("stream_output requires the default subprocess runner")
 
     def run(
         self,
@@ -115,11 +122,7 @@ class GitIgnoreRunner:
     ) -> bytes:
         """Feed bounded stdout chunks to *consumer* and return bounded stderr."""
 
-        if (
-            self._process_runner is not subprocess.run
-            or type(self).run is not GitIgnoreRunner.run
-            or self._timeout is not None
-        ):
+        if not self._stream_output:
             completed = self.run(arguments, cwd=cwd, allowed_returncodes=allowed_returncodes)
             consumer(completed.stdout)
             return completed.stderr[: self._stderr_limit]
@@ -154,13 +157,24 @@ class GitIgnoreRunner:
 
             completed = False
             try:
-                if process.stdout is None:
-                    raise RuntimeError("streaming Git ignore process omitted stdout")
-                while chunk := process.stdout.read(64 * 1024):
-                    consumer(chunk)
-                process.stdout.close()
-                returncode = process.wait()
-                completed = True
+                with streaming_deadline(process, self._timeout) as expired:
+                    if process.stdout is None:
+                        raise RuntimeError("streaming Git ignore process omitted stdout")
+                    while chunk := process.stdout.read(64 * 1024):
+                        consumer(chunk)
+                    process.stdout.close()
+                    returncode = process.wait()
+                    if expired.is_set():
+                        stderr_file.seek(0)
+                        stderr = stderr_file.read(self._stderr_limit + 1)
+                        raise GitIgnoreCommandError(
+                            code="git_ignore_timeout",
+                            message="Git ignore evaluation exceeded its timeout",
+                            cwd=cwd,
+                            command=command,
+                            stderr=stderr[: self._stderr_limit],
+                        )
+                    completed = True
             finally:
                 if not completed and process.poll() is None:
                     process.terminate()

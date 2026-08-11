@@ -16,6 +16,7 @@ from workfold.collectors.ignores import (
     GitIgnoreCommandError,
     GitIgnoreProbe,
     GitIgnoreRepository,
+    GitIgnoreRunner,
     GitIgnoreService,
 )
 
@@ -50,26 +51,30 @@ def _assert_lean_success_output(rendered: str) -> None:
 
 class _IncompleteInventoryService(GitIgnoreService):
     def __init__(self, repository: GitIgnoreRepository) -> None:
-        super().__init__()
         self._repository = repository
+
+        def incomplete_inventory(
+            _runner: GitIgnoreRunner,
+            selected_repository: GitIgnoreRepository,
+            selected_root: Path,
+        ) -> GitFilesystemInventory:
+            assert selected_repository == self._repository
+            warning = GitIgnoreCommandError(
+                code="git_filesystem_inventory_incomplete",
+                message="could not open directory 'private/': Permission denied",
+                cwd=selected_root,
+                command=("ls-files",),
+            )
+            return GitFilesystemInventory(included_relative_paths=("work.txt",), warning=warning)
+
+        super().__init__(
+            inventory_builder=incomplete_inventory,
+            inventory_visitor=None,
+        )
 
     def probe(self, path: Path, *, is_directory: bool) -> GitIgnoreProbe:
         del path, is_directory
         return GitIgnoreProbe(self._repository, True, "test repository")
-
-    def inventory(
-        self,
-        repository: GitIgnoreRepository,
-        selected_root: Path,
-    ) -> GitFilesystemInventory:
-        assert repository == self._repository
-        warning = GitIgnoreCommandError(
-            code="git_filesystem_inventory_incomplete",
-            message="could not open directory 'private/': Permission denied",
-            cwd=selected_root,
-            command=("ls-files",),
-        )
-        return GitFilesystemInventory(included_relative_paths=("work.txt",), warning=warning)
 
 
 def test_standard_uses_local_branches_while_all_refs_includes_remote_tracking(tmp_path: Path) -> None:
@@ -236,6 +241,37 @@ def test_filesystem_entry_selection_is_honored_by_the_application(tmp_path: Path
     _assert_summary_count(rendered, "Events", 2)
     assert "entry type excluded=1" in rendered
     assert "Filesystem policy: ignored entries included; directories" in rendered
+
+
+def test_directory_coverage_discloses_pruned_ignored_subtrees(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    nested = repo.path / "ignored" / "one" / "two"
+    nested.mkdir(parents=True)
+    (nested / "artifact.txt").write_text("ignored", encoding="utf-8")
+    (repo.path / ".gitignore").write_text("ignored/\n", encoding="utf-8")
+    output = StringIO()
+    options = parse_options(
+        [
+            str(repo.path),
+            "--mode",
+            "fs",
+            "--time",
+            "all",
+            "--fs-times",
+            "modified",
+            "--fs-entries",
+            "directory",
+            "--coverage",
+            "--timezone",
+            "UTC",
+            "--no-color",
+        ]
+    )
+
+    assert run(options, stdout=output, stderr=StringIO(), terminal_width=100) == 0
+
+    normalized = " ".join(output.getvalue().split())
+    assert "1 ignored filesystem subtree pruned; descendant directories not counted" in normalized
 
 
 def test_all_mode_preserves_git_and_filesystem_as_distinct_evidence(tmp_path: Path) -> None:
