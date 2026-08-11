@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "workfold"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 description = "Fold local Git and filesystem timestamp activity onto a representative week."
 readme = "README.md"
 license = "MIT"

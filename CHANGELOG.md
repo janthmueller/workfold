@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.1.0-alpha.3 (2026-08-11)
+
+### Bug Fixes
+
+- Correct cross-platform CI assumptions
+  ([`4ba0ecf`](https://github.com/janthmueller/workfold/commit/4ba0ecf133d4678e16e37e62ec5223e5e27a4910))
+
+### Features
+
+- Expand activity views and harden collection
+  ([`f3cde87`](https://github.com/janthmueller/workfold/commit/f3cde87d10a7bb39bf61c0a0bcf3696b4b50e442))
+
+
 ## v0.1.0-alpha.2 (2026-08-10)
 
 ### Bug Fixes
