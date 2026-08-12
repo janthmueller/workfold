@@ -43,6 +43,16 @@ def test_default_schedule_has_weekday_hours_and_empty_weekend() -> None:
     assert schedule.intervals_for(Weekday.SATURDAY) == ()
 
 
+@pytest.mark.parametrize("value", ["all", "ALL", "  All  "])
+def test_all_schedule_covers_every_minute_of_every_weekday(value: str) -> None:
+    schedule = parse_schedule(value)
+
+    assert str(schedule) == "all"
+    assert schedule.bounds == (0, 1440)
+    assert all(schedule.intervals_for(day) == (TimeInterval(0, 1440),) for day in Weekday)
+    assert all(schedule.contains(day, minute) for day in Weekday for minute in (0, 720, 1439))
+
+
 def test_empty_schedule_has_no_display_bounds() -> None:
     schedule = Schedule(tuple(() for _weekday in Weekday))
 

@@ -29,16 +29,8 @@ class ExtractionDisposition(str, Enum):
     ERROR = "error"
 
 
-class SelectionDisposition(str, Enum):
-    """Terminal filter outcomes for one captured observation."""
-
-    INCLUDED = "included"
-    OUTSIDE_DATE = "outside_date"
-    IDENTITY_FILTERED = "identity_filtered"
-
-
 class PlottingDisposition(str, Enum):
-    """Terminal marker outcomes for one included observation."""
+    """Terminal marker outcomes for one selected observation."""
 
     MARKER = "marker"
     COALESCED_INTO_MARKER = "coalesced_into_marker"
@@ -76,7 +68,7 @@ class RecordCoverageKey:
 
 @dataclass(frozen=True, slots=True)
 class TimestampCoverageKey:
-    """Partition key shared by extraction, selection, and plotting."""
+    """Partition key shared by extraction and selected-result accounting."""
 
     source: Source
     target: str
@@ -153,30 +145,38 @@ class RecordCoverage:
 
 @dataclass(frozen=True, slots=True)
 class TimestampCoverage:
-    """Reconciled extraction, selection, and plotting counts for one kind."""
+    """Reconciled extraction, scope, materialization, and plotting counts.
+
+    Extraction counters describe timestamp slots a collector examined.
+    ``scope_matches`` is recorded by each source collector before consumer
+    delivery; early-selection paths record it before rich observation
+    materialization. ``selected`` is recorded independently when the pipeline
+    receives those observations. This bridge detects silent loss without
+    retaining every out-of-scope timestamp in memory.
+    """
 
     key: TimestampCoverageKey
-    requested: int = 0
-    captured: int = 0
+    examined: int = 0
+    values_read: int = 0
     unavailable: int = 0
     unsupported: int = 0
     extraction_errors: int = 0
-    included: int = 0
-    outside_date: int = 0
-    identity_filtered: int = 0
+    scope_matches: int = 0
+    materialization_errors: int = 0
+    selected: int = 0
     markers: int = 0
     coalesced_into_markers: int = 0
 
     def __post_init__(self) -> None:
         _require_non_negative(
-            self.requested,
-            self.captured,
+            self.examined,
+            self.values_read,
             self.unavailable,
             self.unsupported,
             self.extraction_errors,
-            self.included,
-            self.outside_date,
-            self.identity_filtered,
+            self.scope_matches,
+            self.materialization_errors,
+            self.selected,
             self.markers,
             self.coalesced_into_markers,
         )
@@ -185,17 +185,11 @@ class TimestampCoverage:
     def extraction_total(self) -> int:
         """Return all extraction dispositions."""
 
-        return self.captured + self.unavailable + self.unsupported + self.extraction_errors
-
-    @property
-    def selection_total(self) -> int:
-        """Return all selection dispositions for captured observations."""
-
-        return self.included + self.outside_date + self.identity_filtered
+        return self.values_read + self.unavailable + self.unsupported + self.extraction_errors
 
     @property
     def plotting_total(self) -> int:
-        """Return all plotting dispositions for included observations."""
+        """Return all plotting dispositions for selected observations."""
 
         return self.markers + self.coalesced_into_markers
 
@@ -203,19 +197,10 @@ class TimestampCoverage:
         """Return one extraction disposition count."""
 
         return {
-            ExtractionDisposition.CAPTURED: self.captured,
+            ExtractionDisposition.CAPTURED: self.values_read,
             ExtractionDisposition.UNAVAILABLE: self.unavailable,
             ExtractionDisposition.UNSUPPORTED: self.unsupported,
             ExtractionDisposition.ERROR: self.extraction_errors,
-        }[disposition]
-
-    def selection_count(self, disposition: SelectionDisposition) -> int:
-        """Return one selection disposition count."""
-
-        return {
-            SelectionDisposition.INCLUDED: self.included,
-            SelectionDisposition.OUTSIDE_DATE: self.outside_date,
-            SelectionDisposition.IDENTITY_FILTERED: self.identity_filtered,
         }[disposition]
 
     def plotting_count(self, disposition: PlottingDisposition) -> int:
@@ -227,15 +212,20 @@ class TimestampCoverage:
         }[disposition]
 
     def validate(self) -> None:
-        """Assert the extraction, selection, and plotting equations."""
+        """Assert extraction and selected-result conservation."""
 
         problems: list[str] = []
-        if self.requested != self.extraction_total:
-            problems.append(f"requested={self.requested}, extraction dispositions={self.extraction_total}")
-        if self.captured != self.selection_total:
-            problems.append(f"captured={self.captured}, selection dispositions={self.selection_total}")
-        if self.included != self.plotting_total:
-            problems.append(f"included={self.included}, plotting dispositions={self.plotting_total}")
+        if self.examined != self.extraction_total:
+            problems.append(f"examined={self.examined}, extraction dispositions={self.extraction_total}")
+        if self.scope_matches > self.values_read:
+            problems.append(f"scope matches={self.scope_matches}, values read={self.values_read}")
+        if self.scope_matches != self.selected + self.materialization_errors:
+            problems.append(
+                f"scope matches={self.scope_matches}, selected plus materialization errors="
+                f"{self.selected + self.materialization_errors}"
+            )
+        if self.selected != self.plotting_total:
+            problems.append(f"selected={self.selected}, plotting dispositions={self.plotting_total}")
         if problems:
             raise CoverageInvariantError(
                 f"timestamp coverage does not reconcile for {self.key!r}: {'; '.join(problems)}"
@@ -256,7 +246,7 @@ class CoverageLedger:
             raise ValueError("timestamp coverage contains duplicate partition keys")
 
     def validate(self) -> None:
-        """Assert all three required equations in every partition."""
+        """Assert collector-local and selected-result equations."""
 
         for item in self.records:
             item.validate()
@@ -272,11 +262,6 @@ class CoverageLedger:
             record = records_by_key.get(record_key)
             if record is None:
                 raise CoverageInvariantError(f"timestamp coverage has no matching record partition for {item.key!r}")
-            if item.requested != record.eligible:
-                raise CoverageInvariantError(
-                    f"timestamp slots do not match eligible records for {item.key!r}: "
-                    f"requested={item.requested}, eligible={record.eligible}"
-                )
 
     def merge(self, *others: CoverageLedger) -> CoverageLedger:
         """Add independent ledger partitions and return a reconciled ledger."""
@@ -294,22 +279,28 @@ class CoverageLedger:
         return sum(item.discovered for item in self.records)
 
     @property
-    def slots_requested(self) -> int:
-        """Return total timestamp slots requested."""
+    def slots_examined(self) -> int:
+        """Return total timestamp slots examined by collectors."""
 
-        return sum(item.requested for item in self.timestamps)
-
-    @property
-    def observations_captured(self) -> int:
-        """Return total atomic observations captured."""
-
-        return sum(item.captured for item in self.timestamps)
+        return sum(item.examined for item in self.timestamps)
 
     @property
-    def observations_included(self) -> int:
-        """Return total atomic observations included after filters."""
+    def timestamp_values_read(self) -> int:
+        """Return total timestamp values read by collectors."""
 
-        return sum(item.included for item in self.timestamps)
+        return sum(item.values_read for item in self.timestamps)
+
+    @property
+    def observations_selected(self) -> int:
+        """Return total atomic observations selected by the requested scope."""
+
+        return sum(item.selected for item in self.timestamps)
+
+    @property
+    def timestamp_values_matching_scope(self) -> int:
+        """Return readable timestamp values matching the requested scope."""
+
+        return sum(item.scope_matches for item in self.timestamps)
 
     @property
     def markers_plotted(self) -> int:
@@ -322,7 +313,7 @@ class CoverageLedger:
         """Return whether record or extraction failures made coverage partial."""
 
         return any(item.record_errors for item in self.records) or any(
-            item.extraction_errors for item in self.timestamps
+            item.extraction_errors or item.materialization_errors for item in self.timestamps
         )
 
 
@@ -332,13 +323,13 @@ class CoverageLedgerBuilder:
 
     _records_discovered: dict[RecordCoverageKey, int] = field(default_factory=lambda: {})
     _record_outcomes: dict[tuple[RecordCoverageKey, RecordDisposition], int] = field(default_factory=lambda: {})
-    _slots_requested: dict[TimestampCoverageKey, int] = field(default_factory=lambda: {})
+    _slots_examined: dict[TimestampCoverageKey, int] = field(default_factory=lambda: {})
     _extraction_outcomes: dict[tuple[TimestampCoverageKey, ExtractionDisposition], int] = field(
         default_factory=lambda: {}
     )
-    _selection_outcomes: dict[tuple[TimestampCoverageKey, SelectionDisposition], int] = field(
-        default_factory=lambda: {}
-    )
+    _scope_matches: dict[TimestampCoverageKey, int] = field(default_factory=lambda: {})
+    _materialization_errors: dict[TimestampCoverageKey, int] = field(default_factory=lambda: {})
+    _selected_observations: dict[TimestampCoverageKey, int] = field(default_factory=lambda: {})
     _plotting_outcomes: dict[tuple[TimestampCoverageKey, PlottingDisposition], int] = field(default_factory=lambda: {})
 
     def discover_record(self, key: RecordCoverageKey, count: int = 1) -> None:
@@ -351,10 +342,10 @@ class CoverageLedgerBuilder:
 
         _increment(self._record_outcomes, (key, disposition), count)
 
-    def request_slot(self, key: TimestampCoverageKey, count: int = 1) -> None:
-        """Record how many timestamp slots were requested."""
+    def examine_slot(self, key: TimestampCoverageKey, count: int = 1) -> None:
+        """Record how many timestamp slots a collector examined."""
 
-        _increment(self._slots_requested, key, count)
+        _increment(self._slots_examined, key, count)
 
     def extraction_outcome(
         self,
@@ -362,19 +353,24 @@ class CoverageLedgerBuilder:
         disposition: ExtractionDisposition,
         count: int = 1,
     ) -> None:
-        """Assign requested slots to one terminal extraction disposition."""
+        """Assign examined slots to one terminal extraction disposition."""
 
         _increment(self._extraction_outcomes, (key, disposition), count)
 
-    def selection_outcome(
-        self,
-        key: TimestampCoverageKey,
-        disposition: SelectionDisposition,
-        count: int = 1,
-    ) -> None:
-        """Assign captured observations to one terminal filter disposition."""
+    def select_observation(self, key: TimestampCoverageKey, count: int = 1) -> None:
+        """Record observations that matched the requested query scope."""
 
-        _increment(self._selection_outcomes, (key, disposition), count)
+        _increment(self._selected_observations, key, count)
+
+    def match_scope(self, key: TimestampCoverageKey, count: int = 1) -> None:
+        """Record readable timestamp values matching the requested scope."""
+
+        _increment(self._scope_matches, key, count)
+
+    def materialization_error(self, key: TimestampCoverageKey, count: int = 1) -> None:
+        """Record matching values that could not become observations."""
+
+        _increment(self._materialization_errors, key, count)
 
     def plotting_outcome(
         self,
@@ -382,7 +378,7 @@ class CoverageLedgerBuilder:
         disposition: PlottingDisposition,
         count: int = 1,
     ) -> None:
-        """Assign included observations to a marker/coalescing disposition."""
+        """Assign selected observations to a marker/coalescing disposition."""
 
         _increment(self._plotting_outcomes, (key, disposition), count)
 
@@ -394,11 +390,12 @@ class CoverageLedgerBuilder:
             for disposition in RecordDisposition:
                 self.record_outcome(item.key, disposition, item.count(disposition))
         for item in ledger.timestamps:
-            self.request_slot(item.key, item.requested)
+            self.examine_slot(item.key, item.examined)
             for disposition in ExtractionDisposition:
                 self.extraction_outcome(item.key, disposition, item.extraction_count(disposition))
-            for disposition in SelectionDisposition:
-                self.selection_outcome(item.key, disposition, item.selection_count(disposition))
+            self.match_scope(item.key, item.scope_matches)
+            self.materialization_error(item.key, item.materialization_errors)
+            self.select_observation(item.key, item.selected)
             for disposition in PlottingDisposition:
                 self.plotting_outcome(item.key, disposition, item.plotting_count(disposition))
 
@@ -407,9 +404,11 @@ class CoverageLedgerBuilder:
 
         record_keys = set(self._records_discovered)
         record_keys.update(key for key, _ in self._record_outcomes)
-        timestamp_keys = set(self._slots_requested)
+        timestamp_keys = set(self._slots_examined)
         timestamp_keys.update(key for key, _ in self._extraction_outcomes)
-        timestamp_keys.update(key for key, _ in self._selection_outcomes)
+        timestamp_keys.update(self._scope_matches)
+        timestamp_keys.update(self._materialization_errors)
+        timestamp_keys.update(self._selected_observations)
         timestamp_keys.update(key for key, _ in self._plotting_outcomes)
 
         records = tuple(
@@ -428,14 +427,14 @@ class CoverageLedgerBuilder:
         timestamps = tuple(
             TimestampCoverage(
                 key=key,
-                requested=self._slots_requested.get(key, 0),
-                captured=self._extraction_outcomes.get((key, ExtractionDisposition.CAPTURED), 0),
+                examined=self._slots_examined.get(key, 0),
+                values_read=self._extraction_outcomes.get((key, ExtractionDisposition.CAPTURED), 0),
                 unavailable=self._extraction_outcomes.get((key, ExtractionDisposition.UNAVAILABLE), 0),
                 unsupported=self._extraction_outcomes.get((key, ExtractionDisposition.UNSUPPORTED), 0),
                 extraction_errors=self._extraction_outcomes.get((key, ExtractionDisposition.ERROR), 0),
-                included=self._selection_outcomes.get((key, SelectionDisposition.INCLUDED), 0),
-                outside_date=self._selection_outcomes.get((key, SelectionDisposition.OUTSIDE_DATE), 0),
-                identity_filtered=self._selection_outcomes.get((key, SelectionDisposition.IDENTITY_FILTERED), 0),
+                scope_matches=self._scope_matches.get(key, 0),
+                materialization_errors=self._materialization_errors.get(key, 0),
+                selected=self._selected_observations.get(key, 0),
                 markers=self._plotting_outcomes.get((key, PlottingDisposition.MARKER), 0),
                 coalesced_into_markers=self._plotting_outcomes.get((key, PlottingDisposition.COALESCED_INTO_MARKER), 0),
             )
@@ -480,7 +479,6 @@ __all__ = [
     "RecordCoverage",
     "RecordCoverageKey",
     "RecordDisposition",
-    "SelectionDisposition",
     "TimestampCoverage",
     "TimestampCoverageKey",
 ]

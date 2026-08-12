@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from workfold.aggregation import NANOSECONDS_PER_MINUTE, AggregationBuilder, MarkerRun, aggregate_markers
+from workfold.aggregation import (
+    NANOSECONDS_PER_MINUTE,
+    AggregationBuilder,
+    ClusterCell,
+    MarkerRun,
+    TimeCluster,
+    aggregate_markers,
+)
 from workfold.aggregation.spill import ChartMarkerStore
+from workfold.config import ClusterAnchor
 from workfold.models import (
     ActivityMarker,
     ClassifiedMarker,
@@ -106,11 +115,24 @@ def test_clusters_are_global_across_weekdays_and_half_open_at_the_anchor_window(
 
     assert len(result.clusters) == 2
     first, second = result.clusters
-    assert first.start_time_ns == 8 * 60 * NANOSECONDS_PER_MINUTE
+    assert first.band_start_time_ns == 8 * 60 * NANOSECONDS_PER_MINUTE
+    assert first.start_time_ns == first.observed_start_time_ns
+    assert first.end_time_ns == first.observed_end_time_ns
     assert first.cell(Weekday.MONDAY) is not None
     assert first.cell(Weekday.TUESDAY) is not None
     assert first.cell(Weekday.WEDNESDAY) is None
     assert second.cell(Weekday.WEDNESDAY) is not None
+
+
+def test_time_cluster_preserves_the_exported_observed_bounds_constructor() -> None:
+    cell = ClusterCell(Weekday.MONDAY, (MarkerRun(Source.GIT, True, 1),))
+
+    cluster = TimeCluster(100, 200, (cell,))
+
+    assert cluster.observed_start_time_ns == 100
+    assert cluster.observed_end_time_ns == 200
+    assert cluster.band_start_time_ns == 100
+    assert cluster.band_end_time_ns == 201
 
 
 def test_anchored_clustering_does_not_chain_neighboring_events() -> None:
@@ -124,7 +146,68 @@ def test_anchored_clustering_does_not_chain_neighboring_events() -> None:
     result = aggregate_markers(markers, cluster_window=timedelta(minutes=10))
 
     assert [cluster.event_count for cluster in result.clusters] == [2, 1]
-    assert result.clusters[1].start_time_ns == (9 * 60 + 18) * NANOSECONDS_PER_MINUTE
+    assert result.clusters[1].band_start_time_ns == (9 * 60 + 18) * NANOSECONDS_PER_MINUTE
+
+
+def test_midnight_clustering_uses_fixed_half_open_clock_intervals() -> None:
+    markers = [
+        _classified("first", datetime(2026, 8, 3, 8, 40, tzinfo=timezone.utc)),
+        _classified("inside-event-window", datetime(2026, 8, 4, 9, 19, 59, 999999, tzinfo=timezone.utc)),
+        _classified("clock-boundary", datetime(2026, 8, 5, 9, 0, tzinfo=timezone.utc)),
+    ]
+
+    event_anchored = aggregate_markers(markers, cluster_window=timedelta(hours=1))
+    midnight_anchored = aggregate_markers(
+        markers,
+        cluster_window=timedelta(hours=1),
+        cluster_anchor=ClusterAnchor.MIDNIGHT,
+    )
+
+    assert [cluster.event_count for cluster in event_anchored.clusters] == [3]
+    assert [cluster.event_count for cluster in midnight_anchored.clusters] == [1, 2]
+    first, second = midnight_anchored.clusters
+    assert (first.band_start_time_ns, first.band_end_time_ns) == (
+        8 * 60 * NANOSECONDS_PER_MINUTE,
+        9 * 60 * NANOSECONDS_PER_MINUTE,
+    )
+    assert (first.observed_start_time_ns, first.observed_end_time_ns) == (
+        (8 * 60 + 40) * NANOSECONDS_PER_MINUTE,
+        (8 * 60 + 40) * NANOSECONDS_PER_MINUTE,
+    )
+    assert (second.band_start_time_ns, second.band_end_time_ns) == (
+        9 * 60 * NANOSECONDS_PER_MINUTE,
+        10 * 60 * NANOSECONDS_PER_MINUTE,
+    )
+    assert second.cell(Weekday.TUESDAY) is not None
+    assert second.cell(Weekday.WEDNESDAY) is not None
+
+
+def test_midnight_clustering_clips_a_nondividing_final_interval_at_day_end() -> None:
+    marker = _classified("late", datetime(2026, 8, 3, 23, 59, 59, tzinfo=timezone.utc))
+
+    result = aggregate_markers(
+        (marker,),
+        cluster_window=timedelta(hours=1, minutes=5),
+        cluster_anchor=ClusterAnchor.MIDNIGHT,
+    )
+
+    cluster = result.clusters[0]
+    assert cluster.band_start_time_ns == (23 * 60 + 50) * NANOSECONDS_PER_MINUTE
+    assert cluster.band_end_time_ns == 24 * 60 * NANOSECONDS_PER_MINUTE
+
+
+def test_midnight_clustering_aligns_automatic_display_bounds_to_complete_bands() -> None:
+    marker = _classified("event", datetime(2026, 8, 3, 8, 45, tzinfo=timezone.utc))
+
+    result = aggregate_markers(
+        (marker,),
+        cluster_window=timedelta(hours=1, minutes=5),
+        cluster_anchor=ClusterAnchor.MIDNIGHT,
+        schedule_bounds=(8 * 60, 16 * 60 + 30),
+    )
+
+    assert not result.display_is_explicit
+    assert (result.display_start_minute, result.display_end_minute) == (7 * 60 + 35, 17 * 60 + 20)
 
 
 def test_cluster_window_preserves_subsecond_precision_above_one_minute() -> None:
@@ -243,7 +326,7 @@ def test_cropping_happens_before_clustering() -> None:
 
     assert result.hidden_before.total == 1
     assert len(result.clusters) == 1
-    assert result.clusters[0].start_time_ns == 8 * 60 * NANOSECONDS_PER_MINUTE
+    assert result.clusters[0].band_start_time_ns == 8 * 60 * NANOSECONDS_PER_MINUTE
     assert result.clusters[0].event_count == 2
 
 
@@ -273,7 +356,7 @@ def test_explicitly_hidden_days_keep_totals_but_do_not_anchor_visible_clusters()
     assert result.hidden_weekday_event_count == 1
     assert [marker.marker.marker_id for marker in result.retained_outside_markers] == [markers[0].marker.marker_id]
     assert len(result.clusters) == 1
-    assert result.clusters[0].start_time_ns == 8 * 60 * NANOSECONDS_PER_MINUTE
+    assert result.clusters[0].band_start_time_ns == 8 * 60 * NANOSECONDS_PER_MINUTE
 
 
 def test_empty_day_hiding_is_conditional_and_composable_by_scope() -> None:
@@ -385,6 +468,93 @@ def test_cluster_window_requires_timedelta() -> None:
         aggregate_markers((), cluster_window=600)  # type: ignore[arg-type]
 
 
+def test_cluster_anchor_requires_the_domain_enum() -> None:
+    with pytest.raises(TypeError, match="cluster_anchor"):
+        aggregate_markers(
+            (),
+            cluster_window=timedelta(minutes=10),
+            cluster_anchor="midnight",  # type: ignore[arg-type]
+        )
+
+
+def test_aggregation_snapshot_revalidates_the_cluster_anchor() -> None:
+    result = aggregate_markers((), cluster_window=timedelta(minutes=10))
+
+    with pytest.raises(TypeError, match="cluster_anchor"):
+        replace(result, cluster_anchor="midnight")  # type: ignore[arg-type]
+
+
+def test_aggregation_snapshot_revalidates_midnight_window_alignment() -> None:
+    result = aggregate_markers((), cluster_window=timedelta(minutes=10))
+
+    with pytest.raises(ValueError, match="midnight-anchored cluster_window must use whole minutes"):
+        replace(
+            result,
+            cluster_anchor=ClusterAnchor.MIDNIGHT,
+            cluster_window=timedelta(minutes=1, seconds=30),
+        )
+
+
+@pytest.mark.parametrize(
+    "cluster_window",
+    [timedelta(0), timedelta(seconds=59, microseconds=999_999), timedelta(days=1)],
+)
+def test_aggregation_snapshot_revalidates_cluster_window_bounds(cluster_window: timedelta) -> None:
+    result = aggregate_markers((), cluster_window=timedelta(minutes=10))
+
+    with pytest.raises(ValueError, match="cluster_window must be at least one minute and less than 24 hours"):
+        replace(result, cluster_window=cluster_window)
+
+
+def test_aggregation_snapshot_revalidates_cluster_window_type() -> None:
+    result = aggregate_markers((), cluster_window=timedelta(minutes=10))
+
+    with pytest.raises(TypeError, match="cluster_window must be a datetime.timedelta"):
+        replace(result, cluster_window=600)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [(-1, 60), (60, 60), (61, 60), (0, 1441)],
+)
+def test_aggregation_snapshot_revalidates_display_bounds(start: int, end: int) -> None:
+    result = aggregate_markers((), cluster_window=timedelta(minutes=10))
+
+    with pytest.raises(ValueError, match="display bounds must be within 00:00-24:00 and non-empty"):
+        replace(result, display_start_minute=start, display_end_minute=end)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("display_start_minute", 0.0), ("display_end_minute", True)],
+)
+def test_aggregation_snapshot_revalidates_display_bound_types(field: str, value: object) -> None:
+    result = aggregate_markers((), cluster_window=timedelta(minutes=10))
+
+    with pytest.raises(TypeError, match="display bounds must be integer minutes"):
+        replace(result, **{field: value})
+
+
+def test_aggregation_snapshot_revalidates_explicit_display_flag_type() -> None:
+    result = aggregate_markers((), cluster_window=timedelta(minutes=10))
+
+    with pytest.raises(TypeError, match="display_is_explicit must be a bool"):
+        replace(result, display_is_explicit="yes")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "cluster_window",
+    [timedelta(minutes=1, seconds=30), timedelta(minutes=1, microseconds=1)],
+)
+def test_midnight_cluster_anchor_requires_whole_minute_windows(cluster_window: timedelta) -> None:
+    with pytest.raises(ValueError, match="midnight-anchored cluster_window must use whole minutes"):
+        aggregate_markers(
+            (),
+            cluster_window=cluster_window,
+            cluster_anchor=ClusterAnchor.MIDNIGHT,
+        )
+
+
 def test_aggregation_validates_other_public_options() -> None:
     with pytest.raises(ValueError, match="schedule_bounds"):
         aggregate_markers((), cluster_window=timedelta(minutes=10), schedule_bounds=(500, 400))
@@ -412,7 +582,8 @@ def test_empty_aggregation_has_no_rows_and_uses_full_day_without_schedule_bounds
     assert (result.display_start_minute, result.display_end_minute) == (0, 24 * 60)
 
 
-def test_spilled_sort_matches_in_memory_sort_and_cleans_up() -> None:
+@pytest.mark.parametrize("cluster_anchor", tuple(ClusterAnchor))
+def test_spilled_sort_matches_in_memory_sort_and_cleans_up(cluster_anchor: ClusterAnchor) -> None:
     markers = [
         _classified(
             str(index),
@@ -422,9 +593,14 @@ def test_spilled_sort_matches_in_memory_sort_and_cleans_up() -> None:
         )
         for index in range(8)
     ]
-    expected = aggregate_markers(reversed(markers), cluster_window=timedelta(minutes=5))
+    expected = aggregate_markers(
+        reversed(markers),
+        cluster_window=timedelta(minutes=5),
+        cluster_anchor=cluster_anchor,
+    )
     builder = AggregationBuilder(
         cluster_window=timedelta(minutes=5),
+        cluster_anchor=cluster_anchor,
         spill_threshold=2,
         cluster_materialization_threshold=0,
     )

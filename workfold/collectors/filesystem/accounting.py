@@ -22,12 +22,15 @@ from workfold.models import RecordKind, Source, TimestampKind
 class AccountingBuilder:
     """Accumulate reconciled record and timestamp outcomes by scan root."""
 
-    retain_observation_ids: bool = True
+    retain_scope_match_ids: bool = True
     _discovered: dict[RecordCoverageKey, int] = field(default_factory=lambda: {})
     _records: dict[tuple[RecordCoverageKey, RecordDisposition], int] = field(default_factory=lambda: {})
     _requested: dict[TimestampCoverageKey, int] = field(default_factory=lambda: {})
     _extractions: dict[tuple[TimestampCoverageKey, ExtractionDisposition], int] = field(default_factory=lambda: {})
-    _observation_ids: dict[TimestampCoverageKey, list[str]] = field(default_factory=lambda: {})
+    _scope_matches: dict[TimestampCoverageKey, int] = field(default_factory=lambda: {})
+    # Retained IDs belong to scope matches, not every extracted value. They
+    # let the retaining adapter prove that every match reached the pipeline.
+    _scope_match_ids: dict[TimestampCoverageKey, list[str]] = field(default_factory=lambda: {})
     _record_keys: dict[Path, RecordCoverageKey] = field(default_factory=lambda: {})
     _timestamp_keys: dict[tuple[Path, TimestampKind], TimestampCoverageKey] = field(default_factory=lambda: {})
     _pruned_ignored_subtrees: int = 0
@@ -53,7 +56,7 @@ class AccountingBuilder:
         for kind in kinds:
             key = self._timestamp_key(root, kind)
             self._requested.setdefault(key, 0)
-            self._observation_ids.setdefault(key, [])
+            self._scope_match_ids.setdefault(key, [])
 
     def discover(self, root: Path, count: int = 1) -> None:
         if count < 0:
@@ -81,21 +84,26 @@ class AccountingBuilder:
         root: Path,
         kind: TimestampKind,
         disposition: ExtractionDisposition,
-        observation_id: str | None = None,
     ) -> None:
         key = self._timestamp_key(root, kind)
         outcome = (key, disposition)
         self._extractions[outcome] = self._extractions.get(outcome, 0) + 1
-        if observation_id is not None and self.retain_observation_ids:
-            if disposition is not ExtractionDisposition.CAPTURED:
-                raise ValueError("only captured outcomes may retain observation identities")
-            self._observation_ids.setdefault(key, []).append(observation_id)
+
+    def match_scope(self, root: Path, kind: TimestampKind, observation_id: str | None = None) -> None:
+        """Record one extracted filesystem timestamp matching query scope."""
+
+        key = self._timestamp_key(root, kind)
+        self._scope_matches[key] = self._scope_matches.get(key, 0) + 1
+        if observation_id is not None and self.retain_scope_match_ids:
+            self._scope_match_ids.setdefault(key, []).append(observation_id)
 
     def build(self) -> FilesystemAccounting:
         record_keys = set(self._discovered)
         record_keys.update(key for key, _ in self._records)
         timestamp_keys = set(self._requested)
         timestamp_keys.update(key for key, _ in self._extractions)
+        timestamp_keys.update(self._scope_matches)
+        timestamp_keys.update(self._scope_match_ids)
         records = tuple(
             RecordCoverage(
                 key=key,
@@ -117,8 +125,9 @@ class AccountingBuilder:
                 unavailable=self._extractions.get((key, ExtractionDisposition.UNAVAILABLE), 0),
                 unsupported=self._extractions.get((key, ExtractionDisposition.UNSUPPORTED), 0),
                 errors=self._extractions.get((key, ExtractionDisposition.ERROR), 0),
-                observation_ids=tuple(self._observation_ids.get(key, ())),
-                observation_ids_complete=self.retain_observation_ids,
+                scope_matches=self._scope_matches.get(key, 0),
+                scope_match_ids=tuple(self._scope_match_ids.get(key, ())),
+                scope_match_ids_complete=self.retain_scope_match_ids,
             )
             for key in sorted(timestamp_keys, key=lambda item: (item.target, item.timestamp_kind.value))
         )

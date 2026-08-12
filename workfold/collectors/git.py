@@ -15,6 +15,7 @@ from workfold.collectors.git_core.repository import (
 )
 from workfold.collectors.git_core.revisions import enumerate_commit_ids, iter_commit_ids, parse_commit_ids
 from workfold.collectors.git_core.runner import GitCommandError, GitRunner
+from workfold.collectors.git_objects import RevListScanSpec
 from workfold.config import RefScope
 
 __all__ = [
@@ -28,6 +29,7 @@ __all__ = [
     "GitRepositoryResolver",
     "GitRunner",
     "RefScope",
+    "RevListScanSpec",
     "enumerate_commit_ids",
     "iter_commit_ids",
     "parse_commit_ids",

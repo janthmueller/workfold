@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from workfold.models import Source
-from workfold.renderers.terminal.text import aligned_fact_lines, fact_lines, fit_plain
+from workfold.renderers.terminal.text import aligned_fact_lines, fact_lines, fit_plain, format_duration
 from workfold.reports import COMPLETE_COVERAGE_STATUS, Report
 from workfold.sanitization import sanitize_terminal_text
+from workfold.time_bands import BandLabel, ClusterAnchor
 
 
 def render_summary(report: Report, width: int) -> str:
@@ -26,7 +25,13 @@ def render_summary(report: Report, width: int) -> str:
     return "\n".join(fit_plain(line, width) for line in lines)
 
 
-def render_details(report: Report, width: int) -> str:
+def render_details(
+    report: Report,
+    width: int,
+    *,
+    band_label: BandLabel = BandLabel.RANGE,
+    show_empty_bands: bool = False,
+) -> str:
     context = report.context
     aggregation = report.aggregation
     enabled_sources = _enabled_sources(context.enabled_sources, aggregation.source_counts)
@@ -40,8 +45,19 @@ def render_details(report: Report, width: int) -> str:
     if hidden_parts:
         lines.extend(fact_lines("Hidden events", " · ".join(hidden_parts), width))
 
-    lines.extend(fact_lines("Cluster window", _format_duration(aggregation.cluster_window), width))
-    lines.extend(fact_lines("Compression", "empty time omitted; busy cells use exact symbol×count", width))
+    anchor_label = {
+        ClusterAnchor.EVENT: "event",
+        ClusterAnchor.MIDNIGHT: "midnight",
+    }[aggregation.cluster_anchor]
+    lines.extend(fact_lines("Cluster anchor", anchor_label, width))
+    lines.extend(fact_lines("Cluster window", format_duration(aggregation.cluster_window), width))
+    lines.extend(fact_lines("Band labels", band_label.value, width))
+    compression = (
+        "disabled; all fixed bands in the display range shown; busy cells use exact symbol×count"
+        if show_empty_bands
+        else "empty time omitted; gaps of at least one cluster window marked; busy cells use exact symbol×count"
+    )
+    lines.extend(fact_lines("Compression", compression, width))
     lines.extend(fact_lines("Collector selectors", context.source_label, width))
     if context.identity_label is not None:
         lines.extend(fact_lines("Git identities", context.identity_label, width))
@@ -99,25 +115,6 @@ def _scope_label(sources: tuple[Source, ...], profile: str) -> str:
     source_text = " + ".join(source_names[source] for source in sources) or "none"
     safe_profile = sanitize_terminal_text(profile)
     return f"{source_text} · {safe_profile}" if safe_profile else source_text
-
-
-def _format_duration(value: timedelta) -> str:
-    total_microseconds = value.days * 86_400_000_000 + value.seconds * 1_000_000 + value.microseconds
-    total_seconds, microseconds = divmod(total_microseconds, 1_000_000)
-    hours, remainder = divmod(total_seconds, 3_600)
-    minutes, seconds = divmod(remainder, 60)
-    parts: list[str] = []
-    if hours:
-        parts.append(f"{hours}h")
-    if minutes:
-        parts.append(f"{minutes}m")
-    if seconds or microseconds or not parts:
-        if microseconds:
-            fraction = f"{microseconds:06d}".rstrip("0")
-            parts.append(f"{seconds}.{fraction}s")
-        else:
-            parts.append(f"{seconds}s")
-    return "".join(parts)
 
 
 def _percentage(count: int, total: int) -> str:

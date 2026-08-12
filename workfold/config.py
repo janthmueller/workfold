@@ -9,7 +9,9 @@ from datetime import date, timedelta
 from enum import Enum, IntFlag
 from pathlib import Path
 
+from workfold import time_bands
 from workfold.models import Weekday
+from workfold.time_bands import BandLabel, ClusterAnchor
 
 
 class UsageError(ValueError):
@@ -178,6 +180,9 @@ class RawOptions:
     coverage: bool
     strict: bool
     verbose: bool
+    cluster_anchor: ClusterAnchor = ClusterAnchor.EVENT
+    band_label: BandLabel = BandLabel.RANGE
+    show_empty_bands: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +216,9 @@ class UnresolvedOptions:
     strict: bool
     verbose: bool
     explicit_names: frozenset[str] = frozenset()
+    cluster_anchor: str = ClusterAnchor.EVENT.value
+    band_label: str = BandLabel.RANGE.value
+    show_empty_bands: bool = False
 
 
 _ISO_WEEK = re.compile(r"^(?P<year>[0-9]{4})-W(?P<week>[0-9]{2})$")
@@ -395,6 +403,21 @@ def parse_cluster_window(value: str) -> timedelta:
         "--cluster-window must be at least 1m and shorter than 24h with ordered h, m, and s units "
         "(for example 10m, 1m30s, or '1h 5m')"
     )
+
+
+def _validate_cluster_window_anchor(cluster_window: timedelta, cluster_anchor: ClusterAnchor) -> None:
+    try:
+        time_bands.validate_cluster_window_alignment(cluster_window, cluster_anchor)
+    except ValueError as error:
+        raise UsageError(
+            "--cluster-anchor midnight requires --cluster-window to use whole minutes "
+            "so fixed HH:MM band labels remain exact"
+        ) from error
+
+
+def _validate_empty_band_mode(show_empty_bands: bool, cluster_anchor: ClusterAnchor) -> None:
+    if show_empty_bands and cluster_anchor is not ClusterAnchor.MIDNIGHT:
+        raise UsageError("--show-empty-bands requires --cluster-anchor midnight")
 
 
 def _parse_ordered_duration(
@@ -639,6 +662,11 @@ def resolve_options(values: UnresolvedOptions) -> RawOptions:
         raise UsageError("--hide-days cannot hide all seven weekday columns")
     hide_empty_days = parse_weekday_scopes(values.hide_empty_days, option="--hide-empty-days")
 
+    cluster_window = parse_cluster_window(values.cluster_window)
+    cluster_anchor = ClusterAnchor(values.cluster_anchor)
+    _validate_cluster_window_anchor(cluster_window, cluster_anchor)
+    _validate_empty_band_mode(values.show_empty_bands, cluster_anchor)
+
     paths = values.paths or (Path("."),)
     return RawOptions(
         paths=paths,
@@ -661,7 +689,10 @@ def resolve_options(values: UnresolvedOptions) -> RawOptions:
         exclusions=exclusions,
         hours=values.hours or DEFAULT_HOURS,
         timezone_name=values.timezone_name,
-        cluster_window=parse_cluster_window(values.cluster_window),
+        cluster_window=cluster_window,
+        cluster_anchor=cluster_anchor,
+        band_label=BandLabel(values.band_label),
+        show_empty_bands=values.show_empty_bands,
         marker_style=MarkerStyle(values.marker_style),
         grid_style=GridStyle(values.grid_style),
         display_hours=parse_display_hours(values.display_hours) if values.display_hours else None,

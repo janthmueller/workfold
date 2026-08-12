@@ -5,13 +5,12 @@ from __future__ import annotations
 import codecs
 import re
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal, TypeAlias
 
 _OID_RE: Final[re.Pattern[bytes]] = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
-_EPOCH_RE: Final[re.Pattern[bytes]] = re.compile(rb"-?[0-9]+\Z")
-_OFFSET_RE: Final[re.Pattern[bytes]] = re.compile(rb"[+-][0-9]{4}\Z")
 _MIN_LOCALIZABLE_EPOCH_SECONDS: Final[int] = -62_135_510_400
 _MAX_LOCALIZABLE_EPOCH_SECONDS: Final[int] = 253_402_214_399
+GitSignatureRole: TypeAlias = Literal["author", "committer"]
 
 
 class GitObjectParseError(ValueError):
@@ -68,6 +67,59 @@ class ParsedCommit:
 
 
 @dataclass(frozen=True, slots=True)
+class RevListScanSpec:
+    """The minimum commit fields needed for pre-normalization selection."""
+
+    roles: tuple[GitSignatureRole, ...]
+    include_identities: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.roles:
+            raise ValueError("a commit scan requires at least one timestamp role")
+        if any(role not in {"author", "committer"} for role in self.roles):
+            raise ValueError("commit scan contains an unsupported timestamp role")
+        if len(set(self.roles)) != len(self.roles):
+            raise ValueError("commit scan timestamp roles must be unique")
+
+    @property
+    def pretty_format(self) -> str:
+        """Return a NUL-field format whose records remain newline framed."""
+
+        fields = ["%H"]
+        for role in self.roles:
+            prefix = "a" if role == "author" else "c"
+            if self.include_identities:
+                fields.extend((f"%{prefix}n", f"%{prefix}e"))
+            fields.append(f"%{prefix}t")
+        return "%x00".join(fields) + "%x00"
+
+
+@dataclass(frozen=True, slots=True)
+class RevListCommitScan:
+    """Validated lightweight timestamps for one reachable commit."""
+
+    object_id: str
+    roles: tuple[GitSignatureRole, ...]
+    instants_utc_ns: tuple[int, ...]
+    identities_raw: tuple[tuple[bytes, bytes] | None, ...]
+
+    def instant_utc_ns(self, role: GitSignatureRole) -> int:
+        try:
+            return self.instants_utc_ns[self.roles.index(role)]
+        except ValueError as error:
+            raise ValueError(f"commit scan did not request the {role} timestamp") from error
+
+    def identity(self, role: GitSignatureRole) -> tuple[str, str]:
+        try:
+            raw = self.identities_raw[self.roles.index(role)]
+        except ValueError as error:
+            raise ValueError(f"commit scan did not request the {role} timestamp") from error
+        if raw is None:
+            raise ValueError("commit scan did not request identities")
+        return _decode_losslessly(raw[0]), _decode_losslessly(raw[1])
+
+
+@dataclass(frozen=True, slots=True)
 class BatchObject:
     """One complete object from the ``cat-file --batch`` protocol."""
 
@@ -118,9 +170,12 @@ def _parse_object_id(value: bytes, *, field: str, object_id: str) -> str:
     return value.decode("ascii")
 
 
-def parse_git_signature(value: bytes, *, role: str, object_id: str) -> GitSignature:
-    """Parse one raw Git identity/epoch/offset signature without formatting loss."""
-
+def _split_git_signature(
+    value: bytes,
+    *,
+    role: str,
+    object_id: str,
+) -> tuple[bytes, bytes, bytes]:
     try:
         identity_raw, epoch_raw, offset_raw = value.rsplit(b" ", 2)
     except ValueError as error:
@@ -137,7 +192,41 @@ def parse_git_signature(value: bytes, *, role: str, object_id: str) -> GitSignat
             f"{role} header has no valid name/email identity",
             object_id=object_id,
         )
-    if not _EPOCH_RE.fullmatch(epoch_raw):
+    return identity_raw, epoch_raw, offset_raw
+
+
+def _parse_git_timestamp(
+    epoch_raw: bytes,
+    offset_raw: bytes,
+    *,
+    role: str,
+    object_id: str,
+) -> tuple[int, int]:
+    epoch_seconds = _parse_git_epoch(epoch_raw, role=role, object_id=object_id)
+    if len(offset_raw) != 5 or offset_raw[:1] not in {b"+", b"-"} or not offset_raw[1:].isdigit():
+        raise GitObjectParseError(
+            "invalid_git_timestamp",
+            f"{role} header has an invalid UTC offset",
+            object_id=object_id,
+        )
+
+    offset_hours = int(offset_raw[1:3])
+    offset_minutes = int(offset_raw[3:5])
+    if offset_hours > 23 or offset_minutes > 59:
+        raise GitObjectParseError(
+            "invalid_git_timestamp",
+            f"{role} header has an out-of-range UTC offset",
+            object_id=object_id,
+        )
+
+    sign = 1 if offset_raw[0:1] == b"+" else -1
+    offset_seconds = sign * (offset_hours * 3_600 + offset_minutes * 60)
+    return epoch_seconds, offset_seconds
+
+
+def _parse_git_epoch(epoch_raw: bytes, *, role: str, object_id: str) -> int:
+    epoch_digits = epoch_raw[1:] if epoch_raw.startswith(b"-") else epoch_raw
+    if not epoch_digits or not epoch_digits.isdigit():
         raise GitObjectParseError(
             "invalid_git_timestamp",
             f"{role} header has an invalid epoch",
@@ -157,26 +246,22 @@ def parse_git_signature(value: bytes, *, role: str, object_id: str) -> GitSignat
             f"{role} header epoch is outside Workfold's localizable datetime range",
             object_id=object_id,
         )
-    if not _OFFSET_RE.fullmatch(offset_raw):
-        raise GitObjectParseError(
-            "invalid_git_timestamp",
-            f"{role} header has an invalid UTC offset",
-            object_id=object_id,
-        )
+    return epoch_seconds
 
-    offset_hours = int(offset_raw[1:3])
-    offset_minutes = int(offset_raw[3:5])
-    if offset_hours > 23 or offset_minutes > 59:
-        raise GitObjectParseError(
-            "invalid_git_timestamp",
-            f"{role} header has an out-of-range UTC offset",
-            object_id=object_id,
-        )
 
+def parse_git_signature(value: bytes, *, role: str, object_id: str) -> GitSignature:
+    """Parse one raw Git identity/epoch/offset signature without formatting loss."""
+
+    identity_raw, epoch_raw, offset_raw = _split_git_signature(value, role=role, object_id=object_id)
+    epoch_seconds, offset_seconds = _parse_git_timestamp(
+        epoch_raw,
+        offset_raw,
+        role=role,
+        object_id=object_id,
+    )
+    identity_separator = identity_raw.rfind(b" <")
     raw_name = identity_raw[:identity_separator]
     raw_email = identity_raw[identity_separator + 2 : -1]
-    sign = 1 if offset_raw[0:1] == b"+" else -1
-    offset_seconds = sign * (offset_hours * 3_600 + offset_minutes * 60)
     timestamp_raw = epoch_raw + b" " + offset_raw
     identity = GitIdentity(
         name=_decode_losslessly(raw_name),
@@ -194,6 +279,10 @@ def parse_git_signature(value: bytes, *, role: str, object_id: str) -> GitSignat
         raw_timestamp_bytes=timestamp_raw,
         raw_offset=offset_raw.decode("ascii"),
     )
+
+
+def _formatted_signature(name: bytes, email: bytes, timestamp: bytes) -> bytes:
+    return name + b" <" + email + b"> " + timestamp
 
 
 def parse_commit_object(object_id: str, data: bytes) -> ParsedCommit:
@@ -274,6 +363,95 @@ def parse_commit_object(object_id: str, data: bytes) -> ParsedCommit:
         raw_subject=raw_subject,
         declared_encoding=declared_encoding,
     )
+
+
+def inspect_rev_list_scan(record: bytes, spec: RevListScanSpec) -> RevListCommitScan:
+    """Parse one minimal commit-selection record emitted for ``spec``."""
+
+    fields = _parse_rev_list_fields(record)
+    expected_fields = 1 + len(spec.roles) * (3 if spec.include_identities else 1)
+    if len(fields) != expected_fields:
+        raise GitObjectParseError(
+            "invalid_rev_list_record",
+            f"rev-list scan record has {len(fields)} fields instead of {expected_fields}",
+        )
+    object_id_raw = fields[0]
+    if not _OID_RE.fullmatch(object_id_raw):
+        raise GitObjectParseError(
+            "invalid_rev_list_record",
+            "rev-list scan record has no valid commit object ID",
+        )
+    object_id = object_id_raw.decode("ascii")
+
+    cursor = 1
+    instants: list[int] = []
+    identities: list[tuple[bytes, bytes] | None] = []
+    for role in spec.roles:
+        identity: tuple[bytes, bytes] | None = None
+        if spec.include_identities:
+            identity = (fields[cursor], fields[cursor + 1])
+            cursor += 2
+        epoch_seconds = _parse_git_epoch(fields[cursor], role=role, object_id=object_id)
+        cursor += 1
+        instants.append(epoch_seconds * 1_000_000_000)
+        identities.append(identity)
+    return RevListCommitScan(object_id, spec.roles, tuple(instants), tuple(identities))
+
+
+def parse_rev_list_metadata(record: bytes) -> ParsedCommit:
+    """Parse one fixed-field, newline-framed ``git rev-list`` record."""
+
+    fields = _parse_rev_list_fields(record)
+    if len(fields) != 11:
+        raise GitObjectParseError(
+            "invalid_rev_list_record",
+            f"rev-list metadata record has {len(fields)} fields instead of 11",
+        )
+    object_id_raw = fields[0]
+    if not _OID_RE.fullmatch(object_id_raw):
+        raise GitObjectParseError(
+            "invalid_rev_list_record",
+            "rev-list metadata record has no valid commit object ID",
+        )
+    object_id = object_id_raw.decode("ascii")
+    tree_id = _parse_object_id(fields[1], field="tree", object_id=object_id)
+    parent_ids = tuple(_parse_object_id(parent, field="parent", object_id=object_id) for parent in fields[2].split())
+    author = parse_git_signature(
+        _formatted_signature(fields[3], fields[4], fields[5]),
+        role="author",
+        object_id=object_id,
+    )
+    committer = parse_git_signature(
+        _formatted_signature(fields[6], fields[7], fields[8]),
+        role="committer",
+        object_id=object_id,
+    )
+    declared_encoding = _decode_losslessly(fields[9]) if fields[9] else None
+    return ParsedCommit(
+        object_id=object_id,
+        tree_id=tree_id,
+        parent_ids=parent_ids,
+        author=author,
+        committer=committer,
+        subject=_decode_commit_text(fields[10], declared_encoding),
+        raw_subject=fields[10],
+        declared_encoding=declared_encoding,
+    )
+
+
+def _parse_rev_list_fields(record: bytes) -> list[bytes]:
+    if not record.endswith(b"\n"):
+        raise GitObjectParseError(
+            "invalid_rev_list_record",
+            "rev-list metadata record has no newline terminator",
+        )
+    payload = record[:-1]
+    if not payload.endswith(b"\0"):
+        raise GitObjectParseError(
+            "invalid_rev_list_record",
+            "rev-list metadata record has no final field terminator",
+        )
+    return payload[:-1].split(b"\0")
 
 
 def parse_cat_file_batch(payload: bytes, expected_object_ids: tuple[str, ...]) -> BatchParseResult:
@@ -375,10 +553,15 @@ __all__ = [
     "BatchParseResult",
     "GitIdentity",
     "GitObjectParseError",
+    "GitSignatureRole",
     "GitSignature",
     "ParsedCommit",
+    "RevListCommitScan",
+    "RevListScanSpec",
     "UnavailableBatchObject",
+    "inspect_rev_list_scan",
     "parse_cat_file_batch",
     "parse_commit_object",
     "parse_git_signature",
+    "parse_rev_list_metadata",
 ]

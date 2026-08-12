@@ -44,6 +44,10 @@ workfold . --git-identity jan@example.com      # only that recorded Git identity
 workfold . --marker-style identity             # identity codes instead of circles
 workfold . --timezone Europe/Berlin
 workfold . --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
+workfold . --hours all                         # classify every time as working time
+workfold . --cluster-anchor midnight           # fixed clock-aligned intervals
+workfold . --cluster-anchor midnight --show-empty-bands  # include empty fixed intervals
+workfold . --band-label start                  # show one time per occupied row
 workfold . -E all                              # keep only occupied day columns
 workfold . -E weekend                          # remove empty weekend columns
 workfold . -H weekend                          # always hide weekend columns
@@ -71,8 +75,17 @@ The three main selectors are independent:
   imply `-t all` or `-m all`.
 
 Use `--cluster-window 10m`, `--cluster-window 1h5m`, or another duration to tune
-row clustering. Use `--no-color` or the standard `NO_COLOR` environment
-variable for colorless output.
+row clustering. The default `--cluster-anchor event` starts a band at each
+earliest unassigned event; `midnight` uses fixed whole-minute intervals from
+local `00:00` so their `HH:MM` boundaries remain exact. Second-based windows
+remain available with event anchoring. Independently,
+`--band-label range|start` selects an observed/fixed range label or only its
+starting minute. `--show-empty-bands` with midnight anchoring renders every
+fixed interval intersecting the display range; automatic ranges expand to full
+fixed bands. An explicitly cropped partial edge always shows its exact range,
+even with `--band-label start`. Without dense output, empty time stays compressed.
+Use `--no-color` or the standard `NO_COLOR` environment variable for colorless
+output.
 
 ## Configuration
 
@@ -84,6 +97,9 @@ timezone = "Europe/Berlin"
 hours = "Mo-Thu 08:00-16:30; Fr 08:00-14:00"
 mode = "git"
 profile = "portable"
+cluster-anchor = "midnight"
+band-label = "start"
+show-empty-bands = true
 grid = "vertical"
 hide-empty-days = ["weekend"]
 ```
@@ -110,7 +126,10 @@ documents locations, discovery, merging, and every supported key.
 - The key maps each visible identity/source once and adds an outside-hours cue
   only when needed.
 - One symbol is one event. Busy cells use exact `×N` counts.
-- Empty time is omitted. A `⋮` row reports a compressed gap.
+- Empty time is omitted. A `⋮` row reports a compressed gap once it reaches
+  the configured cluster window.
+- Event-anchored rows are compact around observations; midnight-anchored rows
+  use predictable clock boundaries. Labels are independently configurable.
 - Day-column hiding changes only the matrix; totals continue to cover every
   selected event.
 - `--grid vertical|horizontal|both` adds optional internal chart lines; the
@@ -125,8 +144,9 @@ Weekend events can therefore also be outside working hours.
 - Collection is local: Workfold does not contact a Git host or telemetry service.
 - Git history can be rewritten; reflogs can expire; filesystem metadata is a
   mutable snapshot and birth time depends on platform and filesystem support.
-- Coverage output accounts for unavailable, filtered, unsupported, and
-  unreadable timestamps in the requested scope.
+- Coverage reports unavailable, unsupported, and unreadable evidence that can
+  prevent a complete answer. Known timestamps outside the requested time or
+  identity scope are not counted as coverage outcomes.
 
 See the [documentation](https://janthmueller.github.io/workfold/) for every CLI
 option, collector semantics, coverage guarantees, and platform notes.

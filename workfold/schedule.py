@@ -11,6 +11,7 @@ from workfold.models import ActivityMarker, ClassifiedMarker, Weekday
 from workfold.time_ranges import utc_ns_to_datetime
 
 DEFAULT_SCHEDULE_TEXT = "Mo-Fr 08:00-16:30"
+ALL_HOURS_TEXT = "all"
 
 _DAY_TOKENS = {day.abbreviation.casefold(): day for day in Weekday}
 _DAY_TOKENS.update({day.name[:3].casefold(): day for day in Weekday})
@@ -87,6 +88,8 @@ class Schedule:
         return min(item.start_minute for item in intervals), max(item.end_minute for item in intervals)
 
     def __str__(self) -> str:
+        if all(intervals == (TimeInterval(0, 1440),) for intervals in self.intervals_by_weekday):
+            return ALL_HOURS_TEXT
         clauses: list[str] = []
         day_index = 0
         while day_index < len(Weekday):
@@ -108,10 +111,14 @@ class Schedule:
 def parse_schedule(value: str) -> Schedule:
     """Parse the documented schedule grammar and normalize its interval union."""
 
-    if not value.strip():
+    normalized_value = value.strip()
+    if not normalized_value:
         raise ScheduleError("schedule must not be empty")
+    if normalized_value.casefold() == ALL_HOURS_TEXT:
+        full_day = (TimeInterval(0, 1440),)
+        return Schedule(tuple(full_day for _weekday in Weekday))
     day_intervals: list[list[TimeInterval]] = [[] for _ in Weekday]
-    clauses = value.split(";")
+    clauses = normalized_value.split(";")
     for raw_clause in clauses:
         clause = raw_clause.strip()
         if not clause:
@@ -210,6 +217,7 @@ def _format_time(minute: int) -> str:
 
 
 __all__ = [
+    "ALL_HOURS_TEXT",
     "DEFAULT_SCHEDULE_TEXT",
     "Schedule",
     "ScheduleError",

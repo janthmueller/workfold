@@ -5,7 +5,17 @@ from pathlib import Path
 
 import pytest
 from workfold.cli import main, parse_invocation, parse_options
-from workfold.config import CollectionProfile, GitDateMode, GitMode, GitRecords, GridStyle, SourceMode, UsageError
+from workfold.config import (
+    BandLabel,
+    ClusterAnchor,
+    CollectionProfile,
+    GitDateMode,
+    GitMode,
+    GitRecords,
+    GridStyle,
+    SourceMode,
+    UsageError,
+)
 from workfold.settings import OriginKind, global_config_path
 
 
@@ -64,11 +74,11 @@ def test_global_local_and_cli_layers_merge_by_key(tmp_path: Path) -> None:
     global_path = global_config_path(environ=environ, platform_name="linux")
     _write(
         global_path,
-        'timezone = "Europe/Berlin"\nhours = "Mo-Fr 09:00-17:00"\ngrid = "vertical"\n',
+        'timezone = "Europe/Berlin"\nhours = "Mo-Fr 09:00-17:00"\ncluster-anchor = "midnight"\ngrid = "vertical"\n',
     )
     local_path = _write(
         project / "workfold.toml",
-        'hours = "Mo-Thu 08:00-16:00"\nhide-empty-days = ["weekend"]\n',
+        'hours = "Mo-Thu 08:00-16:00"\nband-label = "start"\nhide-empty-days = ["weekend"]\n',
     )
 
     invocation = parse_invocation(
@@ -80,11 +90,15 @@ def test_global_local_and_cli_layers_merge_by_key(tmp_path: Path) -> None:
 
     assert invocation.options.timezone_name == "Europe/Berlin"
     assert invocation.options.hours == "Mo-Thu 08:00-16:00"
+    assert invocation.options.cluster_anchor is ClusterAnchor.MIDNIGHT
+    assert invocation.options.band_label is BandLabel.START
     assert invocation.options.grid_style is GridStyle.BOTH
     assert invocation.settings.global_config == global_path
     assert invocation.settings.local_config == local_path
     assert invocation.settings.origins["timezone"].kind is OriginKind.GLOBAL
     assert invocation.settings.origins["hours"].kind is OriginKind.LOCAL
+    assert invocation.settings.origins["cluster-anchor"].kind is OriginKind.GLOBAL
+    assert invocation.settings.origins["band-label"].kind is OriginKind.LOCAL
     assert invocation.settings.origins["grid"].kind is OriginKind.CLI
 
 
@@ -408,6 +422,9 @@ def test_cli_can_negate_configured_boolean_values(tmp_path: Path) -> None:
         ('coverage = "yes"\n', "must be true or false"),
         ('git-records = "commit"\n', "must be an array of strings"),
         ('mode = "remote"\n', "must be one of"),
+        ('cluster-anchor = "noon"\n', "must be one of"),
+        ('band-label = "compact"\n', "must be one of"),
+        ('show-empty-bands = "yes"\n', "must be true or false"),
         ("hours = [\n", "invalid TOML"),
     ],
 )
@@ -446,6 +463,80 @@ def test_domain_value_errors_identify_the_config_file_and_key(tmp_path: Path) ->
         )
 
 
+def test_midnight_anchor_error_identifies_values_from_distinct_config_layers(tmp_path: Path) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    global_path = global_config_path(environ=environ, platform_name="linux")
+    _write(global_path, 'cluster-anchor = "midnight"\n')
+    local_path = _write(project / "workfold.toml", 'cluster-window = "1m30s"\n')
+
+    with pytest.raises(UsageError) as captured:
+        parse_invocation(
+            [str(project)],
+            cwd=tmp_path,
+            environ=environ,
+            platform_name="linux",
+        )
+
+    message = str(captured.value)
+    assert "midnight" in message
+    assert "whole minutes" in message
+    assert "HH:MM" in message
+    assert f"cluster-anchor=midnight (global {global_path.resolve()})" in message
+    assert f"cluster-window=1m30s (local {local_path.resolve()})" in message
+
+
+def test_show_empty_bands_conflict_identifies_config_origins(tmp_path: Path) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    local_path = _write(project / "workfold.toml", "show-empty-bands = true\n")
+
+    with pytest.raises(UsageError) as captured:
+        parse_invocation(
+            [str(project)],
+            cwd=tmp_path,
+            environ=environ,
+            platform_name="linux",
+        )
+
+    message = str(captured.value)
+    assert "--show-empty-bands requires --cluster-anchor midnight" in message
+    assert f"show-empty-bands=true (local {local_path.resolve()})" in message
+    assert "cluster-anchor=event (built-in)" in message
+
+
+def test_configured_show_empty_bands_is_valid_with_midnight_anchor(tmp_path: Path) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    local_path = _write(
+        project / "workfold.toml",
+        'cluster-anchor = "midnight"\nshow-empty-bands = true\n',
+    )
+
+    invocation = parse_invocation(
+        [str(project)],
+        cwd=tmp_path,
+        environ=environ,
+        platform_name="linux",
+    )
+
+    assert invocation.options.show_empty_bands
+    assert invocation.settings.origins["show-empty-bands"].path == local_path.resolve()
+
+    overridden = parse_invocation(
+        [str(project), "--cluster-anchor", "event", "--no-show-empty-bands"],
+        cwd=tmp_path,
+        environ=environ,
+        platform_name="linux",
+    )
+    assert not overridden.options.show_empty_bands
+    assert overridden.options.cluster_anchor is ClusterAnchor.EVENT
+    assert overridden.settings.origins["show-empty-bands"].kind is OriginKind.CLI
+
+
 def test_show_config_prints_values_origins_and_files_without_collecting(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -459,7 +550,21 @@ def test_show_config_prints_values_origins_and_files_without_collecting(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.setenv("TZ", "UTC")
 
-    assert main(["--show-config", "--grid", "both"]) == 0
+    assert (
+        main(
+            [
+                "--show-config",
+                "--grid",
+                "both",
+                "--cluster-anchor",
+                "midnight",
+                "--band-label",
+                "start",
+                "--show-empty-bands",
+            ]
+        )
+        == 0
+    )
 
     output = capsys.readouterr().out
     assert "Configuration files" in output
@@ -467,6 +572,9 @@ def test_show_config_prints_values_origins_and_files_without_collecting(
     assert "Effective value" in output
     assert "timezone" in output and "UTC" in output and "local" in output
     assert "grid" in output and "both" in output and "CLI" in output
+    assert re.search(r"^cluster-anchor\s+midnight\s+CLI$", output, re.MULTILINE)
+    assert re.search(r"^band-label\s+start\s+CLI$", output, re.MULTILINE)
+    assert re.search(r"^show-empty-bands\s+true\s+CLI$", output, re.MULTILINE)
     assert "Time band" not in output
 
 

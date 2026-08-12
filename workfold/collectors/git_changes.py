@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +17,7 @@ from workfold.collectors.git import (
     GitRepository,
     GitRunner,
 )
+from workfold.collectors.git_objects import GitSignature
 from workfold.iterables import batched
 from workfold.models import (
     GitChangeKind,
@@ -27,6 +28,7 @@ from workfold.models import (
     TimestampObservation,
 )
 from workfold.provenance import git_file_change_id
+from workfold.scope import ObservationScope
 
 _OID_RE: Final[re.Pattern[bytes]] = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _STATUS_RE: Final[re.Pattern[bytes]] = re.compile(rb"([A-Z])([0-9]{1,3})?\Z")
@@ -94,12 +96,7 @@ class CollectedGitFileChange:
     def to_observation(self, kind: TimestampKind) -> TimestampObservation:
         """Inherit one exact author/committer slot from the owning commit."""
 
-        if kind is TimestampKind.GIT_AUTHOR:
-            signature = self.commit_record.commit.author
-        elif kind is TimestampKind.GIT_COMMITTER:
-            signature = self.commit_record.commit.committer
-        else:
-            raise ValueError("file-change records support only Git author and committer timestamps")
+        signature = self.signature(kind)
         return TimestampObservation.create(
             self.to_origin(),
             kind,
@@ -109,6 +106,15 @@ class CollectedGitFileChange:
             actor_name=signature.identity.name,
             actor_email=signature.identity.email,
         )
+
+    def signature(self, kind: TimestampKind) -> GitSignature:
+        """Return the exact inherited commit signature for one timestamp kind."""
+
+        if kind is TimestampKind.GIT_AUTHOR:
+            return self.commit_record.commit.author
+        if kind is TimestampKind.GIT_COMMITTER:
+            return self.commit_record.commit.committer
+        raise ValueError("file-change records support only Git author and committer timestamps")
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +127,8 @@ class GitFileChangeRepositoryAccounting:
     parse_errors: int
     subprocess_errors: int
     discovered_changes: int
+    timestamp_kinds: tuple[TimestampKind, ...] = ()
+    scope_matches: tuple[tuple[TimestampKind, int], ...] = ()
 
     def __post_init__(self) -> None:
         counters = (
@@ -135,6 +143,14 @@ class GitFileChangeRepositoryAccounting:
         terminal_commits = self.successful_commits + self.parse_errors + self.subprocess_errors
         if self.requested_commits != terminal_commits:
             raise ValueError("Git file-change repository commit accounting does not reconcile")
+        if len(set(self.timestamp_kinds)) != len(self.timestamp_kinds) or any(
+            kind not in {TimestampKind.GIT_AUTHOR, TimestampKind.GIT_COMMITTER} for kind in self.timestamp_kinds
+        ):
+            raise ValueError("Git file-change timestamp kinds must be unique author/committer kinds")
+        if tuple(kind for kind, _ in self.scope_matches) != self.timestamp_kinds:
+            raise ValueError("Git file-change scope counts must cover the requested timestamp kinds exactly once")
+        if any(count < 0 or count > self.discovered_changes for _, count in self.scope_matches):
+            raise ValueError("Git file-change scope matches must be within discovered changes")
 
     @property
     def repository_root(self) -> Path:
@@ -147,6 +163,16 @@ class GitFileChangeRepositoryAccounting:
         """Canonical repository identity used for collection batching."""
 
         return self.repository.identity
+
+    def timestamp_value_count(self, kind: TimestampKind) -> int:
+        """Return inherited timestamp values read for one requested role."""
+
+        return self.discovered_changes if kind in self.timestamp_kinds else 0
+
+    def scope_match_count(self, kind: TimestampKind) -> int:
+        """Return independently matched inherited timestamps for one role."""
+
+        return next((count for candidate, count in self.scope_matches if candidate is kind), 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,9 +382,18 @@ class GitFileChangeCollector:
         *,
         repositories: Sequence[GitRepository] = (),
         change_consumer: Callable[[tuple[CollectedGitFileChange, ...]], None] | None = None,
+        timestamp_kinds: Sequence[TimestampKind] = (),
+        observation_scope: ObservationScope | None = None,
         retain_changes: bool = True,
     ) -> GitFileChangeCollectionResult:
         """Collect changes for the exact supplied commit set without traversal."""
+
+        requested_kinds = tuple(timestamp_kinds)
+        kinds = tuple(dict.fromkeys(requested_kinds))
+        if len(kinds) != len(requested_kinds) or any(
+            kind not in {TimestampKind.GIT_AUTHOR, TimestampKind.GIT_COMMITTER} for kind in kinds
+        ):
+            raise ValueError("file-change scope accounting accepts unique Git author/committer timestamp kinds")
 
         grouped: dict[str, list[CollectedGitCommit]] = defaultdict(list)
         repositories_by_identity: dict[str, GitRepository] = {}
@@ -378,6 +413,7 @@ class GitFileChangeCollector:
             parse_errors_for_repository = 0
             subprocess_errors_for_repository = 0
             discovered_for_repository = 0
+            scope_matches_for_repository: Counter[TimestampKind] = Counter()
             if not commit_group:
                 repository_accounting.append(
                     GitFileChangeRepositoryAccounting(
@@ -387,6 +423,8 @@ class GitFileChangeCollector:
                         parse_errors=0,
                         subprocess_errors=0,
                         discovered_changes=0,
+                        timestamp_kinds=kinds,
+                        scope_matches=_freeze_timestamp_counts(kinds, scope_matches_for_repository),
                     )
                 )
                 continue
@@ -447,6 +485,16 @@ class GitFileChangeCollector:
                             )
                         )
                     discovered_for_repository += len(collected_batch)
+                    for item in collected_batch:
+                        for kind in kinds:
+                            signature = item.signature(kind)
+                            if observation_scope is None or observation_scope.includes_timestamp(
+                                instant_utc_ns=signature.epoch_nanoseconds,
+                                source=Source.GIT,
+                                actor_name=signature.identity.name,
+                                actor_email=signature.identity.email,
+                            ):
+                                scope_matches_for_repository[kind] += 1
                     if retain_changes:
                         changes.extend(collected_batch)
                     if collected_batch and change_consumer is not None:
@@ -460,6 +508,8 @@ class GitFileChangeCollector:
                     parse_errors=parse_errors_for_repository,
                     subprocess_errors=subprocess_errors_for_repository,
                     discovered_changes=discovered_for_repository,
+                    timestamp_kinds=kinds,
+                    scope_matches=_freeze_timestamp_counts(kinds, scope_matches_for_repository),
                 )
             )
 
@@ -479,6 +529,13 @@ class GitFileChangeCollector:
             repository_accounting=tuple(repository_accounting),
             records_retained=retain_changes,
         )
+
+
+def _freeze_timestamp_counts(
+    kinds: tuple[TimestampKind, ...],
+    counts: Counter[TimestampKind],
+) -> tuple[tuple[TimestampKind, int], ...]:
+    return tuple((kind, counts[kind]) for kind in kinds)
 
 
 __all__ = [

@@ -101,6 +101,11 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     assert "standard built-in: local-branches; portable/full: all-refs" in normalized_help.replace("- ", "-")
     assert "--git-identity VALUE" in normalized_help
     assert "--marker-style {source,identity}" in normalized_help
+    assert "--cluster-anchor {event,midnight}" in normalized_help
+    assert "--band-label {range,start}" in normalized_help
+    assert "--show-empty-bands" in normalized_help
+    assert "--no-show-empty-bands" in normalized_help
+    assert "compressed-gap threshold" in normalized_help
     assert "--grid {none,vertical,horizontal,both}" in normalized_help
     assert actions_by_option["-H"] is actions_by_option["--hide-days"]
     assert actions_by_option["-H"].metavar == "SCOPE"
@@ -187,6 +192,16 @@ def test_help_describes_the_cluster_window_duration() -> None:
     assert "built-in default: 1h" in normalized_help
     assert "1m30s, 10m, '1h 5m'" in normalized_help
     assert "--bin" not in help_text
+
+
+def test_help_describes_all_hours_and_independent_band_controls() -> None:
+    normalized_help = " ".join(build_parser().format_help().split())
+
+    assert "all means every minute of all seven days" in normalized_help
+    assert "fixed intervals from local midnight" in normalized_help
+    assert "midnight requires whole-minute windows" in normalized_help
+    assert "observed/fixed range (built-in default) or its starting minute" in normalized_help
+    assert "explicitly clipped dense edges keep exact ranges" in normalized_help
 
 
 def test_cli_maps_usage_errors_to_status_two(capsys: pytest.CaptureFixture[str]) -> None:

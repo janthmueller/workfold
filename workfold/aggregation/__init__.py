@@ -12,11 +12,13 @@ from workfold.aggregation.models import (
     MarkerRun,
     TimeCluster,
 )
+from workfold.time_bands import ClusterAnchor
 
 __all__ = [
     "Aggregation",
     "AggregationBuilder",
     "ClusterCell",
+    "ClusterAnchor",
     "HiddenMarkers",
     "MINUTES_PER_DAY",
     "MarkerRun",

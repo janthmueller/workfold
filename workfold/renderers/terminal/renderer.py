@@ -49,7 +49,17 @@ def write_terminal(
         plain_section(render_summary(report, resolved.width)),
     ]
     if resolved.verbose:
-        sections.append(plain_section(render_details(report, resolved.width), heading=True))
+        sections.append(
+            plain_section(
+                render_details(
+                    report,
+                    resolved.width,
+                    band_label=resolved.band_label,
+                    show_empty_bands=resolved.show_empty_bands,
+                ),
+                heading=True,
+            )
+        )
     if resolved.list_outside:
         sections.append(plain_section(render_outside(report, resolved.width), heading=True))
 

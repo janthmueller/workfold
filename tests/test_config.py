@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import fields
 from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 from workfold.cli import parse_options
 from workfold.config import (
+    BandLabel,
+    ClusterAnchor,
     CollectionProfile,
     FilesystemEntry,
     FilesystemTime,
@@ -14,9 +17,11 @@ from workfold.config import (
     GitRecords,
     GridStyle,
     MarkerStyle,
+    RawOptions,
     RefScope,
     RollingDuration,
     SourceMode,
+    UnresolvedOptions,
     UsageError,
     parse_clock_minutes,
     parse_cluster_window,
@@ -52,10 +57,64 @@ def test_default_options_are_the_quick_git_view_for_this_week() -> None:
     assert options.filesystem_entries == (FilesystemEntry.FILE,)
     assert options.respect_gitignore
     assert options.cluster_window == timedelta(hours=1)
+    assert options.cluster_anchor is ClusterAnchor.EVENT
+    assert options.band_label is BandLabel.RANGE
+    assert not options.show_empty_bands
     assert options.marker_style is MarkerStyle.SOURCE
     assert options.grid_style is GridStyle.NONE
     assert options.hide_days == ()
     assert options.hide_empty_days == ()
+
+
+def test_new_band_options_do_not_shift_existing_positional_option_fields() -> None:
+    resolved = parse_options([])
+    raw_names = tuple(field.name for field in fields(RawOptions))
+    unresolved_names = tuple(field.name for field in fields(UnresolvedOptions))
+    legacy_construction = RawOptions(
+        resolved.paths,
+        resolved.weeks,
+        resolved.from_date,
+        resolved.to_date,
+        resolved.all_dates,
+        resolved.rolling_duration,
+        resolved.profile,
+        resolved.source,
+        resolved.git_mode,
+        resolved.git_date,
+        resolved.git_records,
+        resolved.ref_scope,
+        resolved.git_identities,
+        resolved.filesystem_times,
+        resolved.filesystem_entries,
+        resolved.include_ignored,
+        resolved.respect_gitignore,
+        resolved.exclusions,
+        resolved.hours,
+        resolved.timezone_name,
+        resolved.cluster_window,
+        resolved.marker_style,
+        resolved.grid_style,
+        resolved.display_hours,
+        resolved.hide_days,
+        resolved.hide_empty_days,
+        resolved.no_color,
+        resolved.list_outside,
+        resolved.limit,
+        resolved.coverage,
+        resolved.strict,
+        resolved.verbose,
+    )
+
+    assert raw_names[-5:] == ("strict", "verbose", "cluster_anchor", "band_label", "show_empty_bands")
+    assert unresolved_names[-6:] == (
+        "strict",
+        "verbose",
+        "explicit_names",
+        "cluster_anchor",
+        "band_label",
+        "show_empty_bands",
+    )
+    assert legacy_construction == resolved
 
 
 def test_explicit_this_week_matches_the_implicit_default() -> None:
@@ -187,6 +246,22 @@ def test_grid_style_is_explicit_and_enum_backed(value: str, expected: GridStyle)
 def test_grid_style_does_not_accept_all_as_an_alias_for_both() -> None:
     with pytest.raises(SystemExit):
         parse_options(["--grid", "all"])
+
+
+def test_cluster_anchor_and_band_label_are_independent_enum_options() -> None:
+    options = parse_options(["--cluster-anchor", "midnight", "--band-label", "start"])
+
+    assert options.cluster_anchor is ClusterAnchor.MIDNIGHT
+    assert options.band_label is BandLabel.START
+
+
+def test_show_empty_bands_requires_midnight_anchoring() -> None:
+    options = parse_options(["--cluster-anchor", "midnight", "--show-empty-bands"])
+
+    assert options.show_empty_bands
+
+    with pytest.raises(UsageError, match="--show-empty-bands requires --cluster-anchor midnight"):
+        parse_options(["--show-empty-bands"])
 
 
 def test_weekday_scope_parser_accepts_aliases_groups_commas_and_repetition() -> None:
@@ -444,6 +519,14 @@ def test_display_hours_are_half_open_and_non_overnight() -> None:
 def test_cluster_window_accepts_compact_ordered_durations(value: str, expected: timedelta) -> None:
     assert parse_cluster_window(value) == expected
     assert parse_options(["--cluster-window", value]).cluster_window == expected
+
+
+def test_midnight_anchor_requires_a_whole_minute_cluster_window() -> None:
+    with pytest.raises(UsageError, match="midnight.*whole minutes.*HH:MM"):
+        parse_options(["--cluster-anchor", "midnight", "--cluster-window", "1m30s"])
+
+    options = parse_options(["--cluster-anchor", "midnight", "--cluster-window", "1h5m"])
+    assert options.cluster_window == timedelta(hours=1, minutes=5)
 
 
 @pytest.mark.parametrize(

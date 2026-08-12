@@ -43,7 +43,8 @@ With no flags, Workfold selects the current ISO week in the operating system's
 local timezone (`-t this-week`), uses Git mode (`-m git`), reads commit author
 timestamps from local branches plus a detached `HEAD` under the `standard`
 profile (`-p standard`), uses a configurable cluster window (default: `1h`),
-and classifies against `Mo-Fr 08:00-16:30`.
+anchors bands at events, labels them as ranges, and classifies against
+`Mo-Fr 08:00-16:30`.
 
 ```bash
 workfold . -t 2026-W31
@@ -52,9 +53,12 @@ workfold . -t 2026-07-01..2026-07-31
 workfold . --timezone Europe/Berlin --list-outside
 workfold . -t all -m git -p portable
 workfold . -t all -m all -p full
-workfold . --cluster-window 1m30s
+workfold . --cluster-window 1m30s --cluster-anchor event
 workfold . --cluster-window 10m
-workfold . --cluster-window 1h5m
+workfold . --cluster-window 1h5m --cluster-anchor midnight
+workfold . --cluster-anchor midnight --show-empty-bands
+workfold . --band-label start
+workfold . --hours all
 workfold . --marker-style identity
 workfold . --grid vertical
 workfold . --hide-empty-days all
@@ -71,16 +75,30 @@ out `-t all -m all -p full`.
 
 ## Read the chart
 
-The chart uses anchored time clustering and renders only occupied clusters in
-implicit `00:00`-toward-`24:00` order; it does not add empty day-boundary rows.
-Starting with the earliest unassigned local wall-clock event, Workfold forms one
-globally aligned half-open assignment window of the configured width, assigns
-events from every visible weekday, then repeats. A displayed label spans the
-first through last visible event in that cluster. Band endpoints display as
-`HH:MM`; the one-minute minimum window prevents distinct rows from receiving the
-same minute label. Exact seconds and nanoseconds remain in normalized provenance and outside-event rows. Empty bands are
-omitted, and a gap of at least one hour between observed endpoints uses one dim
-duration cue rather than rows of empty intervals.
+By default, the chart renders only occupied clusters in implicit
+`00:00`-toward-`24:00` order and compresses empty time. The default
+`--cluster-anchor event` starts each globally shared half-open band at the
+earliest unassigned local wall-clock event. `--cluster-anchor midnight` instead
+uses fixed intervals measured from local `00:00`, so a `1h` window always means
+`[00:00,01:00)`, `[01:00,02:00)`, and so on. An event exactly on an endpoint
+belongs to the following interval. Midnight anchoring requires a whole-minute
+window so every displayed `HH:MM` boundary is exact.
+
+Label formatting is independent. `--band-label range` is the default: event
+anchoring shows the first through last observed time, while midnight anchoring
+shows the fixed interval bounds. `--band-label start` prints only the band start
+under the compact `Time` heading. An explicitly
+cropped partial edge remains an exact range so its label cannot imply a complete
+window. Labels use minute-level clock text. An event-anchored label names the
+minute containing its exact observation or anchor; exact seconds and
+nanoseconds remain in provenance and outside-event rows. Empty bands are
+omitted by default, and a gap at least as long as the configured cluster window
+uses one dim duration cue rather than rows of empty intervals. The built-in
+`1h` window therefore retains the familiar one-hour threshold while custom
+windows adjust the cue threshold with them. `--show-empty-bands` expands every
+fixed interval in the resolved display range; automatic bounds expand to full
+bands. It therefore requires `--cluster-anchor midnight`; using it with event
+anchoring is a usage error.
 
 The matrix has no grid by default. `--grid vertical`, `horizontal`, or `both`
 adds dim internal separators without drawing an outer box. Horizontal lines

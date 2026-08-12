@@ -45,6 +45,13 @@ class ReflogRef:
     ref_name: str
     entry_count: int
     captured_entry_count: int
+    scope_match_count: int = 0
+
+    def __post_init__(self) -> None:
+        if min(self.entry_count, self.captured_entry_count, self.scope_match_count) < 0:
+            raise ValueError("reflog counters must be non-negative")
+        if self.scope_match_count > self.captured_entry_count:
+            raise ValueError("reflog scope matches exceed captured entries")
 
     @property
     def unavailable_entry_count(self) -> int:
@@ -157,6 +164,10 @@ class GitReflogCollectionResult:
             raise ValueError("retained reflog entries do not match captured entry accounting")
         if len(self.entries) > self.captured_entries:
             raise ValueError("retained reflog entries exceed captured entry accounting")
+        if sum(item.captured_entry_count for item in self.available_refs) != self.captured_entries:
+            raise ValueError("per-ref reflog captures do not match aggregate accounting")
+        if sum(item.unavailable_entry_count for item in self.available_refs) != self.unavailable_entries:
+            raise ValueError("per-ref reflog unavailability does not match aggregate accounting")
 
     @property
     def is_partial(self) -> bool:

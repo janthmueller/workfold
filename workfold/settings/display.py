@@ -103,6 +103,9 @@ def _effective_values(options: RawOptions) -> dict[str, SettingValue]:
         "hours": options.hours,
         "timezone": options.timezone_name or "local",
         "cluster-window": _format_duration(options.cluster_window.total_seconds()),
+        "cluster-anchor": options.cluster_anchor.value,
+        "band-label": options.band_label.value,
+        "show-empty-bands": options.show_empty_bands,
         "marker-style": options.marker_style.value,
         "grid": options.grid_style.value,
         "display-hours": (

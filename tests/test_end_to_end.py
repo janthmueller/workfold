@@ -156,9 +156,53 @@ def test_filesystem_mode_flows_through_the_shared_pipeline(tmp_path: Path) -> No
     assert "outside" in rendered.casefold()
     _assert_lean_success_output(rendered)
     assert "Filesystem events:" not in rendered
-    assert "filesystem modified captured: 1" in rendered
+    assert "filesystem modified selected: 1" in rendered
     assert "Coverage details:" in rendered
     assert "Details\n" not in rendered
+
+
+def test_all_hours_and_midnight_start_labels_flow_through_the_cli(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    file_path = root / "weekend.txt"
+    file_path.write_text("work", encoding="utf-8")
+    _set_times(file_path, datetime(2026, 8, 9, 23, 30, tzinfo=UTC))
+    output = StringIO()
+    options = parse_options(
+        [
+            str(root),
+            "--mode",
+            "fs",
+            "--fs-times",
+            "modified",
+            "--include-ignored",
+            "--time",
+            "all",
+            "--timezone",
+            "UTC",
+            "--hours",
+            "all",
+            "--cluster-anchor",
+            "midnight",
+            "--band-label",
+            "start",
+            "--show-empty-bands",
+            "--no-color",
+        ]
+    )
+
+    assert run(options, stdout=output, stderr=StringIO(), terminal_width=80) == 0
+
+    rendered = output.getvalue()
+    assert rendered.startswith("Time")
+    assert not rendered.startswith("Time (")
+    assert re.search(r"^23:00\s", rendered, re.MULTILINE)
+    assert re.search(r"^22:00\s*$", rendered, re.MULTILINE)
+    assert "23:30" not in rendered
+    assert "Working hours: all" in rendered
+    assert "Outside working hours" not in rendered
+    assert re.search(r"^Schedule\s+1 inside \(100\.0%\) · 0 outside \(0\.0%\)$", rendered, re.MULTILINE)
+    assert re.search(r"^Calendar\s+0 weekday \(0\.0%\) · 1 weekend \(100\.0%\)$", rendered, re.MULTILINE)
 
 
 def test_incomplete_filesystem_inventory_is_a_clean_warning_unless_strict(tmp_path: Path) -> None:
@@ -403,8 +447,8 @@ def test_full_all_mode_collects_all_record_families_and_reports_capabilities(
     assert "Git tags discovered: 1" in rendered
     assert "Git reflog entries discovered:" in rendered
     assert "filesystem entries discovered:" in rendered
-    assert "Git tagger captured: 1" in rendered
-    assert "filesystem created captured:" in rendered
+    assert "Git tagger selected: 1" in rendered
+    assert "filesystem created selected:" in rendered
     assert "explicitly excluded=1" in rendered
     assert "Coverage details:" in rendered
     assert "Details\n" not in rendered
@@ -459,9 +503,9 @@ def test_portable_collects_only_git_object_timestamp_evidence(tmp_path: Path) ->
     rendered = output.getvalue()
     assert "Git commits discovered: 1" in rendered
     assert "Git tags discovered: 1" in rendered
-    assert "Git author captured: 1" in rendered
-    assert "Git committer captured: 1" in rendered
-    assert "Git tagger captured: 1" in rendered
+    assert "Git author selected: 1" in rendered
+    assert "Git committer selected: 1" in rendered
+    assert "Git tagger selected: 1" in rendered
     _assert_lean_success_output(rendered)
     assert "Coverage details:" in rendered
     assert "Details\n" not in rendered
@@ -526,7 +570,7 @@ def test_verbose_enables_expanded_coverage_without_coverage_flag(tmp_path: Path)
     assert "Schedule:" in rendered
     assert "Coverage:" in rendered
     assert "Coverage details:" in rendered
-    assert "timestamp slots requested: 0" in rendered
+    assert "timestamp slots examined: 0" in rendered
     assert "not requested=" in rendered
 
 

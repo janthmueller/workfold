@@ -16,6 +16,7 @@ from workfold.collectors.filesystem import (
     TimestampExtractionCoverage,
     scandir_no_follow,
 )
+from workfold.collectors.filesystem.accounting import AccountingBuilder
 from workfold.collectors.filesystem_times import FilesystemTimestampAdapter
 from workfold.collectors.ignores import (
     GitFilesystemInventory,
@@ -34,10 +35,11 @@ from workfold.coverage import (
     RecordCoverage,
     RecordCoverageKey,
     RecordDisposition,
-    SelectionDisposition,
     TimestampCoverageKey,
 )
 from workfold.models import EntryType, RecordKind, Source, TimestampKind, TimestampObservation
+from workfold.scope import ObservationScope
+from workfold.time_ranges import InstantRange, InstantRangeUnion
 
 from support.git_repo import GitRepo
 
@@ -858,7 +860,7 @@ def test_unsupported_unavailable_and_error_timestamp_slots_reconcile(tmp_path: P
     assert error.is_partial
 
 
-def test_coverage_adapter_requires_complete_selection_and_plotting_maps(tmp_path: Path) -> None:
+def test_coverage_adapter_validates_selected_and_plotted_observations(tmp_path: Path) -> None:
     root = tmp_path / "root"
     root.mkdir()
     (root / "one.txt").write_text("one", encoding="utf-8")
@@ -871,33 +873,27 @@ def test_coverage_adapter_requires_complete_selection_and_plotting_maps(tmp_path
     )
     observation_ids = [item.observation_id for item in result.observations]
     assert len(observation_ids) == 2
-    selection = {
-        observation_ids[0]: SelectionDisposition.INCLUDED,
-        observation_ids[1]: SelectionDisposition.OUTSIDE_DATE,
-    }
-    plotting = {observation_ids[0]: PlottingDisposition.MARKER}
+    selected = set(observation_ids)
+    plotting = {observation_id: PlottingDisposition.MARKER for observation_id in observation_ids}
 
-    ledger = result.build_coverage(selection, plotting)
+    ledger = result.build_coverage(selected, plotting)
     ledger.validate()
     assert ledger.records[0].eligible == 2
-    assert ledger.timestamps[0].requested == 2
-    assert ledger.timestamps[0].included == 1
-    assert ledger.timestamps[0].outside_date == 1
-    assert ledger.timestamps[0].markers == 1
-    with pytest.raises(ValueError, match="selection map"):
-        result.build_coverage({}, {})
-    with pytest.raises(ValueError, match="selection map"):
-        result.build_coverage(
-            {**selection, "invented": SelectionDisposition.OUTSIDE_DATE},
-            plotting,
-        )
+    assert ledger.timestamps[0].examined == 2
+    assert ledger.timestamps[0].scope_matches == 2
+    assert ledger.timestamps[0].selected == 2
+    assert ledger.timestamps[0].markers == 2
+    with pytest.raises(ValueError, match="unknown filesystem observations"):
+        result.build_coverage({"invented"}, {})
     with pytest.raises(ValueError, match="plotting map"):
-        result.build_coverage(selection, {})
+        result.build_coverage(selected, {})
     with pytest.raises(ValueError, match="plotting map"):
         result.build_coverage(
-            selection,
-            {**plotting, observation_ids[1]: PlottingDisposition.MARKER},
+            selected,
+            {**plotting, "invented": PlottingDisposition.MARKER},
         )
+    with pytest.raises(ValueError, match="omits 1 matched"):
+        result.build_coverage({observation_ids[0]}, {observation_ids[0]: PlottingDisposition.MARKER})
 
 
 def test_accounting_value_objects_reject_nonconservation() -> None:
@@ -910,22 +906,26 @@ def test_accounting_value_objects_reject_nonconservation() -> None:
         TimestampKind.FS_MODIFIED,
     )
     with pytest.raises(ValueError, match="non-negative"):
-        TimestampExtractionCoverage(timestamp_key, -1, 0, 0, 0, 0, ())
+        TimestampExtractionCoverage(timestamp_key, -1, 0, 0, 0, 0, 0, ())
     with pytest.raises(ValueError, match="does not reconcile"):
-        TimestampExtractionCoverage(timestamp_key, 1, 0, 0, 0, 0, ())
-    with pytest.raises(ValueError, match="captured count"):
-        TimestampExtractionCoverage(timestamp_key, 1, 1, 0, 0, 0, ())
+        TimestampExtractionCoverage(timestamp_key, 1, 0, 0, 0, 0, 0, ())
+    with pytest.raises(ValueError, match="scope-match count"):
+        TimestampExtractionCoverage(timestamp_key, 1, 1, 0, 0, 0, 1, ())
     with pytest.raises(ValueError, match="duplicate observations"):
-        TimestampExtractionCoverage(timestamp_key, 2, 2, 0, 0, 0, ("same", "same"))
+        TimestampExtractionCoverage(timestamp_key, 2, 2, 0, 0, 0, 2, ("same", "same"))
 
     record = RecordCoverage(record_key, discovered=1, eligible=1)
-    extraction = TimestampExtractionCoverage(timestamp_key, 1, 1, 0, 0, 0, ("observation",))
+    extraction = TimestampExtractionCoverage(timestamp_key, 1, 1, 0, 0, 0, 1, ("observation",))
     with pytest.raises(ValueError, match="duplicate keys"):
         FilesystemAccounting((record, record), (extraction,))
     with pytest.raises(ValueError, match="duplicate keys"):
         FilesystemAccounting((record,), (extraction, extraction))
     with pytest.raises(ValueError, match="no record partition"):
         FilesystemAccounting((), (extraction,))
+    builder = AccountingBuilder()
+    builder.match_scope(Path("/orphan"), TimestampKind.FS_MODIFIED)
+    with pytest.raises(ValueError, match="scope-match count"):
+        builder.build()
     with pytest.raises(ValueError, match="pruned ignored subtree"):
         FilesystemAccounting((), (), -1)
     mismatched_record = RecordCoverage(record_key, discovered=2, eligible=2)
@@ -1151,7 +1151,44 @@ def test_non_retaining_collection_streams_one_entry_batch_at_a_time(tmp_path: Pa
     assert len(received) == 3
     assert all(len(batch) == 2 for batch in received)
     assert all(len({item.origin.record_id for item in batch}) == 1 for batch in received)
-    assert all(not item.observation_ids_complete for item in result.accounting.timestamps)
+    assert all(not item.scope_match_ids_complete for item in result.accounting.timestamps)
     assert sum(item.captured for item in result.accounting.timestamps) == 6
     with pytest.raises(ValueError, match="non-retaining"):
-        result.build_coverage({}, {})
+        result.build_coverage(set(), {})
+
+
+def test_bounded_collection_accounts_for_all_files_but_emits_only_matching_timestamps(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = root / "outside.txt"
+    selected = root / "selected.txt"
+    outside.write_text("outside", encoding="utf-8")
+    selected.write_text("selected", encoding="utf-8")
+    os.utime(outside, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(selected, ns=(2_000_000_000, 2_000_000_000))
+    scope = ObservationScope(InstantRangeUnion((InstantRange(1_500_000_000, 2_500_000_000),)))
+    received: list[tuple[TimestampObservation, ...]] = []
+
+    result = FilesystemCollector().collect(
+        (root,),
+        timestamp_kinds=FS_MODIFIED,
+        respect_gitignore=False,
+        include_ignored=True,
+        observation_consumer=received.append,
+        observation_scope=scope,
+    )
+
+    assert [item.origin.path for item in result.observations] == [selected]
+    assert [item.origin.path for batch in received for item in batch] == [selected]
+    extraction = result.accounting.timestamps[0]
+    assert extraction.requested == extraction.captured == 2
+    selected_id = result.observations[0].observation_id
+    ledger = result.build_coverage(
+        {selected_id},
+        {selected_id: PlottingDisposition.MARKER},
+    )
+    timestamp = ledger.timestamps[0]
+    assert timestamp.examined == timestamp.values_read == 2
+    assert timestamp.selected == timestamp.markers == 1

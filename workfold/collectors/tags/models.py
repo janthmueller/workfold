@@ -107,6 +107,7 @@ class GitTagRepositoryAccounting:
     lightweight_tags: int
     captured_tagger_timestamps: int
     unavailable_tagger_timestamps: int
+    scope_matches: int
     unavailable_objects: int
     parse_errors: int
     operational_errors: int
@@ -121,6 +122,7 @@ class GitTagRepositoryAccounting:
             self.lightweight_tags,
             self.captured_tagger_timestamps,
             self.unavailable_tagger_timestamps,
+            self.scope_matches,
             self.unavailable_objects,
             self.parse_errors,
             self.operational_errors,
@@ -133,6 +135,8 @@ class GitTagRepositoryAccounting:
             raise ValueError("Git tag repository discovery accounting does not reconcile")
         if self.captured_tags != self.captured_tagger_timestamps + self.unavailable_tagger_timestamps:
             raise ValueError("Git tag repository timestamp accounting does not reconcile")
+        if self.scope_matches > self.captured_tagger_timestamps:
+            raise ValueError("Git tag scope matches exceed captured tagger timestamps")
 
     @property
     def repository_root(self) -> Path:

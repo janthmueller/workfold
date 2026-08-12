@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from workfold.app.git_commit_selection import GitCommitSelection, should_preselect_commits
 from workfold.app.resolution import filesystem_timestamp_kinds, git_timestamp_kinds
 from workfold.collectors.base import CollectorDiagnostic
 from workfold.collectors.filesystem import FilesystemCollectionResult, FilesystemCollector
@@ -29,8 +30,9 @@ from workfold.collectors.git_reflogs import (
 from workfold.collectors.git_tags import CollectedGitTag, GitTagCollectionResult, GitTagCollector
 from workfold.config import FilesystemEntry, RawOptions, UsageError
 from workfold.coverage import Capability
-from workfold.models import TimestampObservation
+from workfold.models import Source, TimestampObservation
 from workfold.pipeline import ObservationBatch, ObservationConsumer
+from workfold.scope import ObservationScope
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +54,7 @@ def collect(
     options: RawOptions,
     *,
     observation_consumer: ObservationConsumer,
+    observation_scope: ObservationScope | None,
     git_collector: GitCollector | None,
     repository_resolver: GitRepositoryResolver | None,
     file_change_collector: GitFileChangeCollector | None,
@@ -72,13 +75,27 @@ def collect(
     repository_resolution: GitRepositoryResolutionResult | None = None
 
     def emit(observations: Sequence[TimestampObservation]) -> None:
-        observation_consumer(ObservationBatch.create(observations))
+        if not observations:
+            return
+        source = observations[0].origin.source
+        selected = (
+            tuple(observations)
+            if observation_scope is None or not observation_scope.is_restrictive_for(source)
+            else observation_scope.select(observations)
+        )
+        if selected:
+            observation_consumer(ObservationBatch.create(selected))
 
     if options.source.includes_git:
         if options.git_records.includes_commits:
             timestamp_kinds = git_timestamp_kinds(options.git_date)
             file_results: list[GitFileChangeCollectionResult] = []
             resolved_file_change_collector = file_change_collector or GitFileChangeCollector()
+            commit_selection = (
+                GitCommitSelection(observation_scope, timestamp_kinds)
+                if observation_scope is not None and should_preselect_commits(observation_scope)
+                else None
+            )
 
             def consume_file_changes(changes: tuple[CollectedGitFileChange, ...]) -> None:
                 for item in changes:
@@ -93,6 +110,8 @@ def collect(
                         resolved_file_change_collector.collect(
                             commits,
                             change_consumer=consume_file_changes,
+                            timestamp_kinds=timestamp_kinds,
+                            observation_scope=observation_scope,
                             retain_changes=False,
                         )
                     )
@@ -101,6 +120,8 @@ def collect(
                 options.paths,
                 ref_scope=options.ref_scope,
                 commit_consumer=consume_commits,
+                scan_spec=commit_selection.scan_spec if commit_selection is not None else None,
+                commit_filter=commit_selection.select if commit_selection is not None else None,
                 retain_commits=False,
             )
             repositories = commit_result.repositories
@@ -124,6 +145,7 @@ def collect(
             tag_result = (tag_collector or GitTagCollector()).collect(
                 repositories,
                 tag_consumer=consume_tags,
+                observation_scope=observation_scope,
                 retain_tags=False,
             )
             diagnostics.extend(tag_result.diagnostics)
@@ -137,6 +159,7 @@ def collect(
             reflog_result = (reflog_collector or GitReflogCollector()).collect(
                 repositories,
                 entry_consumer=consume_reflogs,
+                observation_scope=observation_scope,
                 retain_entries=False,
             )
             diagnostics.extend(reflog_result.diagnostics)
@@ -154,6 +177,11 @@ def collect(
                 include_ignored=options.include_ignored,
                 exclusions=options.exclusions,
                 observation_consumer=emit,
+                observation_scope=(
+                    observation_scope
+                    if observation_scope is not None and observation_scope.is_restrictive_for(Source.FILESYSTEM)
+                    else None
+                ),
                 retain_entries=False,
                 retain_observations=False,
             )
@@ -188,6 +216,8 @@ def merge_file_change_results(
             if existing is None:
                 accounting_by_repository[item.repository.identity] = item
             else:
+                if existing.timestamp_kinds != item.timestamp_kinds:
+                    raise ValueError("cannot merge file-change accounting with different timestamp kinds")
                 accounting_by_repository[item.repository.identity] = GitFileChangeRepositoryAccounting(
                     repository=existing.repository,
                     requested_commits=existing.requested_commits + item.requested_commits,
@@ -195,6 +225,14 @@ def merge_file_change_results(
                     parse_errors=existing.parse_errors + item.parse_errors,
                     subprocess_errors=existing.subprocess_errors + item.subprocess_errors,
                     discovered_changes=existing.discovered_changes + item.discovered_changes,
+                    timestamp_kinds=existing.timestamp_kinds,
+                    scope_matches=tuple(
+                        (
+                            kind,
+                            existing.scope_match_count(kind) + item.scope_match_count(kind),
+                        )
+                        for kind in existing.timestamp_kinds
+                    ),
                 )
     return GitFileChangeCollectionResult(
         changes=tuple(change for result in results for change in result.changes),

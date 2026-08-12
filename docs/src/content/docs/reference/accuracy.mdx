@@ -15,14 +15,26 @@ duration.
 
 ## The completeness boundary
 
-The central invariant is that every timestamp slot requested from every record
-discovered in scope must end in an accounted state. A timestamp is:
+Workfold treats the selected paths, time range, sources, evidence kinds,
+identities, ignore policy, and explicit exclusions as the requested query scope.
+Every discoverable timestamp inside that scope must become a selected
+observation, or Workfold must report why it could not determine or obtain it.
+Known timestamps outside the requested time or identity scope are not part of
+the answer and are not counted as coverage outcomes.
 
-- captured and included;
-- captured and removed by the date, identity, ignore, or explicit filter;
-- unavailable on the individual record;
-- unsupported by the platform/filesystem; or
-- unreadable because collection, parsing, traversal, or metadata access failed.
+Coverage keeps source extraction and query results separate. Each collector
+records the timestamp slots it had to examine, whether their values were read,
+unavailable, unsupported, or errored, and which readable values matched the
+query before consumer delivery. Early-selection paths do so before rich
+materialization. Pipeline accounting independently records received
+observations and whether each became a plotted marker or was coalesced with an
+identical observation while retaining all provenance roles.
+There is deliberately no equality between values read and observations
+selected: an exact collector may reject a known non-matching value as soon as
+it reads it. Every scope match must, however, become a selected observation or
+an explicit materialization error. An error that prevents Workfold from
+deciding whether a value was in scope remains a conservative coverage
+exception.
 
 Workfold therefore uses qualified wording such as:
 
@@ -42,24 +54,28 @@ unsupported capabilities, partial collection, or collection errors. The
 verbose Scope fact combines mode and profile, such as `Git · portable`, while
 the full Coverage fact stays focused on completeness.
 
-The ledger keeps three conservation checks separate:
+The ledger keeps four checks separate:
 
 1. discovered source records end as eligible or an explicit record-level
    disposition;
-2. requested timestamp slots end as captured, unavailable, unsupported, or
-   errored;
-3. captured observations end as included or filtered, and included observations
-   end as plotted or explicitly coalesced.
+2. timestamp slots examined by a collector end as read, unavailable,
+   unsupported, or errored;
+3. readable values matching the query become selected observations or explicit
+   materialization errors;
+4. selected observations end as plotted or explicitly coalesced.
 
-Records, timestamp observations, and plotted events are different totals. For
-example, one commit with identical author and committer instants can produce two
-captured observations but one marker, with both roles preserved.
+Records examined, timestamp values read, selected observations, and plotted
+events are different totals. For example, one commit with identical author and
+committer instants can produce two selected observations but one marker, with
+both roles preserved. With `-t all`, the time scope itself has no boundary, so
+every otherwise selected available value enters result accounting.
 
-Internal streaming and batches do not define scope. Every record from one batch
-is fully accounted before the next batch is read, and the final conservation
-checks span the complete run. Crossing the chart sorter's in-memory threshold
-changes only temporary storage, not event order, clustering, totals, or
-coverage.
+Internal streaming, early exact selection, and batches do not define scope. A
+collector may avoid materializing a normalized observation after proving that
+its timestamp does not match the query. The final selected result must be the
+same as collecting all available values and applying the same scope afterward.
+Crossing the chart sorter's in-memory threshold changes only temporary storage,
+not event order, clustering, totals, or coverage.
 
 Sparse chart layout does not change this accounting. Empty wall-clock bands are
 omitted because they contain no selected markers, not because collection skipped
@@ -68,11 +84,26 @@ narrow for that representation, a cell switches to exact per-symbol `×N` counts
 very busy cells may make that same exact-count switch before rendering so their
 visual sequence cannot grow memory without bound. The underlying event,
 source/schedule, and coverage totals are unchanged.
-Chart band labels use minute-only `HH:MM` endpoints. The cluster window is at
-least one minute, preventing distinct clusters from receiving the same displayed
-minute. This display choice does not round or overwrite the normalized instant:
-exact seconds and available nanoseconds remain in provenance and exact
-outside-event listings.
+Chart band labels use minute-level `HH:MM` clock values. Event anchoring starts
+a half-open band at the earliest unassigned event; midnight anchoring uses fixed
+half-open local-clock intervals from `00:00` and clips a nondividing final band
+at `24:00`. Midnight windows must contain a whole number of minutes, keeping
+their displayed boundaries exact. Range versus start-only labels do not change
+those assignments. Automatic dense ranges expand to complete fixed bands. If
+an explicit display crop cuts an edge band, that partial edge retains an exact
+range label even in start-only mode rather than implying a complete window. The
+cluster window is at least one minute, preventing
+distinct clusters from receiving the same displayed start minute. An
+event-anchored label names the minute containing the exact observation or
+anchor; it does not round or overwrite the normalized instant. Exact seconds
+and available nanoseconds remain in provenance and exact outside-event
+listings.
+Empty bands do not affect evidence accounting. The terminal adds one `⋮`
+cue only when a compressed gap reaches the configured cluster window. In event
+anchoring that duration is measured between consecutive observed extents; in
+midnight anchoring it covers wholly omitted fixed intervals, so one missing
+fixed band always qualifies. Gap durations retain meaningful second components
+for second-based event windows.
 
 Rolling `-t` durations are fixed elapsed windows ending at one clock value
 captured at run start. Their start is inclusive and captured `now` is exclusive;
@@ -85,6 +116,12 @@ weeks, dates, or months.
 ### Git
 
 - Author and committer dates can differ, be manually assigned, and be rewritten.
+- For a bounded query, Workfold scans the requested author/committer roles and
+  selects them independently. It does not rely on ordinary `git --since` for
+  author dates because author timestamps are not ordered by commit topology.
+- Git file changes inherit their commit's selected timestamp roles. Workfold
+  therefore derives tree differences only for commits with at least one
+  matching role; this is an exact scope optimization, not a history shortcut.
 - File changes are derived from first-parent tree differences, not stored human
   actions; root commits are compared with an empty tree.
 - Annotated tags may have independent tagger dates; lightweight tags do not.
@@ -99,6 +136,11 @@ weeks, dates, or months.
 ### Filesystem
 
 - A scan sees only the current metadata snapshot, not earlier values.
+- A bounded filesystem query still discovers and stats every candidate needed
+  by the requested entry, ignore, and exclusion scope. Directory mtimes cannot
+  safely prove that descendants are out of range. Once a timestamp value is
+  known, Workfold can discard a non-matching value without building a normalized
+  observation for it.
 - Inside a Git worktree, the normal respect-ignore scan uses local Git plumbing
   only to inventory tracked and untracked path candidates. A successful current
   no-follow filesystem stat—not the Git index—determines whether an included

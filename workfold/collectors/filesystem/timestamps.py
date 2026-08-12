@@ -10,6 +10,8 @@ from workfold.collectors.filesystem.types import FilesystemObservationConsumer, 
 from workfold.collectors.filesystem_times import FilesystemTimestampAdapter
 from workfold.coverage import ExtractionDisposition
 from workfold.models import TimestampKind, TimestampObservation
+from workfold.provenance import observation_id
+from workfold.scope import ObservationScope
 
 
 def extract_entry(
@@ -21,6 +23,7 @@ def extract_entry(
     observations: list[TimestampObservation] | None,
     diagnostics: list[CollectorDiagnostic],
     observation_consumer: FilesystemObservationConsumer | None,
+    observation_scope: ObservationScope | None,
 ) -> None:
     """Extract every requested timestamp slot from one stat-successful entry."""
 
@@ -31,6 +34,14 @@ def extract_entry(
         if extraction.disposition is ExtractionDisposition.CAPTURED:
             if extraction.instant_utc_ns is None or extraction.raw_timestamp is None:
                 raise RuntimeError("captured timestamp extraction omitted its value")
+            accounting.extraction(item.root, kind, extraction.disposition)
+            if observation_scope is not None and not observation_scope.includes_timestamp(
+                instant_utc_ns=extraction.instant_utc_ns,
+                source=kind.source,
+            ):
+                continue
+            retained_id = observation_id(item.origin.record_id, kind.value) if observations is not None else None
+            accounting.match_scope(item.root, kind, retained_id)
             observation = TimestampObservation.create(
                 item.origin,
                 kind,
@@ -40,7 +51,6 @@ def extract_entry(
             captured.append(observation)
             if observations is not None:
                 observations.append(observation)
-            accounting.extraction(item.root, kind, extraction.disposition, observation.observation_id)
         else:
             accounting.extraction(item.root, kind, extraction.disposition)
             if extraction.disposition is ExtractionDisposition.ERROR:

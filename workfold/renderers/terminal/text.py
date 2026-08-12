@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from rich.text import Text
 
 from workfold.sanitization import display_width, pad_right, sanitize_terminal_text, truncate_end
@@ -81,6 +83,27 @@ def column_chunks(text: str, width: int) -> list[str]:
 
 def fit_plain(line: str, width: int) -> str:
     return truncate_end(line, width)
+
+
+def format_duration(value: timedelta) -> str:
+    """Format a positive fixed duration using compact ordered units."""
+
+    total_microseconds = value.days * 86_400_000_000 + value.seconds * 1_000_000 + value.microseconds
+    total_seconds, microseconds = divmod(total_microseconds, 1_000_000)
+    hours, remainder = divmod(total_seconds, 3_600)
+    minutes, seconds = divmod(remainder, 60)
+    parts: list[str] = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if seconds or microseconds or not parts:
+        if microseconds:
+            fraction = f"{microseconds:06d}".rstrip("0")
+            parts.append(f"{seconds}.{fraction}s")
+        else:
+            parts.append(f"{seconds}s")
+    return "".join(parts)
 
 
 def rich_text_chunks(value: Text, width: int) -> tuple[Text, ...]:

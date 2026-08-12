@@ -13,7 +13,6 @@ from workfold.aggregation.models import (
     MINUTES_PER_DAY,
     NANOSECONDS_PER_DAY,
     NANOSECONDS_PER_MINUTE,
-    NANOSECONDS_PER_SECOND,
     Aggregation,
     HiddenMarkers,
     freeze_counter,
@@ -21,6 +20,12 @@ from workfold.aggregation.models import (
 from workfold.aggregation.spill import DEFAULT_SPILL_THRESHOLD, ChartMarkerStore
 from workfold.identities import MarkerIdentity, marker_identity, marker_identity_sort_key
 from workfold.models import ClassifiedMarker, RecordKind, Source, Weekday
+from workfold.time_bands import (
+    ClusterAnchor,
+    duration_nanoseconds,
+    validate_cluster_anchor,
+    validate_cluster_window_alignment,
+)
 
 CLUSTER_MATERIALIZATION_THRESHOLD = 4_096
 
@@ -32,6 +37,7 @@ class AggregationBuilder:
         self,
         *,
         cluster_window: timedelta,
+        cluster_anchor: ClusterAnchor = ClusterAnchor.EVENT,
         schedule_bounds: tuple[int, int] | None = None,
         display_range: tuple[int, int] | None = None,
         outside_limit: int = 50,
@@ -43,6 +49,8 @@ class AggregationBuilder:
     ) -> None:
         self._cluster_window = cluster_window
         self._cluster_window_ns = _cluster_window_ns(cluster_window)
+        self._cluster_anchor = validate_cluster_anchor(cluster_anchor)
+        validate_cluster_window_alignment(self._cluster_window, self._cluster_anchor)
         _validate_schedule_bounds(schedule_bounds)
         _validate_display_range(display_range)
         if outside_limit < 0:
@@ -156,6 +164,8 @@ class AggregationBuilder:
             schedule_bounds=self._schedule_bounds,
             occupied_start_ns=min(occupied_starts) if occupied_starts else None,
             occupied_end_ns=max(occupied_ends) if occupied_ends else None,
+            cluster_window_ns=self._cluster_window_ns,
+            cluster_anchor=self._cluster_anchor,
         )
         identities, identity_remap = self._freeze_identities(visible_weekday_set)
         layout = cluster_ordered_markers(
@@ -165,6 +175,7 @@ class AggregationBuilder:
                 if marker.weekday in visible_weekday_set
             ),
             self._cluster_window_ns,
+            self._cluster_anchor,
             materialization_threshold=self._cluster_materialization_threshold,
         )
         retained_outside = tuple(item[2] for item in sorted(self._outside_heap, key=lambda item: (item[0], item[1])))
@@ -183,6 +194,7 @@ class AggregationBuilder:
         )
         aggregation = Aggregation(
             cluster_window=self._cluster_window,
+            cluster_anchor=self._cluster_anchor,
             display_start_minute=display_start,
             display_end_minute=display_end,
             display_is_explicit=self._display_range is not None,
@@ -271,6 +283,7 @@ def aggregate_markers(
     markers: Iterable[ClassifiedMarker],
     *,
     cluster_window: timedelta,
+    cluster_anchor: ClusterAnchor = ClusterAnchor.EVENT,
     schedule_bounds: tuple[int, int] | None = None,
     display_range: tuple[int, int] | None = None,
     outside_limit: int = 50,
@@ -280,15 +293,16 @@ def aggregate_markers(
 ) -> Aggregation:
     """Summarize markers and build globally aligned sparse time clusters.
 
-    Visible events are sorted by exact localized time of day. Each cluster is
-    anchored at the earliest unassigned event and contains the half-open range
-    ``[anchor, anchor + cluster_window)``. Cropping and weekday projection are
-    applied before clustering while summary counts continue to describe the
-    complete input.
+    Visible events are sorted by exact localized time of day. Event anchoring
+    starts each cluster at the earliest unassigned event; midnight anchoring
+    assigns events to fixed clock intervals. Both use half-open bands. Cropping
+    and weekday projection are applied before clustering while summary counts
+    continue to describe the complete input.
     """
 
     builder = AggregationBuilder(
         cluster_window=cluster_window,
+        cluster_anchor=cluster_anchor,
         schedule_bounds=schedule_bounds,
         display_range=display_range,
         outside_limit=outside_limit,
@@ -327,11 +341,7 @@ def _remap_marker_identity(marker: ChartMarker, remap: dict[int, int]) -> ChartM
 def _cluster_window_ns(cluster_window: object) -> int:
     if not isinstance(cluster_window, timedelta):
         raise TypeError("cluster_window must be a datetime.timedelta")
-    nanoseconds = (
-        cluster_window.days * 86_400 * NANOSECONDS_PER_SECOND
-        + cluster_window.seconds * NANOSECONDS_PER_SECOND
-        + cluster_window.microseconds * 1_000
-    )
+    nanoseconds = duration_nanoseconds(cluster_window)
     if not NANOSECONDS_PER_MINUTE <= nanoseconds < NANOSECONDS_PER_DAY:
         raise ValueError("cluster_window must be at least one minute and less than 24 hours")
     return nanoseconds
@@ -359,6 +369,8 @@ def _resolve_display_range(
     schedule_bounds: tuple[int, int] | None,
     occupied_start_ns: int | None,
     occupied_end_ns: int | None,
+    cluster_window_ns: int,
+    cluster_anchor: ClusterAnchor,
 ) -> tuple[int, int]:
     if display_range is not None:
         return display_range
@@ -380,6 +392,10 @@ def _resolve_display_range(
         end = min(MINUTES_PER_DAY, start + 60)
         if start == end:
             start = max(0, end - 60)
+    if cluster_anchor is ClusterAnchor.MIDNIGHT:
+        window_minutes = cluster_window_ns // NANOSECONDS_PER_MINUTE
+        start = start // window_minutes * window_minutes
+        end = min(MINUTES_PER_DAY, ((end + window_minutes - 1) // window_minutes) * window_minutes)
     return (start, end)
 
 

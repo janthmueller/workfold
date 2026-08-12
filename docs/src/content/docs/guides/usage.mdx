@@ -27,7 +27,8 @@ The default view selects:
 - Git commit records reachable through local branches plus a detached `HEAD`;
 - author timestamps from every recorded Git identity;
 - `Mo-Fr 08:00-16:30` as the working schedule;
-- a `1h` sparse cluster window.
+- a `1h` sparse cluster window anchored at events;
+- range labels for occupied time bands.
 
 `-m/--mode` selects `git`, `fs`, or `all` and defaults to `git`. It is
 independent from `-t/--time`: changing one never changes the other.
@@ -75,6 +76,9 @@ profile = "standard"
 timezone = "Europe/Berlin"
 hours = "Mo-Thu 08:00-16:30; Fr 08:00-14:00"
 cluster-window = "1h"
+cluster-anchor = "event"
+band-label = "range"
+show-empty-bands = false
 marker-style = "identity"
 grid = "vertical"
 hide-empty-days = ["weekend"]
@@ -111,9 +115,12 @@ higher-precedence mode selection can replace lower-layer settings from the
 collector it disables.
 
 Other configurable keys are `git-commits-from`, `include-ignored`,
-`display-hours`, `no-color`, `list-outside`, `limit`, `coverage`, `strict`, and
-`verbose`. Boolean values use TOML `true`/`false`. Positional paths and the
-configuration-control flags themselves are deliberately not configurable.
+`cluster-anchor`, `band-label`, `show-empty-bands`, `display-hours`, `no-color`,
+`list-outside`, `limit`, `coverage`, `strict`, and `verbose`. Boolean values use
+TOML `true`/`false`. Positional paths and the configuration-control flags
+themselves are deliberately not configurable.
+`--no-show-empty-bands` can temporarily override a configured
+`show-empty-bands = true` without disabling the rest of the configuration.
 Use `timezone = "local"` for the operating-system local zone and
 `display-hours = "auto"` for an automatic chart range; these values can also
 reset a global setting from a nearer layer. Omit `git-commits-from` for the
@@ -193,6 +200,7 @@ workfold . --timezone Europe/Berlin
 workfold . --hours 'Mo-Fr 08:00-16:30'
 workfold . --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
 workfold . --hours 'Mo-Fr 08:00-12:00,13:00-16:30'
+workfold . --hours all
 ```
 
 Schedule intervals are half-open: the start is inside and the end is outside.
@@ -201,35 +209,58 @@ three-letter English alias (`Mon`, `Thu`), case-insensitively. Output is
 normalized to the two-letter form.
 A weekday with no interval is entirely outside. Overnight intervals are not in
 the MVP; express the two sides as clauses on adjacent days.
+`all` is a compact seven-day `00:00-24:00` schedule: every selected event is
+inside working hours, including weekend events. It changes classification only;
+it does not select more dates, enable sources, or force empty chart rows.
 
-## Read and tune the sparse chart
+## Read and tune the chart
 
-The default chart uses anchored time clustering and renders only occupied bands
-in implicit `00:00`-toward-`24:00` order; it does not print empty boundary rows.
-Workfold sorts visible events by localized wall-clock time, uses the earliest
-unassigned event as an anchor, assigns every weekday's events in the half-open
-interval `[anchor, anchor + cluster-window)`, and repeats. The anchor never
-moves when a later event joins the band, and an event exactly on the end starts
-or joins the next band. All visible weekday columns share these bands, so rows
-remain comparable. A row label shows its first through last visible event, not
-the entire assignment window. Its endpoint labels use `HH:MM`. Because the
-minimum window is one minute, distinct clusters cannot receive the same
-minute-only label. Exact seconds and nanoseconds remain in normalized provenance
-and exact outside-event rows.
+By default, the chart renders only occupied bands in implicit
+`00:00`-toward-`24:00` order and compresses empty time. Workfold sorts visible
+events by localized wall-clock time and shares every band across all visible
+weekday columns.
+
+`--cluster-anchor event` is the default. It uses the earliest unassigned event
+as the next anchor, assigns events in `[anchor, anchor + cluster-window)`, and
+repeats. The anchor never moves when a later event joins the band.
+
+`--cluster-anchor midnight` uses fixed local-clock intervals starting at
+`00:00`. With `--cluster-window 1h`, the bands are `[00:00,01:00)`,
+`[01:00,02:00)`, and so on. An event exactly on an endpoint belongs to the next
+band. Its window must be a whole number of minutes so fixed `HH:MM` labels show
+their exact boundaries. If a custom window does not divide 24 hours evenly, the
+last interval is clipped at `24:00` and the next weekday starts from `00:00`
+again.
+
+`--band-label range` is independent from anchoring and remains the default.
+Event-anchored range labels show the first through last visible event, preserving
+the current compact extent view; midnight-anchored range labels show the fixed
+interval bounds. `--band-label start` prints only the band start and includes
+the compact `Time` heading. Endpoint labels use
+minute-level `HH:MM` text. An event-anchored label names the minute containing
+its exact observation or anchor; because the minimum window is one minute,
+distinct clusters cannot receive the same minute-only start label. Exact
+seconds and nanoseconds remain in normalized provenance and exact outside-event
+rows.
 
 `--cluster-window` accepts a duration from `1m` up to, but not including, 24
 hours. Components use
 `h`, `m`, and `s` in that order without repeating a unit. Whitespace is optional
 between complete components, but a spaced value must be quoted as one CLI
-argument. The default is `1h`; smaller values such as `1m30s` and `10m` are custom
-views:
+argument. Second components are available with event anchoring; midnight
+anchoring requires a whole-minute result. The default is `1h`; smaller values
+such as `1m30s` and `10m` are custom views:
 
 ```bash
-workfold . --cluster-window 1m30s
+workfold . --cluster-window 1m30s --cluster-anchor event
 workfold . --cluster-window 10m
 workfold . --cluster-window 1h
-workfold . --cluster-window 1h5m
+workfold . --cluster-window 1h5m --cluster-anchor midnight
 workfold . --cluster-window '1h 5m'
+workfold . --cluster-anchor event
+workfold . --cluster-anchor midnight --show-empty-bands
+workfold . --band-label range
+workfold . --band-label start
 ```
 
 Internal grid lines are optional:
@@ -280,9 +311,33 @@ inside-hours markers are filled, and outside-hours markers are hollow. Color
 adds green for inside-hours Git, blue for inside-hours filesystem, and red for
 outside-hours events. If a cell is too busy for individual symbols at the
 available width, exact tokens such as `●×12 ■×4 ○×2` replace only that
-cell; they are counts, not density estimates. Empty bands are always omitted,
-and a gap of at least one hour between consecutive observed cluster endpoints
-gets one dim duration cue.
+cell; they are counts, not density estimates. Empty bands are omitted by
+default. With event anchoring, a gap cue measures consecutive observed extents;
+with midnight anchoring, it measures wholly omitted fixed intervals. A gap of
+at least one configured cluster window gets one dim duration cue. Consequently,
+one omitted fixed band is enough under midnight anchoring, while a shorter
+event-to-event gap remains implicit under event anchoring. Second-based event
+windows retain seconds in a displayed gap duration even though clock labels use
+minute-level `HH:MM` text.
+
+Use `--show-empty-bands` to replace sparse gap compression with every fixed
+interval in the resolved display range:
+
+```bash
+workfold . --cluster-anchor midnight --show-empty-bands
+workfold . --cluster-anchor midnight --show-empty-bands --display-hours 06:30-20:15
+```
+
+The option requires midnight anchoring. Event-anchored bands begin at events,
+so an empty event-anchored band has no truthful anchor; combining the option
+with `--cluster-anchor event` is therefore a usage error rather than an ignored
+request. When an explicit display crop cuts through a fixed interval, the
+first or last displayed label is clipped to the requested boundary while event
+membership retains its original midnight-aligned half-open band. Automatic
+display ranges instead expand outward to complete fixed bands, so start-only
+labels always name their real midnight anchor. Under an explicit crop, a
+partial edge shows its exact range even with `--band-label start`. Dense mode
+does not print `⋮` cues, change event counts, or alter coverage.
 
 Use `--marker-style identity` when contributor recognition matters more than a
 single Git source symbol:
@@ -336,7 +391,8 @@ workfold . --hours 'Mo-Fr 08:00-16:30' --display-hours '06:00-22:00'
 A compact notice after the summary reports nonzero event counts hidden before or
 at/after an explicit half-open crop; zero-valued crop notices are omitted.
 Cropping happens before clustering and the requested bounds are not rounded, so
-a marker at the start is visible and one exactly at the end is hidden.
+a marker at the start is visible and one exactly at the end is hidden. Cropping
+does not realign midnight-anchored interval boundaries.
 
 ## Inspect Git evidence
 
@@ -369,10 +425,19 @@ Commit reachability has three explicit scopes:
   tags, stash, and custom refs; it never fetches and is the portable/full
   default.
 
-A commit is captured once by object ID even when several selected refs reach
-it. Date selection happens after reachability discovery. Consequently, a
-reachable commit can contribute an author event, a committer event, both, or
-neither in the selected period. Commits known only to an unfetched remote or no
+A commit is considered once by object ID even when several selected refs reach
+it. Reachability is established before timestamp-role selection. Each requested
+author or committer role is then matched independently, so a reachable commit
+can contribute its author event, committer event, both, or neither. For bounded
+queries Workfold may apply that exact predicate during its lightweight revision
+scan; known non-matching values are outside the query rather than reported as
+filtered coverage outcomes. Ordinary `git --since` is not used for author-date
+selection because author timestamps are not ordered by commit topology.
+
+File-change observations inherit the matching timestamp roles of their commit.
+Workfold derives commit-versus-parent tree differences only for commits with at
+least one matching role, producing the same result as deriving every reachable
+change and filtering afterward. Commits known only to an unfetched remote or no
 longer reachable from the selected refs are outside the commit scope. A full
 profile can still expose a local reflog timestamp referring to an otherwise
 unreachable commit, but that reflog observation is not converted into a commit
@@ -388,7 +453,7 @@ no flag, all recorded Git identities are included. Git identities are
 self-declared metadata, not verified people or accounts. In combined mode the
 filter does not affect filesystem observations.
 
-Filtering happens before plotting. Therefore, when identical author and
+Identity selection happens before plotting. Therefore, when identical author and
 committer instants could share one marker, only the matching role remains if
 their identities differ; both roles remain when both match. Lightweight tags
 have no independent tagger timestamp or tagger identity and therefore produce
@@ -520,11 +585,14 @@ status and verbose output.
 ## Control terminal detail
 
 ```bash
-workfold . --cluster-window 1m30s
+workfold . --cluster-window 1m30s --cluster-anchor event
 workfold . --cluster-window 10m
 workfold . --cluster-window 1h
-workfold . --cluster-window 1h5m
+workfold . --cluster-window 1h5m --cluster-anchor midnight
 workfold . --cluster-window '1h 5m'
+workfold . --band-label start
+workfold . --cluster-anchor midnight --show-empty-bands
+workfold . --hours all
 workfold . --marker-style identity
 workfold . --grid both
 workfold . --hide-empty-days all

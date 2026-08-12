@@ -33,6 +33,8 @@ from workfold.collectors.reflogs.parser import (
 )
 from workfold.collectors.reflogs.reader import decode_git_path, read_semantic_reflog
 from workfold.collectors.reflogs.spill import visit_semantic_reflog
+from workfold.models import Source
+from workfold.scope import ObservationScope
 
 _OID_RE: Final[re.Pattern[bytes]] = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _EPOCH_RE: Final[re.Pattern[bytes]] = re.compile(rb"-?[0-9]+\Z")
@@ -109,6 +111,7 @@ class GitReflogCollector:
         repositories: Sequence[GitRepository],
         *,
         entry_consumer: Callable[[tuple[CollectedGitReflog, ...]], None] | None = None,
+        observation_scope: ObservationScope | None = None,
         retain_entries: bool = True,
     ) -> GitReflogCollectionResult:
         """Collect reflogs independently of commit ref scope and identity filters."""
@@ -168,6 +171,7 @@ class GitReflogCollector:
                 discovered_ref_count += 1
                 raw_record_count = 0
                 captured_for_ref = 0
+                scope_matches_for_ref = 0
                 try:
                     path_output = self._runner.run(
                         (
@@ -180,12 +184,15 @@ class GitReflogCollector:
                     reflog_path = decode_git_path(path_output, repository=repository)
 
                     def consume_parsed(parsed_batch: tuple[ParsedReflogEntry, ...]) -> None:
-                        nonlocal captured_for_ref, captured_entry_count
+                        nonlocal captured_for_ref, captured_entry_count, scope_matches_for_ref
                         collected_batch = tuple(
                             CollectedGitReflog(repository=repository, entry=entry) for entry in parsed_batch
                         )
                         captured_for_ref += len(collected_batch)
                         captured_entry_count += len(collected_batch)
+                        scope_matches_for_ref += sum(
+                            _reflog_entry_matches_scope(entry, observation_scope) for entry in parsed_batch
+                        )
                         if retain_entries:
                             collected.extend(collected_batch)
                         if collected_batch and entry_consumer is not None:
@@ -256,7 +263,15 @@ class GitReflogCollector:
                             message="The reflog changed while Workfold read it; the captured snapshot may be partial",
                         )
                     )
-                available_statuses.append(ReflogRef(repository, ref_name, raw_record_count, captured_for_ref))
+                available_statuses.append(
+                    ReflogRef(
+                        repository,
+                        ref_name,
+                        raw_record_count,
+                        captured_for_ref,
+                        scope_matches_for_ref,
+                    )
+                )
             if not repository_failed:
                 successful += 1
 
@@ -273,6 +288,17 @@ class GitReflogCollector:
             parse_errors=parse_errors,
             records_retained=retain_entries,
         )
+
+
+def _reflog_entry_matches_scope(entry: ParsedReflogEntry, scope: ObservationScope | None) -> bool:
+    if scope is None:
+        return True
+    return scope.includes_timestamp(
+        instant_utc_ns=entry.epoch_nanoseconds,
+        source=Source.GIT,
+        actor_name=entry.actor_name,
+        actor_email=entry.actor_email,
+    )
 
 
 __all__ = [

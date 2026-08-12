@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,7 +16,6 @@ from workfold.coverage import (
     RecordCoverage,
     RecordCoverageKey,
     RecordDisposition,
-    SelectionDisposition,
     TimestampCoverageKey,
 )
 from workfold.models import RecordOrigin, TimestampObservation
@@ -24,7 +23,7 @@ from workfold.models import RecordOrigin, TimestampObservation
 
 @dataclass(frozen=True, slots=True)
 class TimestampExtractionCoverage:
-    """Extraction-only accounting retained until common selection completes."""
+    """Extraction and pre-normalization scope accounting for one timestamp kind."""
 
     key: TimestampCoverageKey
     requested: int
@@ -32,20 +31,30 @@ class TimestampExtractionCoverage:
     unavailable: int
     unsupported: int
     errors: int
-    observation_ids: tuple[str, ...]
-    observation_ids_complete: bool = True
+    scope_matches: int
+    scope_match_ids: tuple[str, ...]
+    scope_match_ids_complete: bool = True
 
     def __post_init__(self) -> None:
-        values = (self.requested, self.captured, self.unavailable, self.unsupported, self.errors)
+        values = (
+            self.requested,
+            self.captured,
+            self.unavailable,
+            self.unsupported,
+            self.errors,
+            self.scope_matches,
+        )
         if any(value < 0 for value in values):
             raise ValueError("filesystem extraction counts must be non-negative")
         if self.requested != self.captured + self.unavailable + self.unsupported + self.errors:
             raise ValueError("filesystem extraction accounting does not reconcile")
-        if self.observation_ids_complete and self.captured != len(self.observation_ids):
-            raise ValueError("captured count must match the retained observation identities")
-        if len(self.observation_ids) > self.captured:
-            raise ValueError("retained observation identities cannot exceed captured timestamps")
-        if len(set(self.observation_ids)) != len(self.observation_ids):
+        if self.scope_match_ids_complete and self.scope_matches != len(self.scope_match_ids):
+            raise ValueError("scope-match count must match the retained observation identities")
+        if len(self.scope_match_ids) > self.scope_matches:
+            raise ValueError("retained observation identities cannot exceed scope matches")
+        if self.scope_matches > self.captured:
+            raise ValueError("filesystem scope matches cannot exceed captured timestamps")
+        if len(set(self.scope_match_ids)) != len(self.scope_match_ids):
             raise ValueError("filesystem extraction accounting contains duplicate observations")
 
     def count(self, disposition: ExtractionDisposition) -> int:
@@ -61,7 +70,7 @@ class TimestampExtractionCoverage:
 
 @dataclass(frozen=True, slots=True)
 class FilesystemAccounting:
-    """Reconciled discovery/extraction counts before selection and plotting."""
+    """Reconciled discovery/extraction counts independent of result plotting."""
 
     records: tuple[RecordCoverage, ...]
     timestamps: tuple[TimestampExtractionCoverage, ...]
@@ -87,32 +96,27 @@ class FilesystemAccounting:
 
     def build_coverage(
         self,
-        selection_by_observation_id: Mapping[str, SelectionDisposition],
+        selected_observation_ids: Set[str],
         plotting_by_observation_id: Mapping[str, PlottingDisposition],
     ) -> CoverageLedger:
-        """Complete the ledger after common date selection and marker creation."""
+        """Complete the ledger after scope selection and marker creation."""
 
-        if any(not item.observation_ids_complete for item in self.timestamps):
+        if any(not item.scope_match_ids_complete for item in self.timestamps):
             raise ValueError("observation-ID coverage is unavailable for a non-retaining collection")
-        expected = {observation_id for item in self.timestamps for observation_id in item.observation_ids}
-        supplied = set(selection_by_observation_id)
-        if supplied != expected:
-            missing = len(expected - supplied)
-            extra = len(supplied - expected)
-            raise ValueError(
-                f"selection map must cover every captured filesystem observation (missing={missing}, extra={extra})"
-            )
-        included = {
-            observation_id
-            for observation_id, disposition in selection_by_observation_id.items()
-            if disposition is SelectionDisposition.INCLUDED
-        }
+        expected = {observation_id for item in self.timestamps for observation_id in item.scope_match_ids}
+        selected = set(selected_observation_ids)
+        unknown = selected - expected
+        if unknown:
+            raise ValueError(f"selected observation set contains {len(unknown)} unknown filesystem observations")
+        missing = expected - selected
+        if missing:
+            raise ValueError(f"selected observation set omits {len(missing)} matched filesystem observations")
         plotted = set(plotting_by_observation_id)
-        if plotted != included:
-            missing = len(included - plotted)
-            extra = len(plotted - included)
+        if plotted != selected:
+            missing = len(selected - plotted)
+            extra = len(plotted - selected)
             raise ValueError(
-                f"plotting map must cover every included filesystem observation (missing={missing}, extra={extra})"
+                f"plotting map must cover every selected filesystem observation (missing={missing}, extra={extra})"
             )
 
         builder = CoverageLedgerBuilder()
@@ -121,19 +125,19 @@ class FilesystemAccounting:
             for disposition in RecordDisposition:
                 builder.record_outcome(item.key, disposition, item.count(disposition))
         for item in self.timestamps:
-            builder.request_slot(item.key, item.requested)
+            builder.examine_slot(item.key, item.requested)
             for disposition in ExtractionDisposition:
                 builder.extraction_outcome(item.key, disposition, item.count(disposition))
-            for observation_id in item.observation_ids:
-                selection = selection_by_observation_id[observation_id]
-                builder.selection_outcome(item.key, selection)
-                if selection is SelectionDisposition.INCLUDED:
+            builder.match_scope(item.key, item.scope_matches)
+            for observation_id in item.scope_match_ids:
+                if observation_id in selected:
+                    builder.select_observation(item.key)
                     builder.plotting_outcome(item.key, plotting_by_observation_id[observation_id])
         return builder.build()
 
     def build_coverage_counts(
         self,
-        selection_counts: Mapping[tuple[TimestampCoverageKey, SelectionDisposition], int],
+        observation_counts: Mapping[TimestampCoverageKey, int],
         plotting_counts: Mapping[tuple[TimestampCoverageKey, PlottingDisposition], int],
     ) -> CoverageLedger:
         """Complete coverage from partition counts without retaining observation IDs."""
@@ -144,11 +148,11 @@ class FilesystemAccounting:
             for disposition in RecordDisposition:
                 builder.record_outcome(item.key, disposition, item.count(disposition))
         for item in self.timestamps:
-            builder.request_slot(item.key, item.requested)
+            builder.examine_slot(item.key, item.requested)
             for disposition in ExtractionDisposition:
                 builder.extraction_outcome(item.key, disposition, item.count(disposition))
-            for disposition in SelectionDisposition:
-                builder.selection_outcome(item.key, disposition, selection_counts.get((item.key, disposition), 0))
+            builder.match_scope(item.key, item.scope_matches)
+            builder.select_observation(item.key, observation_counts.get(item.key, 0))
             for disposition in PlottingDisposition:
                 builder.plotting_outcome(item.key, disposition, plotting_counts.get((item.key, disposition), 0))
         return builder.build()
@@ -196,14 +200,14 @@ class FilesystemCollectionResult:
 
     def build_coverage(
         self,
-        selection_by_observation_id: Mapping[str, SelectionDisposition],
+        selected_observation_ids: Set[str],
         plotting_by_observation_id: Mapping[str, PlottingDisposition],
     ) -> CoverageLedger:
-        return self.accounting.build_coverage(selection_by_observation_id, plotting_by_observation_id)
+        return self.accounting.build_coverage(selected_observation_ids, plotting_by_observation_id)
 
     def build_coverage_counts(
         self,
-        selection_counts: Mapping[tuple[TimestampCoverageKey, SelectionDisposition], int],
+        observation_counts: Mapping[TimestampCoverageKey, int],
         plotting_counts: Mapping[tuple[TimestampCoverageKey, PlottingDisposition], int],
     ) -> CoverageLedger:
-        return self.accounting.build_coverage_counts(selection_counts, plotting_counts)
+        return self.accounting.build_coverage_counts(observation_counts, plotting_counts)

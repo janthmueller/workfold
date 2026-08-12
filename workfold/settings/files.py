@@ -31,6 +31,8 @@ _STRING_KEYS = frozenset(
         "hours",
         "timezone",
         "cluster-window",
+        "cluster-anchor",
+        "band-label",
         "marker-style",
         "grid",
         "display-hours",
@@ -44,6 +46,7 @@ _BOOLEAN_KEYS = frozenset(
         "coverage",
         "strict",
         "verbose",
+        "show-empty-bands",
     }
 )
 _INTEGER_KEYS = frozenset({"limit"})
@@ -69,6 +72,8 @@ _CHOICES: dict[str, frozenset[str]] = {
     "git-commits-from": frozenset({"head", "local-branches", "all-refs"}),
     "fs-times": frozenset({"birth", "modified", "metadata-changed", "accessed"}),
     "fs-entries": frozenset({"file", "directory", "symlink"}),
+    "cluster-anchor": frozenset({"event", "midnight"}),
+    "band-label": frozenset({"range", "start"}),
     "marker-style": frozenset({"source", "identity"}),
     "grid": frozenset({"none", "vertical", "horizontal", "both"}),
 }

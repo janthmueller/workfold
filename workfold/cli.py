@@ -218,14 +218,41 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
     output_group.add_argument(
         "--hours",
         metavar="SCHEDULE",
-        help="working schedule (built-in default: Mo-Fr 08:00-16:30)",
+        help="working schedule (built-in default: Mo-Fr 08:00-16:30; all means every minute of all seven days)",
     )
     output_group.add_argument("--timezone", dest="timezone_name", metavar="IANA_ZONE", help="IANA zone or local")
     output_group.add_argument(
         "--cluster-window",
         default="1h",
         metavar="DURATION",
-        help="cluster nearby event times within DURATION (built-in default: 1h; examples: 1m30s, 10m, '1h 5m')",
+        help=(
+            "cluster nearby event times within DURATION and use it as the compressed-gap threshold "
+            "(built-in default: 1h; examples: 1m30s, 10m, '1h 5m')"
+        ),
+    )
+    output_group.add_argument(
+        "--cluster-anchor",
+        choices=("event", "midnight"),
+        default="event",
+        help=(
+            "anchor clusters at each first event (built-in default) or fixed intervals from local midnight; "
+            "midnight requires whole-minute windows"
+        ),
+    )
+    output_group.add_argument(
+        "--band-label",
+        choices=("range", "start"),
+        default="range",
+        help=(
+            "show each occupied row as an observed/fixed range (built-in default) or its starting minute; "
+            "explicitly clipped dense edges keep exact ranges"
+        ),
+    )
+    output_group.add_argument(
+        "--show-empty-bands",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="show every fixed band in the display range; requires --cluster-anchor midnight",
     )
     output_group.add_argument(
         "--marker-style",

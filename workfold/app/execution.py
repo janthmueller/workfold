@@ -22,6 +22,7 @@ from workfold.config import MarkerStyle, RawOptions
 from workfold.coverage import CoverageLedger
 from workfold.pipeline import ActivityClassifier
 from workfold.reports import Report, build_report
+from workfold.scope import ObservationScope
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +68,7 @@ def execute(
     )
     aggregation = AggregationBuilder(
         cluster_window=options.cluster_window,
+        cluster_anchor=options.cluster_anchor,
         schedule_bounds=schedule.bounds,
         display_range=display_range,
         outside_limit=options.limit if options.list_outside else 0,
@@ -74,9 +76,8 @@ def execute(
         hide_days=options.hide_days,
         hide_empty_days=options.hide_empty_days,
     )
+    observation_scope = ObservationScope(selected_range, options.git_identities)
     classifier = ActivityClassifier(
-        selected_range=selected_range,
-        identity_filters=options.git_identities,
         timezone_value=timezone_value,
         schedule=schedule,
         marker_consumer=aggregation.add,
@@ -85,6 +86,7 @@ def execute(
         collection = collect(
             options,
             observation_consumer=classifier.consume,
+            observation_scope=observation_scope,
             git_collector=git_collector,
             repository_resolver=repository_resolver,
             file_change_collector=file_change_collector,
@@ -99,7 +101,7 @@ def execute(
         ledger = build_coverage(
             collection,
             options,
-            selection=classifier.selection_counts,
+            observations=classifier.observation_counts,
             plotting=classifier.plotting_counts,
         )
         if ledger.markers_plotted != chart.event_count:

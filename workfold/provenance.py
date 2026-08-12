@@ -151,7 +151,7 @@ def absolute_filesystem_entry_id(
 
 
 def timestamp_slot_id(record_id: str, timestamp_kind: str) -> str:
-    """Identify a requested timestamp slot and its eventual observation."""
+    """Identify a requested timestamp slot and any selected observation."""
 
     role = _TIMESTAMP_ROLE_CODES.get(timestamp_kind)
     if role is None:

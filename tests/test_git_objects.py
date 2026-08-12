@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import pytest
-from workfold.collectors.git_objects import GitObjectParseError, parse_cat_file_batch, parse_commit_object
+from workfold.collectors.git_objects import (
+    GitObjectParseError,
+    RevListScanSpec,
+    inspect_rev_list_scan,
+    parse_cat_file_batch,
+    parse_commit_object,
+    parse_rev_list_metadata,
+)
 
 COMMIT_ID = "a" * 40
 TREE_ID = "b" * 40
@@ -28,6 +35,38 @@ def make_commit_data(
         + extra_headers
         + b"\n"
         + message
+    )
+
+
+def make_rev_list_metadata(
+    *,
+    object_id: bytes = COMMIT_ID.encode("ascii"),
+    tree_id: bytes = TREE_ID.encode("ascii"),
+    parents: bytes = PARENT_ID.encode("ascii"),
+    author_name: bytes = b"Ada Person",
+    author_email: bytes = b"ada@example.test",
+    author_timestamp: bytes = b"1704067200 +0530",
+    committer_name: bytes = b"Commit Bot",
+    committer_email: bytes = b"bot@example.test",
+    committer_timestamp: bytes = b"1704070800 -0230",
+    encoding: bytes = b"",
+    subject: bytes = b"A precise subject",
+) -> bytes:
+    return b"\0".join(
+        (
+            object_id,
+            tree_id,
+            parents,
+            author_name,
+            author_email,
+            author_timestamp,
+            committer_name,
+            committer_email,
+            committer_timestamp,
+            encoding,
+            subject,
+            b"\n",
+        )
     )
 
 
@@ -70,6 +109,96 @@ def test_parse_commit_honors_declared_message_encoding_without_losing_raw_bytes(
     assert parsed.subject == "Grüße"
     assert parsed.raw_subject == raw_subject
     assert parsed.declared_encoding == "ISO-8859-1"
+
+
+def test_parse_rev_list_metadata_preserves_requested_commit_provenance() -> None:
+    raw_subject = "Grüße".encode("iso-8859-1")
+
+    parsed = parse_rev_list_metadata(
+        make_rev_list_metadata(
+            author_name="Ada Üser".encode(),
+            encoding=b"ISO-8859-1",
+            subject=raw_subject,
+        )
+    )
+
+    assert parsed.object_id == COMMIT_ID
+    assert parsed.tree_id == TREE_ID
+    assert parsed.parent_ids == (PARENT_ID,)
+    assert parsed.author.identity.name == "Ada Üser"
+    assert parsed.author.identity.email == "ada@example.test"
+    assert parsed.author.raw_timestamp == "1704067200 +0530"
+    assert parsed.committer.raw_timestamp == "1704070800 -0230"
+    assert parsed.subject == "Grüße"
+    assert parsed.raw_subject == raw_subject
+    assert parsed.declared_encoding == "ISO-8859-1"
+
+
+def test_rev_list_scan_parses_only_requested_roles_and_optional_identities() -> None:
+    author_only = RevListScanSpec(("author",))
+    scanned = inspect_rev_list_scan(
+        b"a" * 40 + b"\0" + b"1704067200\0\n",
+        author_only,
+    )
+
+    assert scanned.object_id == COMMIT_ID
+    assert scanned.instant_utc_ns("author") == 1_704_067_200_000_000_000
+    with pytest.raises(ValueError, match="committer"):
+        scanned.instant_utc_ns("committer")
+    with pytest.raises(ValueError, match="identities"):
+        scanned.identity("author")
+
+    both_with_identities = RevListScanSpec(("author", "committer"), include_identities=True)
+    scanned_both = inspect_rev_list_scan(
+        b"a" * 40 + b"\0Ada\0ada@example.test\0" + b"1704067200\0Commit Bot\0bot@example.test\0" + b"1704070800\0\n",
+        both_with_identities,
+    )
+    assert scanned_both.identity("author") == ("Ada", "ada@example.test")
+    assert scanned_both.identity("committer") == ("Commit Bot", "bot@example.test")
+    assert scanned_both.instant_utc_ns("committer") == 1_704_070_800_000_000_000
+
+
+def test_rev_list_scan_spec_builds_minimal_machine_safe_formats() -> None:
+    assert RevListScanSpec(("author",)).pretty_format == "%H%x00%at%x00"
+    assert RevListScanSpec(("committer",)).pretty_format == "%H%x00%ct%x00"
+    assert RevListScanSpec(("author", "committer"), include_identities=True).pretty_format == (
+        "%H%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct%x00"
+    )
+
+    with pytest.raises(ValueError, match="at least one"):
+        RevListScanSpec(())
+    with pytest.raises(ValueError, match="unique"):
+        RevListScanSpec(("author", "author"))
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        b"",
+        b"a" * 40 + b"\0\n",
+        b"not-an-object\0" + b"1704067200\0\n",
+        b"a" * 40 + b"\0not-an-epoch\0\n",
+        b"a" * 40 + b"\0" + b"253402214400\0\n",
+    ],
+)
+def test_rev_list_scan_rejects_malformed_records(record: bytes) -> None:
+    with pytest.raises(GitObjectParseError):
+        inspect_rev_list_scan(record, RevListScanSpec(("author",)))
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        b"",
+        b"broken\n",
+        make_rev_list_metadata(object_id=b"not-an-object"),
+        make_rev_list_metadata(tree_id=b"not-a-tree"),
+        make_rev_list_metadata(author_timestamp=b"invalid +0000"),
+    ],
+)
+def test_rev_list_metadata_rejects_malformed_records(record: bytes) -> None:
+    with pytest.raises(GitObjectParseError):
+        parse_rev_list_metadata(record)
 
 
 @pytest.mark.parametrize(

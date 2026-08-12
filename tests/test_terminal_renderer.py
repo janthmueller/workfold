@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from workfold.aggregation import aggregate_markers
-from workfold.config import GridStyle, MarkerStyle
+from workfold.config import BandLabel, ClusterAnchor, GridStyle, MarkerStyle
 from workfold.models import (
     ActivityMarker,
     ClassifiedMarker,
@@ -84,6 +84,8 @@ def _report(
     *markers: ClassifiedMarker,
     outside_limit: int = 50,
     cluster_window: timedelta = timedelta(hours=1),
+    cluster_anchor: ClusterAnchor = ClusterAnchor.EVENT,
+    schedule_bounds: tuple[int, int] | None = None,
     display_range: tuple[int, int] | None = None,
     retain_git_identities: bool = False,
     hide_days: tuple[Weekday, ...] = (),
@@ -92,6 +94,8 @@ def _report(
     aggregation = aggregate_markers(
         markers,
         cluster_window=cluster_window,
+        cluster_anchor=cluster_anchor,
+        schedule_bounds=schedule_bounds,
         display_range=display_range,
         outside_limit=outside_limit,
         retain_git_identities=retain_git_identities,
@@ -399,6 +403,232 @@ def test_chart_omits_empty_rows_and_marks_large_compressed_gaps() -> None:
     assert "08:30" not in rendered and "09:00" not in rendered and "09:30" not in rendered
 
 
+def test_gap_cue_threshold_tracks_the_event_cluster_window() -> None:
+    below_threshold = _report(
+        _classified("anchor", 8, 0, source=Source.GIT, within_schedule=True),
+        _classified("last-in-band", 8, 8, source=Source.GIT, within_schedule=True),
+        _classified("next", 8, 17, source=Source.GIT, within_schedule=True),
+        cluster_window=timedelta(minutes=10),
+    )
+    at_threshold = _report(
+        _classified("anchor", 8, 0, source=Source.GIT, within_schedule=True),
+        _classified("last-in-band", 8, 8, source=Source.GIT, within_schedule=True),
+        _classified("next", 8, 18, source=Source.GIT, within_schedule=True),
+        cluster_window=timedelta(minutes=10),
+    )
+
+    below = render_terminal(below_threshold, options=TerminalOptions(width=80))
+    at = render_terminal(at_threshold, options=TerminalOptions(width=80))
+
+    assert "⋮" not in below
+    assert "⋮ 10m" in at
+
+
+def test_midnight_gap_cue_marks_one_omitted_fixed_band() -> None:
+    report = _report(
+        _classified("first", 8, 1, source=Source.GIT, within_schedule=True),
+        _classified("second", 8, 21, source=Source.GIT, within_schedule=True),
+        cluster_window=timedelta(minutes=10),
+        cluster_anchor=ClusterAnchor.MIDNIGHT,
+    )
+
+    rendered = render_terminal(report, options=TerminalOptions(width=80))
+
+    assert "08:00–08:10" in rendered
+    assert "08:20–08:30" in rendered
+    assert "⋮ 10m" in rendered
+
+
+def test_second_based_event_window_uses_an_exact_second_gap_cue() -> None:
+    report = _report(
+        _classified("first", 8, 0, source=Source.GIT, within_schedule=True),
+        _classified("second", 8, 1, second=30, source=Source.GIT, within_schedule=True),
+        cluster_window=timedelta(minutes=1, seconds=30),
+    )
+
+    rendered = render_terminal(report, options=TerminalOptions(width=80))
+
+    assert "⋮ 1m 30s" in rendered
+
+
+def test_subsecond_programmatic_window_preserves_fractional_gap_precision() -> None:
+    report = _report(
+        _classified("first", 8, 0, source=Source.GIT, within_schedule=True),
+        _classified(
+            "second",
+            8,
+            1,
+            second=30,
+            fractional_nanoseconds=500_000_000,
+            source=Source.GIT,
+            within_schedule=True,
+        ),
+        cluster_window=timedelta(minutes=1, seconds=30, microseconds=500_000),
+    )
+
+    rendered = render_terminal(report, options=TerminalOptions(width=80))
+
+    assert "⋮ 1m 30.5s" in rendered
+
+
+def test_second_gap_expands_the_time_column_for_horizontal_grid() -> None:
+    report = _report(
+        _classified("first", 8, 0, second=15, source=Source.GIT, within_schedule=True),
+        _classified("second", 10, 30, second=45, source=Source.GIT, within_schedule=True),
+    )
+
+    rendered = render_terminal(
+        report,
+        options=TerminalOptions(width=80, grid_style=GridStyle.BOTH),
+    )
+
+    assert "⋮ 2h 30m 30s" in rendered
+    assert all(display_width(line) <= 80 for line in rendered.splitlines())
+
+
+@pytest.mark.parametrize(
+    ("cluster_anchor", "band_label", "heading", "row_label"),
+    [
+        (ClusterAnchor.EVENT, BandLabel.RANGE, "Time band", "10:14–10:57"),
+        (ClusterAnchor.EVENT, BandLabel.START, "Time", "10:14"),
+        (ClusterAnchor.MIDNIGHT, BandLabel.RANGE, "Time band", "10:00–11:00"),
+        (ClusterAnchor.MIDNIGHT, BandLabel.START, "Time", "10:00"),
+    ],
+)
+def test_cluster_anchor_and_band_label_are_independent_rendering_controls(
+    cluster_anchor: ClusterAnchor,
+    band_label: BandLabel,
+    heading: str,
+    row_label: str,
+) -> None:
+    report = _report(
+        _classified("first", 10, 14, source=Source.GIT, within_schedule=True),
+        _classified("last", 10, 57, source=Source.GIT, within_schedule=True),
+        cluster_anchor=cluster_anchor,
+    )
+
+    rendered = render_terminal(report, options=TerminalOptions(width=80, band_label=band_label))
+
+    assert rendered.startswith(heading)
+    assert re.search(rf"^{re.escape(row_label)}(?:\s|│)", rendered, re.MULTILINE)
+
+
+def test_midnight_clusters_report_only_wholly_omitted_interval_time_as_a_gap() -> None:
+    report = _report(
+        _classified("first", 8, 59, source=Source.GIT, within_schedule=True),
+        _classified("second", 12, 1, source=Source.GIT, within_schedule=True),
+        cluster_anchor=ClusterAnchor.MIDNIGHT,
+    )
+
+    rendered = render_terminal(report, options=TerminalOptions(width=80))
+
+    assert "⋮ 3h" in rendered
+    assert "⋮ 3h 2m" not in rendered
+
+
+def test_show_empty_bands_expands_the_resolved_midnight_range() -> None:
+    report = _report(
+        _classified("first", 8, 5, source=Source.GIT, within_schedule=True),
+        _classified("second", 10, 5, source=Source.GIT, within_schedule=True),
+        cluster_anchor=ClusterAnchor.MIDNIGHT,
+        display_range=(8 * 60, 11 * 60),
+    )
+
+    rendered = render_terminal(
+        report,
+        options=TerminalOptions(width=80, show_empty_bands=True),
+    )
+
+    assert re.search(r"^08:00–09:00\s+\u25cf", rendered, re.MULTILINE)
+    assert re.search(r"^09:00–10:00\s*$", rendered, re.MULTILINE)
+    assert re.search(r"^10:00–11:00\s+\u25cf", rendered, re.MULTILINE)
+    assert "⋮" not in rendered
+
+
+def test_show_empty_bands_clips_edge_labels_to_an_explicit_display_crop() -> None:
+    report = _report(
+        _classified("event", 8, 45, source=Source.GIT, within_schedule=True),
+        cluster_anchor=ClusterAnchor.MIDNIGHT,
+        display_range=(8 * 60 + 30, 10 * 60 + 15),
+    )
+
+    rendered = render_terminal(
+        report,
+        options=TerminalOptions(width=80, show_empty_bands=True),
+    )
+
+    assert re.search(r"^08:30–09:00\s+\u25cf", rendered, re.MULTILINE)
+    assert re.search(r"^09:00–10:00\s*$", rendered, re.MULTILINE)
+    assert re.search(r"^10:00–10:15\s*$", rendered, re.MULTILINE)
+
+
+def test_dense_start_labels_use_exact_ranges_for_explicitly_clipped_edges() -> None:
+    report = _report(
+        _classified("event", 8, 45, source=Source.GIT, within_schedule=True),
+        cluster_anchor=ClusterAnchor.MIDNIGHT,
+        display_range=(8 * 60 + 30, 10 * 60 + 15),
+    )
+
+    rendered = render_terminal(
+        report,
+        options=TerminalOptions(
+            width=80,
+            band_label=BandLabel.START,
+            show_empty_bands=True,
+        ),
+    )
+
+    assert re.search(r"^08:30–09:00\s+\u25cf", rendered, re.MULTILINE)
+    assert re.search(r"^09:00\s*$", rendered, re.MULTILINE)
+    assert re.search(r"^10:00–10:15\s*$", rendered, re.MULTILINE)
+
+
+def test_dense_automatic_range_expands_to_complete_midnight_bands() -> None:
+    report = _report(
+        _classified("event", 8, 45, source=Source.GIT, within_schedule=True),
+        cluster_window=timedelta(hours=1, minutes=5),
+        cluster_anchor=ClusterAnchor.MIDNIGHT,
+        schedule_bounds=(8 * 60, 16 * 60 + 30),
+    )
+
+    rendered = render_terminal(
+        report,
+        options=TerminalOptions(
+            width=80,
+            band_label=BandLabel.START,
+            show_empty_bands=True,
+        ),
+    )
+
+    assert re.search(r"^07:35\s*$", rendered, re.MULTILINE)
+    assert re.search(r"^08:40\s+\u25cf", rendered, re.MULTILINE)
+    assert re.search(r"^16:15\s*$", rendered, re.MULTILINE)
+    assert not re.search(r"^08:00(?:\s|$)", rendered, re.MULTILINE)
+
+
+def test_show_empty_bands_still_renders_a_range_without_events() -> None:
+    report = _report(
+        cluster_anchor=ClusterAnchor.MIDNIGHT,
+        display_range=(8 * 60, 10 * 60),
+    )
+
+    rendered = render_terminal(
+        report,
+        options=TerminalOptions(width=80, show_empty_bands=True),
+    )
+
+    assert re.search(r"^08:00–09:00\s*$", rendered, re.MULTILINE)
+    assert re.search(r"^09:00–10:00\s*$", rendered, re.MULTILINE)
+    assert "No events in selected scope." not in rendered
+
+
+def test_show_empty_bands_rejects_event_anchored_reports() -> None:
+    report = _report(_classified("event", 8, 0, source=Source.GIT, within_schedule=True))
+
+    with pytest.raises(ValueError, match="requires midnight-anchored"):
+        render_terminal(report, options=TerminalOptions(width=80, show_empty_bands=True))
+
+
 @pytest.mark.parametrize(
     ("grid_style", "vertical", "horizontal"),
     [
@@ -425,6 +655,34 @@ def test_grid_styles_render_only_the_requested_internal_lines(
     assert any("─" in line for line in chart_lines) is horizontal
     assert any("┼" in line for line in chart_lines) is (vertical and horizontal)
     assert not chart_lines[0].startswith("│") and not chart_lines[0].endswith("│")
+    assert all(display_width(line) <= 80 for line in chart_lines)
+
+
+def test_dense_horizontal_grid_separates_bands_but_not_wrapped_event_lines() -> None:
+    markers = tuple(
+        _classified(f"busy-{index}", 8, 5, source=Source.GIT, within_schedule=True) for index in range(20)
+    ) + (_classified("later", 10, 5, source=Source.GIT, within_schedule=True),)
+    report = _report(
+        *markers,
+        cluster_anchor=ClusterAnchor.MIDNIGHT,
+        display_range=(8 * 60, 11 * 60),
+    )
+
+    rendered = render_terminal(
+        report,
+        options=TerminalOptions(
+            width=80,
+            grid_style=GridStyle.BOTH,
+            show_empty_bands=True,
+        ),
+    )
+    chart_lines = rendered.split("\n\n", maxsplit=1)[0].splitlines()
+    boundaries = [line for line in chart_lines if "┼" in line]
+
+    assert "↳" in rendered
+    assert len(boundaries) == 3  # Header plus one separator between each fixed band.
+    assert all(boundary.count("┼") == 7 for boundary in boundaries)
+    assert "⋮" not in rendered
     assert all(display_width(line) <= 80 for line in chart_lines)
 
 
@@ -725,8 +983,12 @@ def test_verbose_renderer_restores_operational_and_exact_scope_details() -> None
     assert "Period: 2026-W32 · UTC" in rendered
     assert "Schedule: Mo-Fr 08:00-16:30" in rendered
     assert f"Coverage: {COMPLETE_COVERAGE_STATUS}" in rendered
+    assert "Cluster anchor: event" in rendered
     assert "Cluster window: 1h" in rendered
-    assert "Compression: empty time omitted; busy cells use exact symbol×count" in rendered
+    assert "Band labels: range" in rendered
+    assert "Compression: empty time omitted; gaps of at least one cluster window" in rendered
+    assert "marked" in rendered
+    assert "busy cells use exact symbol×count" in rendered
     assert "Collector selectors: Git commits + filesystem metadata" in rendered
     assert "Git identities: all recorded identities" in rendered
     assert "Extents: whole Git repositories=/work/repository" in rendered
@@ -735,17 +997,33 @@ def test_verbose_renderer_restores_operational_and_exact_scope_details() -> None
     assert all(display_width(line) <= 80 for line in rendered.splitlines())
 
 
+def test_verbose_renderer_describes_dense_fixed_bands() -> None:
+    report = _report(
+        _classified("event", 8, 0, source=Source.GIT, within_schedule=True),
+        cluster_anchor=ClusterAnchor.MIDNIGHT,
+        display_range=(8 * 60, 10 * 60),
+    )
+
+    rendered = render_terminal(
+        report,
+        options=TerminalOptions(width=80, verbose=True, show_empty_bands=True),
+    )
+
+    assert "Compression: disabled; all fixed bands in the display range shown" in rendered
+    assert "empty time omitted" not in rendered
+
+
 def test_requested_coverage_details_remain_visible_without_verbose_configuration() -> None:
     report = _report()
     context = replace(
         report.context,
-        coverage_details=("timestamp slots requested: 4", "activity markers plotted: 2"),
+        coverage_details=("timestamp slots examined: 4", "activity markers plotted: 2"),
     )
 
     rendered = render_terminal(replace(report, context=context), options=TerminalOptions(width=80))
 
     assert "Coverage details:" in rendered
-    assert "timestamp slots requested: 4" in rendered
+    assert "timestamp slots examined: 4" in rendered
     assert "activity markers plotted: 2" in rendered
     assert COMPLETE_COVERAGE_STATUS not in rendered
     assert "Details\n" not in rendered
@@ -788,3 +1066,26 @@ def test_sanitization_and_width_helpers_keep_untrusted_text_single_line() -> Non
 def test_terminal_options_reject_too_narrow_layout() -> None:
     with pytest.raises(ValueError, match="at least 60"):
         TerminalOptions(width=59)
+
+
+def test_terminal_options_preserve_existing_positional_enum_arguments() -> None:
+    options = TerminalOptions(80, False, False, False, MarkerStyle.IDENTITY, GridStyle.BOTH)
+
+    assert options.marker_style is MarkerStyle.IDENTITY
+    assert options.grid_style is GridStyle.BOTH
+    assert options.band_label is BandLabel.RANGE
+    assert not options.show_empty_bands
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value", "message"),
+    [
+        ("marker_style", "identity", "marker_style"),
+        ("grid_style", "both", "grid_style"),
+        ("band_label", "start", "band_label"),
+        ("show_empty_bands", "yes", "show_empty_bands"),
+    ],
+)
+def test_terminal_options_reject_unresolved_enum_values(keyword: str, value: str, message: str) -> None:
+    with pytest.raises(TypeError, match=message):
+        TerminalOptions(**{keyword: value})  # type: ignore[arg-type]

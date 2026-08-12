@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from workfold.config import GridStyle, MarkerStyle
+from workfold.time_bands import BandLabel
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,10 +19,21 @@ class TerminalOptions:
     verbose: bool = False
     marker_style: MarkerStyle = MarkerStyle.SOURCE
     grid_style: GridStyle = GridStyle.NONE
+    band_label: BandLabel = BandLabel.RANGE
+    show_empty_bands: bool = False
 
     def __post_init__(self) -> None:
         if self.width < 60:
             raise ValueError("terminal width must be at least 60 columns")
+        _require_option_type(self.marker_style, MarkerStyle, "marker_style")
+        _require_option_type(self.grid_style, GridStyle, "grid_style")
+        _require_option_type(self.band_label, BandLabel, "band_label")
+        _require_option_type(self.show_empty_bands, bool, "show_empty_bands")
+
+
+def _require_option_type(value: object, expected: type[object], name: str) -> None:
+    if not isinstance(value, expected):
+        raise TypeError(f"{name} must be a {expected.__name__}")
 
 
 def terminal_color_enabled(

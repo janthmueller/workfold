@@ -16,6 +16,8 @@ from workfold.collectors.tags.models import (
 from workfold.collectors.tags.parser import GitTagParseError, parse_tag_refs
 from workfold.collectors.tags.reader import collect_tag_batch, command_diagnostic
 from workfold.iterables import batched
+from workfold.models import Source
+from workfold.scope import ObservationScope
 
 
 class GitTagCollector:
@@ -32,6 +34,7 @@ class GitTagCollector:
         repositories: Sequence[GitRepository],
         *,
         tag_consumer: Callable[[tuple[CollectedGitTag, ...]], None] | None = None,
+        observation_scope: ObservationScope | None = None,
         retain_tags: bool = True,
     ) -> GitTagCollectionResult:
         """Collect all local tag refs independently of commit reachability scope."""
@@ -49,6 +52,7 @@ class GitTagCollector:
             lightweight_for_repository = 0
             captured_timestamps_for_repository = 0
             unavailable_timestamps_for_repository = 0
+            scope_matches_for_repository = 0
             unavailable_objects_for_repository = 0
             parse_errors_for_repository = 0
             successful_for_repository = False
@@ -89,6 +93,9 @@ class GitTagCollector:
                         captured_tags_for_repository += outcome.captured_tags
                         captured_timestamps_for_repository += outcome.captured_timestamps
                         unavailable_timestamps_for_repository += outcome.unavailable_timestamps
+                        scope_matches_for_repository += sum(
+                            _tag_matches_scope(item, observation_scope) for item in outcome.collected
+                        )
                         unavailable_objects_for_repository += outcome.unavailable_objects
                         parse_errors_for_repository += outcome.parse_errors
                         repository_failed |= outcome.failed
@@ -112,6 +119,7 @@ class GitTagCollector:
                         lightweight_tags=lightweight_for_repository,
                         captured_tagger_timestamps=captured_timestamps_for_repository,
                         unavailable_tagger_timestamps=unavailable_timestamps_for_repository,
+                        scope_matches=scope_matches_for_repository,
                         unavailable_objects=unavailable_objects_for_repository,
                         parse_errors=parse_errors_for_repository,
                         operational_errors=operational_errors,
@@ -143,3 +151,16 @@ class GitTagCollector:
             repository_accounting=tuple(repository_accounting),
             records_retained=retain_tags,
         )
+
+
+def _tag_matches_scope(item: CollectedGitTag, scope: ObservationScope | None) -> bool:
+    if item.tagger is None:
+        return False
+    if scope is None:
+        return True
+    return scope.includes_timestamp(
+        instant_utc_ns=item.tagger.epoch_nanoseconds,
+        source=Source.GIT,
+        actor_name=item.tagger.identity.name,
+        actor_email=item.tagger.identity.email,
+    )

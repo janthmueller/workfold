@@ -59,7 +59,10 @@ class InstantRangeUnion:
     def contains(self, instant_utc_ns: int) -> bool:
         """Return whether any constituent range contains the instant."""
 
-        return any(item.contains(instant_utc_ns) for item in self.ranges)
+        for item in self.ranges:
+            if item.contains(instant_utc_ns):
+                return True
+        return False
 
     def __contains__(self, instant_utc_ns: object) -> bool:
         """Support ``instant in ranges`` without accepting non-integer values."""

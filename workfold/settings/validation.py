@@ -18,6 +18,7 @@ from workfold.config import (
 from workfold.models import Weekday
 from workfold.schedule import parse_schedule
 from workfold.settings.model import OriginKind, ResolvedSettings, SettingValue
+from workfold.time_bands import ClusterAnchor, validate_cluster_window_alignment
 from workfold.time_ranges import resolve_timezone
 
 
@@ -43,6 +44,7 @@ def validate_setting_values(resolution: ResolvedSettings) -> None:
         "cluster-window",
         lambda: parse_cluster_window(_string_value(values, "cluster-window")),
     )
+    _validate_cluster_settings(resolution)
     _validate(
         resolution,
         "display-hours",
@@ -71,6 +73,38 @@ def _validate(resolution: ResolvedSettings, key: str, operation: Callable[[], ob
         if isinstance(error, UsageError):
             raise
         raise UsageError(str(error)) from error
+
+
+def _validate_cluster_settings(resolution: ResolvedSettings) -> None:
+    window_text = _string_value(resolution.values, "cluster-window")
+    anchor_text = _string_value(resolution.values, "cluster-anchor")
+    cluster_window = parse_cluster_window(window_text)
+    cluster_anchor = ClusterAnchor(anchor_text)
+    show_empty_bands = _boolean_value(resolution.values, "show-empty-bands")
+
+    try:
+        validate_cluster_window_alignment(cluster_window, cluster_anchor)
+    except ValueError as error:
+        raise UsageError(
+            "--cluster-anchor midnight requires --cluster-window to use whole minutes "
+            "so fixed HH:MM band labels remain exact; effective settings: "
+            f"cluster-anchor={anchor_text} ({_format_origin(resolution, 'cluster-anchor')}); "
+            f"cluster-window={window_text} ({_format_origin(resolution, 'cluster-window')})"
+        ) from error
+
+    if show_empty_bands and cluster_anchor is not ClusterAnchor.MIDNIGHT:
+        raise UsageError(
+            "--show-empty-bands requires --cluster-anchor midnight; effective settings: "
+            f"show-empty-bands=true ({_format_origin(resolution, 'show-empty-bands')}); "
+            f"cluster-anchor={anchor_text} ({_format_origin(resolution, 'cluster-anchor')})"
+        )
+
+
+def _format_origin(resolution: ResolvedSettings, key: str) -> str:
+    origin = resolution.origins[key]
+    if origin.path is not None:
+        return f"{origin.label} {origin.path}"
+    return origin.label
 
 
 def _validate_nonempty(values: tuple[str, ...]) -> None:
@@ -128,6 +162,13 @@ def _optional_string(values: Mapping[str, SettingValue], key: str) -> str | None
     value = values[key]
     if value is not None and not isinstance(value, str):
         raise AssertionError(f"internal setting {key!r} is not an optional string")
+    return value
+
+
+def _boolean_value(values: Mapping[str, SettingValue], key: str) -> bool:
+    value = values[key]
+    if not isinstance(value, bool):
+        raise AssertionError(f"internal setting {key!r} is not a boolean")
     return value
 
 

@@ -17,6 +17,8 @@ from workfold.collectors.git_changes import (
     parse_diff_tree_name_status,
 )
 from workfold.models import GitChangeKind, RecordKind, TimestampKind
+from workfold.scope import ObservationScope
+from workfold.time_ranges import InstantRange, InstantRangeUnion
 
 from support.git_repo import GitRepo
 
@@ -122,6 +124,41 @@ def test_collects_root_modify_delete_and_rename_as_separate_records(tmp_path: Pa
     ]
     with pytest.raises(ValueError, match="support only"):
         rename_change.to_observation(TimestampKind.GIT_TAGGER)
+
+
+def test_file_change_scope_matches_are_counted_before_consumer_delivery(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "scope")
+    repo.commit(
+        "work.txt",
+        "one",
+        "scope",
+        author_date="1700000000 +0000",
+        committer_date="1700000100 +0000",
+        author_name="Selected Author",
+        author_email="selected@example.test",
+        committer_name="Other Committer",
+        committer_email="other@example.test",
+    )
+    commits = GitCollector().collect((repo.path,)).commits
+    scope = ObservationScope(
+        InstantRangeUnion((InstantRange(None, None),)),
+        ("selected@example",),
+    )
+
+    result = GitFileChangeCollector().collect(
+        commits,
+        change_consumer=lambda _batch: None,
+        timestamp_kinds=(TimestampKind.GIT_AUTHOR, TimestampKind.GIT_COMMITTER),
+        observation_scope=scope,
+        retain_changes=False,
+    )
+
+    assert result.changes == ()
+    (accounting,) = result.repository_accounting
+    assert accounting.timestamp_value_count(TimestampKind.GIT_AUTHOR) == 1
+    assert accounting.timestamp_value_count(TimestampKind.GIT_COMMITTER) == 1
+    assert accounting.scope_match_count(TimestampKind.GIT_AUTHOR) == 1
+    assert accounting.scope_match_count(TimestampKind.GIT_COMMITTER) == 0
 
 
 def test_merge_is_compared_only_against_its_first_parent(tmp_path: Path) -> None:
@@ -271,11 +308,17 @@ def test_repository_accounting_includes_empty_repositories_and_validates_partiti
         parse_errors=0,
         subprocess_errors=0,
         discovered_changes=2,
+        timestamp_kinds=(TimestampKind.GIT_AUTHOR,),
+        scope_matches=((TimestampKind.GIT_AUTHOR, 1),),
     )
     with pytest.raises(ValueError, match="non-negative"):
         replace(valid, subprocess_errors=-1)
     with pytest.raises(ValueError, match="does not reconcile"):
         replace(valid, parse_errors=1)
+    with pytest.raises(ValueError, match="exactly once"):
+        replace(valid, scope_matches=())
+    with pytest.raises(ValueError, match="within discovered"):
+        replace(valid, scope_matches=((TimestampKind.GIT_AUTHOR, 3),))
 
 
 def test_parser_validates_commit_boundaries_statuses_and_similarity() -> None:

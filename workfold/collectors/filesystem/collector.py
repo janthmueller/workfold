@@ -66,6 +66,7 @@ from workfold.coverage import (
 )
 from workfold.models import EntryType, Source, TimestampKind, TimestampObservation
 from workfold.provenance import lexical_absolute
+from workfold.scope import ObservationScope
 
 
 class FilesystemCollector:
@@ -97,10 +98,11 @@ class FilesystemCollector:
         exclusions: Sequence[str] = (),
         cwd: Path | None = None,
         observation_consumer: FilesystemObservationConsumer | None = None,
+        observation_scope: ObservationScope | None = None,
         retain_entries: bool = True,
         retain_observations: bool = True,
     ) -> FilesystemCollectionResult:
-        """Collect all requested metadata slots without applying date filters."""
+        """Extract requested metadata slots and emit those matching the scope."""
 
         if not paths:
             raise ValueError("filesystem collection needs at least one path")
@@ -120,7 +122,7 @@ class FilesystemCollector:
         entries: list[CollectedFilesystemEntry] | None = [] if retain_entries else None
         observations: list[TimestampObservation] | None = [] if retain_observations else None
         capabilities: list[Capability] = []
-        accounting = AccountingBuilder(retain_observation_ids=retain_observations)
+        accounting = AccountingBuilder(retain_scope_match_ids=retain_observations)
 
         queued_roots = [(item, excluder) for item in roots]
         scheduled_roots = {os.path.normcase(os.fspath(item.path)) for item in roots}
@@ -157,6 +159,7 @@ class FilesystemCollector:
                 capabilities=capabilities,
                 diagnostics=diagnostics,
                 observation_consumer=observation_consumer,
+                observation_scope=observation_scope,
                 nested_repository_consumer=queue_nested_repository,
             )
 
@@ -228,6 +231,7 @@ class FilesystemCollector:
         capabilities: list[Capability],
         diagnostics: list[CollectorDiagnostic],
         observation_consumer: FilesystemObservationConsumer | None,
+        observation_scope: ObservationScope | None,
         nested_repository_consumer: Callable[[RootSnapshot, ExplicitExcluder], None],
     ) -> None:
         root = root_snapshot.path
@@ -242,6 +246,7 @@ class FilesystemCollector:
                 observations=observations,
                 diagnostics=diagnostics,
                 observation_consumer=observation_consumer,
+                observation_scope=observation_scope,
             )
 
         if has_git_admin_ancestor(root) or (root_type is EntryType.DIRECTORY and looks_like_bare_repository(root)):

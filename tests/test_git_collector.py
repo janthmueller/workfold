@@ -17,6 +17,7 @@ from workfold.collectors.git import (
     GitRepositoryResolver,
     GitRunner,
     RefScope,
+    RevListScanSpec,
     parse_commit_ids,
     resolve_repository,
 )
@@ -154,12 +155,19 @@ def test_collector_resolves_whole_repository_and_preserves_raw_dates(tmp_path: P
     assert accounting.repository_root == repo.path.resolve()
     assert accounting.repository_identity == result.repositories[0].identity
     assert accounting.discovered_commit_ids == 1
-    assert accounting.captured_commits == accounting.eligible_commits == 1
+    assert accounting.examined_commits == 1
+    assert accounting.selected_commits == 1
+    assert accounting.hydrated_commits == accounting.eligible_commits == 1
     assert accounting.record_errors == 0
     assert accounting.operational_errors == 0
     assert accounting.successful
+    for role in ("author", "committer"):
+        assert accounting.timestamp_value_count(role) == 1
+        assert accounting.scope_match_count(role) == 1
+        assert accounting.materialized_scope_match_count(role) == 1
+        assert accounting.materialization_error_count(role) == 0
     with pytest.raises(FrozenInstanceError):
-        setattr(accounting, "captured_commits", 2)
+        setattr(accounting, "examined_commits", 2)
 
     origin = result.commits[0].to_origin()
     observations = tuple(
@@ -317,19 +325,49 @@ def test_commit_repository_accounting_rejects_invalid_partitions(tmp_path: Path)
     valid = GitCommitRepositoryAccounting(
         repository=repository,
         discovered_commit_ids=1,
-        captured_commits=1,
-        record_errors=0,
+        examined_commits=1,
+        selected_commits=1,
+        hydrated_commits=1,
         duplicate_commit_ids=0,
         unavailable_objects=0,
         parse_errors=0,
         operational_errors=0,
         successful=True,
+        timestamp_roles=("author",),
+        timestamp_values_read=(("author", 1),),
+        scope_matches=(("author", 1),),
+        materialized_scope_matches=(("author", 1),),
     )
 
     with pytest.raises(ValueError, match="non-negative"):
         replace(valid, parse_errors=-1)
-    with pytest.raises(ValueError, match="does not reconcile"):
-        replace(valid, record_errors=1)
+    with pytest.raises(ValueError, match="exceed reachable"):
+        replace(valid, examined_commits=2)
+    with pytest.raises(ValueError, match="exceed examined"):
+        replace(valid, selected_commits=2)
+    with pytest.raises(ValueError, match="exceed selected"):
+        replace(valid, hydrated_commits=2)
+    with pytest.raises(ValueError, match="cover the requested timestamp roles exactly once"):
+        replace(valid, timestamp_values_read=(("author", 1), ("author", 1)))
+    with pytest.raises(ValueError, match="scope matches exceed"):
+        replace(
+            valid,
+            timestamp_values_read=(("author", 1),),
+            scope_matches=(("author", 2),),
+        )
+    with pytest.raises(ValueError, match="materialized Git author scope matches exceed"):
+        replace(
+            valid,
+            timestamp_values_read=(("author", 1),),
+            scope_matches=(("author", 1),),
+            materialized_scope_matches=(("author", 2),),
+        )
+    with pytest.raises(ValueError, match="timestamp values must equal examined"):
+        replace(valid, timestamp_values_read=(("author", 2),))
+    with pytest.raises(ValueError, match="selected Git commits exceed matching"):
+        replace(valid, scope_matches=(("author", 0),), materialized_scope_matches=(("author", 0),))
+    with pytest.raises(ValueError, match="hydrated Git commits exceed materialized"):
+        replace(valid, materialized_scope_matches=(("author", 0),))
 
 
 def test_collector_ignores_git_replace_objects_to_preserve_object_provenance(tmp_path: Path) -> None:
@@ -539,7 +577,74 @@ def test_collector_never_adds_date_pruning_to_git_traversal(tmp_path: Path) -> N
 
     assert len(result.commits) == 1
     traversal = next(arguments for arguments in runner.arguments if arguments[0] == "rev-list")
-    assert traversal == ("rev-list", "--all")
+    assert traversal[1:4] == ("--no-commit-header", "--encoding=none", "--date=raw")
+    assert traversal[-1] == "--all"
+    assert sum(arguments[0] == "rev-list" for arguments in runner.arguments) == 1
+    assert not any(arguments[0] == "cat-file" for arguments in runner.arguments)
+    assert not any("since" in argument or "until" in argument for argument in traversal)
+
+
+def test_lightweight_commit_scan_hydrates_only_selected_objects(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    repo.commit(
+        "one.txt",
+        "one",
+        "filtered",
+        author_date="1700000000 +0000",
+        committer_date="1700000000 +0000",
+    )
+    selected_id = repo.commit(
+        "two.txt",
+        "two",
+        "selected",
+        author_date="1700000001 +0000",
+        committer_date="1700000001 +0000",
+    )
+
+    class RecordingRunner(GitRunner):
+        def __init__(self) -> None:
+            super().__init__(stream_output=False)
+            self.arguments: list[tuple[str, ...]] = []
+            self.cat_file_inputs: list[bytes | None] = []
+
+        def run(
+            self,
+            arguments: Sequence[str],
+            *,
+            cwd: Path,
+            input_data: bytes | None = None,
+            allowed_returncodes: Collection[int] = (0,),
+        ) -> subprocess.CompletedProcess[bytes]:
+            self.arguments.append(tuple(arguments))
+            if arguments[0] == "cat-file":
+                self.cat_file_inputs.append(input_data)
+            return super().run(
+                arguments,
+                cwd=cwd,
+                input_data=input_data,
+                allowed_returncodes=allowed_returncodes,
+            )
+
+    runner = RecordingRunner()
+    received: list[tuple[CollectedGitCommit, ...]] = []
+    result = GitCollector(runner).collect(
+        (repo.path,),
+        scan_spec=RevListScanSpec(("author",)),
+        commit_filter=lambda _repository, scanned: scanned.object_id == selected_id,
+        commit_consumer=received.append,
+        retain_commits=False,
+    )
+
+    assert result.discovered_commit_ids == 2
+    assert result.repository_accounting[0].examined_commits == 2
+    assert result.repository_accounting[0].selected_commits == 1
+    assert result.repository_accounting[0].hydrated_commits == 1
+    assert result.repository_accounting[0].timestamp_value_count("author") == 2
+    assert result.repository_accounting[0].scope_match_count("author") == 1
+    assert result.repository_accounting[0].materialized_scope_match_count("author") == 1
+    assert [item.commit.object_id for batch in received for item in batch] == [selected_id]
+    assert runner.cat_file_inputs == [f"{selected_id}\n".encode()]
+    traversal = next(arguments for arguments in runner.arguments if arguments[0] == "rev-list")
     assert not any("since" in argument or "until" in argument for argument in traversal)
 
 
@@ -632,14 +737,12 @@ def test_repository_resolution_validates_every_git_response(tmp_path: Path) -> N
     ("fault", "expected_code"),
     [
         ("discovery", "git_command_failed"),
-        ("cat-file-command", "git_command_failed"),
-        ("batch-envelope", "truncated_cat_file_batch"),
-        ("missing", "git_object_unavailable"),
-        ("wrong-type", "git_object_not_commit"),
-        ("malformed-commit", "invalid_commit_object"),
+        ("metadata-fields", "invalid_rev_list_record"),
+        ("metadata-object-id", "invalid_rev_list_record"),
+        ("metadata-commit", "invalid_git_timestamp"),
     ],
 )
-def test_collector_accounts_for_discovery_and_object_failures(
+def test_collector_accounts_for_discovery_and_metadata_failures(
     tmp_path: Path,
     fault: str,
     expected_code: str,
@@ -662,13 +765,82 @@ def test_collector_accounts_for_discovery_and_object_failures(
             input_data: bytes | None = None,
             allowed_returncodes: Collection[int] = (0,),
         ) -> subprocess.CompletedProcess[bytes]:
-            if fault == "discovery" and tuple(arguments) == ("rev-list", "--all"):
+            if fault == "discovery" and arguments[0] == "rev-list":
                 raise GitCommandError(
                     code="git_command_failed",
                     message="discovery failed",
                     command=tuple(arguments),
                     cwd=cwd,
                 )
+            completed = super().run(
+                arguments,
+                cwd=cwd,
+                input_data=input_data,
+                allowed_returncodes=allowed_returncodes,
+            )
+            if arguments[0] != "rev-list":
+                return completed
+            if fault == "metadata-fields":
+                output = b"broken\n"
+            elif fault == "metadata-object-id":
+                fields = completed.stdout.split(b"\0")
+                fields[0] = b"not-an-object"
+                output = b"\0".join(fields)
+            else:
+                fields = completed.stdout.split(b"\0")
+                fields[5] = b"invalid +0000"
+                output = b"\0".join(fields)
+            return subprocess.CompletedProcess(arguments, 0, stdout=output, stderr=b"")
+
+    result = GitCollector(FaultRunner(stream_output=False)).collect((repo.path,))
+
+    assert [item.code for item in result.diagnostics] == [expected_code]
+    assert not result.commits
+    (accounting,) = result.repository_accounting
+    assert accounting.discovered_commit_ids == (0 if fault == "discovery" else 1)
+    assert accounting.examined_commits == 0
+    assert accounting.selected_commits == 0
+    assert accounting.hydrated_commits == 0
+    assert accounting.record_errors == accounting.discovered_commit_ids
+    assert accounting.operational_errors == 1
+    assert accounting.successful is (fault != "discovery")
+    if fault != "discovery":
+        assert result.parse_errors == 1
+
+
+@pytest.mark.parametrize(
+    ("fault", "expected_code"),
+    [
+        ("cat-file-command", "git_command_failed"),
+        ("batch-envelope", "truncated_cat_file_batch"),
+        ("missing", "git_object_unavailable"),
+        ("wrong-type", "git_object_not_commit"),
+        ("malformed-commit", "invalid_commit_object"),
+    ],
+)
+def test_filtered_collector_accounts_for_selected_object_failures(
+    tmp_path: Path,
+    fault: str,
+    expected_code: str,
+) -> None:
+    repo = GitRepo.create(tmp_path / fault)
+    repo.commit(
+        "one.txt",
+        "one",
+        "one",
+        author_date="1700000000 +0000",
+        committer_date="1700000000 +0000",
+    )
+
+    class FaultRunner(GitRunner):
+        def run(
+            self,
+            arguments: Sequence[str],
+            *,
+            cwd: Path,
+            input_data: bytes | None = None,
+            allowed_returncodes: Collection[int] = (0,),
+        ) -> subprocess.CompletedProcess[bytes]:
             if arguments[0] != "cat-file":
                 return super().run(
                     arguments,
@@ -696,15 +868,26 @@ def test_collector_accounts_for_discovery_and_object_failures(
                 output = f"{object_id} commit {len(malformed)}\n".encode() + malformed + b"\n"
             return subprocess.CompletedProcess(arguments, 0, stdout=output, stderr=b"")
 
-    result = GitCollector(FaultRunner(stream_output=False)).collect((repo.path,))
+    result = GitCollector(FaultRunner(stream_output=False)).collect(
+        (repo.path,),
+        scan_spec=RevListScanSpec(("author",)),
+        commit_filter=lambda _repository, _commit: True,
+        retain_commits=False,
+    )
 
     assert [item.code for item in result.diagnostics] == [expected_code]
     assert not result.commits
     (accounting,) = result.repository_accounting
-    assert accounting.discovered_commit_ids == (0 if fault == "discovery" else 1)
-    assert accounting.captured_commits == 0
-    assert accounting.record_errors == accounting.discovered_commit_ids
+    assert accounting.discovered_commit_ids == 1
+    assert accounting.examined_commits == 1
+    assert accounting.selected_commits == 1
+    assert accounting.hydrated_commits == 0
+    assert accounting.record_errors == 1
     assert accounting.operational_errors == 1
+    assert accounting.timestamp_value_count("author") == 1
+    assert accounting.scope_match_count("author") == 1
+    assert accounting.materialized_scope_match_count("author") == 0
+    assert accounting.materialization_error_count("author") == 1
     assert accounting.successful is (fault in {"missing", "wrong-type", "malformed-commit"})
     if fault == "missing":
         assert result.unavailable_objects == 1

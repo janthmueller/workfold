@@ -97,6 +97,7 @@ def test_collects_all_available_namespaces_with_exact_raw_provenance(tmp_path: P
     assert result.successful_repositories == 1
     assert result.captured_entries == len(result.entries)
     assert result.unavailable_entries == 0
+    assert sum(item.scope_match_count for item in result.available_refs) == result.captured_entries
     available_names = {item.ref_name for item in result.available_refs}
     assert {
         "refs/custom/activity",

@@ -8,9 +8,11 @@ from typing import Final
 
 from workfold.collectors.git_core.repository import GitRepository
 from workfold.collectors.git_core.runner import GitCommandError, GitRunner
+from workfold.collectors.git_objects import RevListScanSpec
 from workfold.config import RefScope
 
 OID_TEXT_RE: Final[re.Pattern[str]] = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+COMMIT_METADATA_FORMAT: Final[str] = "%H%x00%T%x00%P%x00%an%x00%ae%x00%ad%x00%cn%x00%ce%x00%cd%x00%e%x00%s%x00"
 
 
 def parse_commit_ids(output: bytes, *, repository: GitRepository) -> tuple[tuple[str, ...], int]:
@@ -66,12 +68,63 @@ def iter_commit_ids_for_contexts(
     ask one representative context to traverse the union exactly once.
     """
 
+    revisions = _revision_arguments_for_contexts(repositories, runner, ref_scope)
+    if revisions is None:
+        return
+    yield from _iter_validated_commit_ids(repositories[0], runner, revisions)
+
+
+def iter_commit_metadata_for_contexts(
+    repositories: Sequence[GitRepository],
+    runner: GitRunner,
+    ref_scope: RefScope,
+) -> Iterator[bytes]:
+    """Stream machine-framed commit metadata through one Git traversal."""
+
+    revisions = _revision_arguments_for_contexts(repositories, runner, ref_scope)
+    if revisions is None:
+        return
+    command = (
+        revisions[0],
+        "--no-commit-header",
+        "--encoding=none",
+        "--date=raw",
+        f"--format={COMMIT_METADATA_FORMAT}",
+        *revisions[1:],
+    )
+    yield from runner.iter_stdout_lines(command, cwd=repositories[0].root)
+
+
+def iter_commit_scans_for_contexts(
+    repositories: Sequence[GitRepository],
+    runner: GitRunner,
+    ref_scope: RefScope,
+    spec: RevListScanSpec,
+) -> Iterator[bytes]:
+    """Stream only the fields required for bounded-range selection."""
+
+    revisions = _revision_arguments_for_contexts(repositories, runner, ref_scope)
+    if revisions is None:
+        return
+    command = (
+        revisions[0],
+        "--no-commit-header",
+        "--encoding=none",
+        f"--format={spec.pretty_format}",
+        *revisions[1:],
+    )
+    yield from runner.iter_stdout_lines(command, cwd=repositories[0].root)
+
+
+def _revision_arguments_for_contexts(
+    repositories: Sequence[GitRepository],
+    runner: GitRunner,
+    ref_scope: RefScope,
+) -> tuple[str, ...] | None:
     if not repositories:
-        return
-    repository = repositories[0]
+        return None
     if len(repositories) == 1 and ref_scope is RefScope.ALL_REFS:
-        yield from _iter_validated_commit_ids(repository, runner, ("rev-list", "--all"))
-        return
+        return ("rev-list", "--all")
 
     head_ids: list[str] = []
     seen_heads: set[str] = set()
@@ -92,7 +145,7 @@ def iter_commit_ids_for_contexts(
     if len(repositories) == 1:
         if ref_scope is RefScope.HEAD:
             if not head_ids:
-                return
+                return None
             revisions = ("rev-list", *head_ids)
         else:
             revisions = ("rev-list", "--branches", *head_ids)
@@ -103,9 +156,8 @@ def iter_commit_ids_for_contexts(
     elif head_ids:
         revisions = ("rev-list", *head_ids)
     else:
-        return
-
-    yield from _iter_validated_commit_ids(repository, runner, revisions)
+        return None
+    return revisions
 
 
 def _iter_validated_commit_ids(
@@ -146,5 +198,7 @@ __all__ = [
     "enumerate_commit_ids",
     "iter_commit_ids",
     "iter_commit_ids_for_contexts",
+    "iter_commit_metadata_for_contexts",
+    "iter_commit_scans_for_contexts",
     "parse_commit_ids",
 ]

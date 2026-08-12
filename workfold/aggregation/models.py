@@ -9,6 +9,12 @@ from typing import TypeVar
 
 from workfold.identities import MarkerIdentity
 from workfold.models import ClassifiedMarker, RecordKind, Source, Weekday
+from workfold.time_bands import (
+    ClusterAnchor,
+    duration_nanoseconds,
+    validate_cluster_anchor,
+    validate_cluster_window_alignment,
+)
 
 MINUTES_PER_DAY = 24 * 60
 NANOSECONDS_PER_SECOND = 1_000_000_000
@@ -64,20 +70,31 @@ class ClusterCell:
 
 @dataclass(frozen=True, slots=True)
 class TimeCluster:
-    """One globally aligned, anchored occupied wall-clock row.
+    """One globally shared occupied wall-clock band.
 
-    ``start_time_ns`` and ``end_time_ns`` are the first and last observed
-    local times, not an estimate of activity duration. The clustering window
-    itself is stored once on :class:`Aggregation`.
+    Band bounds are half-open assignment boundaries. Observed bounds retain
+    the first and last event times and never imply activity duration. The
+    observed bounds remain the first constructor fields for API compatibility;
+    omitted band bounds become the smallest half-open interval containing them.
     """
 
     start_time_ns: int
     end_time_ns: int
     cells: tuple[ClusterCell, ...]
+    band_start_time_ns: int = -1
+    band_end_time_ns: int = -1
 
     def __post_init__(self) -> None:
         if not 0 <= self.start_time_ns <= self.end_time_ns < NANOSECONDS_PER_DAY:
-            raise ValueError("cluster times must form a non-empty range within one day")
+            raise ValueError("observed cluster times must form a range within one day")
+        if self.band_start_time_ns == -1:
+            object.__setattr__(self, "band_start_time_ns", self.start_time_ns)
+        if self.band_end_time_ns == -1:
+            object.__setattr__(self, "band_end_time_ns", self.end_time_ns + 1)
+        if not 0 <= self.band_start_time_ns < self.band_end_time_ns <= NANOSECONDS_PER_DAY:
+            raise ValueError("cluster band must form a non-empty half-open interval within one day")
+        if not (self.band_start_time_ns <= self.start_time_ns <= self.end_time_ns < self.band_end_time_ns):
+            raise ValueError("observed cluster times must fall inside the cluster band")
         if not self.cells:
             raise ValueError("a time cluster must contain at least one occupied cell")
         weekdays = tuple(cell.weekday for cell in self.cells)
@@ -89,6 +106,18 @@ class TimeCluster:
         """Return the number of individually renderable events in this row."""
 
         return sum(cell.event_count for cell in self.cells)
+
+    @property
+    def observed_start_time_ns(self) -> int:
+        """Return the first observed time."""
+
+        return self.start_time_ns
+
+    @property
+    def observed_end_time_ns(self) -> int:
+        """Return the last observed time."""
+
+        return self.end_time_ns
 
     def cell(self, weekday: Weekday) -> ClusterCell | None:
         """Return the occupied cell for *weekday*, if one exists."""
@@ -136,8 +165,13 @@ class Aggregation:
     hidden_after: HiddenMarkers
     retained_outside_markers: tuple[ClassifiedMarker, ...]
     outside_marker_count: int
+    cluster_anchor: ClusterAnchor = ClusterAnchor.EVENT
 
     def __post_init__(self) -> None:
+        cluster_anchor = validate_cluster_anchor(self.cluster_anchor)
+        _validate_cluster_window(self.cluster_window, cluster_anchor)
+        _validate_display_bounds(self.display_start_minute, self.display_end_minute)
+        _validate_bool(self.display_is_explicit, "display_is_explicit")
         if self.visible_weekdays != tuple(sorted(set(self.visible_weekdays))):
             raise ValueError("visible weekdays must be unique and ordered")
         if any(count < 1 for _weekday, count in self.hidden_weekday_counts):
@@ -211,6 +245,27 @@ class Aggregation:
         """Return the displayed marker count for one compact identity ID."""
 
         return next((count for candidate, count in self.identity_counts if candidate == identity_id), 0)
+
+
+def _validate_cluster_window(value: object, cluster_anchor: ClusterAnchor) -> None:
+    if not isinstance(value, timedelta):
+        raise TypeError("cluster_window must be a datetime.timedelta")
+    window_ns = duration_nanoseconds(value)
+    if not NANOSECONDS_PER_MINUTE <= window_ns < NANOSECONDS_PER_DAY:
+        raise ValueError("cluster_window must be at least one minute and less than 24 hours")
+    validate_cluster_window_alignment(value, cluster_anchor)
+
+
+def _validate_display_bounds(start: object, end: object) -> None:
+    if not isinstance(start, int) or isinstance(start, bool) or not isinstance(end, int) or isinstance(end, bool):
+        raise TypeError("display bounds must be integer minutes")
+    if not 0 <= start < end <= MINUTES_PER_DAY:
+        raise ValueError("display bounds must be within 00:00-24:00 and non-empty")
+
+
+def _validate_bool(value: object, name: str) -> None:
+    if not isinstance(value, bool):
+        raise TypeError(f"{name} must be a bool")
 
 
 def freeze_counter(counter: dict[_CountKey, int]) -> tuple[tuple[_CountKey, int], ...]:

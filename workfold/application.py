@@ -69,6 +69,8 @@ def run(
         ),
         list_outside=options.list_outside,
         verbose=options.verbose,
+        band_label=options.band_label,
+        show_empty_bands=options.show_empty_bands,
         marker_style=options.marker_style,
         grid_style=options.grid_style,
     )

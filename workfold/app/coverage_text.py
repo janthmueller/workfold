@@ -84,7 +84,7 @@ def coverage_status_label(
         label = COMPLETE_COVERAGE_STATUS
     qualifiers: list[str] = []
     if options.git_identities:
-        qualifiers.append("Git timestamps explicitly filtered by identity")
+        qualifiers.append("Git identity scope active")
     if options.exclusions:
         qualifiers.append("explicit exclusions active")
     pruned_ignored_subtrees = (
@@ -145,9 +145,10 @@ def coverage_details(
     """Render verbose coverage accounting without coupling it to a renderer."""
 
     details: list[str] = [
-        f"timestamp slots requested: {ledger.slots_requested:,}",
-        f"timestamp observations captured: {ledger.observations_captured:,}",
-        f"timestamp observations included: {ledger.observations_included:,}",
+        f"timestamp slots examined: {ledger.slots_examined:,}",
+        f"timestamp values read: {ledger.timestamp_values_read:,}",
+        f"timestamp values matching scope: {ledger.timestamp_values_matching_scope:,}",
+        f"timestamp observations selected: {ledger.observations_selected:,}",
         f"activity markers plotted: {ledger.markers_plotted:,}",
         *_coverage_scope_details(options),
     ]
@@ -188,31 +189,31 @@ def coverage_details(
     for item in ledger.timestamps:
         counts = timestamp_counts.setdefault(item.key.timestamp_kind, Counter())
         counts.update(
-            requested=item.requested,
-            captured=item.captured,
-            included=item.included,
+            examined=item.examined,
+            values_read=item.values_read,
+            scope_matches=item.scope_matches,
+            materialization_errors=item.materialization_errors,
+            selected=item.selected,
             markers=item.markers,
             unavailable=item.unavailable,
             unsupported=item.unsupported,
             errors=item.extraction_errors,
-            outside_date=item.outside_date,
-            identity_filtered=item.identity_filtered,
             coalesced=item.coalesced_into_markers,
         )
     for kind in sorted(timestamp_counts, key=lambda item: item.value):
         counts = timestamp_counts[kind]
-        line = f"{_timestamp_label(kind)} captured: {counts['captured']:,}"
+        line = f"{_timestamp_label(kind)} selected: {counts['selected']:,}"
         extras = [
             f"{name.replace('_', ' ')}={counts[name]:,}"
             for name in (
-                "requested",
-                "included",
+                "examined",
+                "values_read",
+                "scope_matches",
+                "materialization_errors",
                 "markers",
                 "unavailable",
                 "unsupported",
                 "errors",
-                "outside_date",
-                "identity_filtered",
                 "coalesced",
             )
             if counts[name]
@@ -225,20 +226,25 @@ def coverage_details(
         and not options.git_mode.includes_commit_markers
     ):
         commit_result = collection.commit_result
-        captured_commits = sum(item.captured_commits for item in commit_result.repository_accounting)
+        examined_commits = sum(item.examined_commits for item in commit_result.repository_accounting)
+        selected_commits = sum(item.selected_commits for item in commit_result.repository_accounting)
+        hydrated_commits = sum(item.hydrated_commits for item in commit_result.repository_accounting)
         if not commit_result.repository_accounting:
-            captured_commits = len(commit_result.commits)
+            examined_commits = selected_commits = hydrated_commits = len(commit_result.commits)
         details.append(
             "Git commit inputs for file-change derivation: "
-            f"discovered={commit_result.discovered_commit_ids:,}, "
-            f"parsed={captured_commits:,}, "
-            f"record errors={commit_result.discovered_commit_ids - captured_commits:,}"
+            f"reachable={commit_result.discovered_commit_ids:,}, "
+            f"examined={examined_commits:,}, selected={selected_commits:,}, "
+            f"hydrated={hydrated_commits:,}, "
+            f"record errors={sum(item.record_errors for item in commit_result.repository_accounting):,}"
         )
         for accounting in commit_result.repository_accounting:
             details.append(
                 f"target Git commit inputs [git] {accounting.repository.root}: "
-                f"discovered={accounting.discovered_commit_ids:,}, "
-                f"parsed={accounting.captured_commits:,}, "
+                f"reachable={accounting.discovered_commit_ids:,}, "
+                f"examined={accounting.examined_commits:,}, "
+                f"selected={accounting.selected_commits:,}, "
+                f"hydrated={accounting.hydrated_commits:,}, "
                 f"unavailable={accounting.unavailable_objects:,}, "
                 f"parse failures={accounting.parse_errors:,}, "
                 f"operational errors={accounting.operational_errors:,}"
@@ -276,10 +282,10 @@ def coverage_details(
         )
     for item in ledger.timestamps:
         outcomes = (
-            f"requested={item.requested:,}, captured={item.captured:,}, "
+            f"examined={item.examined:,}, values read={item.values_read:,}, "
             f"unavailable={item.unavailable:,}, unsupported={item.unsupported:,}, "
-            f"errors={item.extraction_errors:,}, included={item.included:,}, "
-            f"outside date={item.outside_date:,}, identity filtered={item.identity_filtered:,}, "
+            f"errors={item.extraction_errors:,}, scope matches={item.scope_matches:,}, "
+            f"materialization errors={item.materialization_errors:,}, selected={item.selected:,}, "
             f"markers={item.markers:,}, coalesced={item.coalesced_into_markers:,}"
         )
         details.append(

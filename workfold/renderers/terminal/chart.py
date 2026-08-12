@@ -1,4 +1,4 @@
-"""Sparse weekly terminal chart and conditional legend."""
+"""Weekly terminal chart with sparse/dense time-band presentation."""
 
 from __future__ import annotations
 
@@ -7,7 +7,14 @@ from collections.abc import Iterable
 
 from rich.text import Text
 
-from workfold.aggregation import NANOSECONDS_PER_MINUTE, NANOSECONDS_PER_SECOND, ClusterCell, MarkerRun, TimeCluster
+from workfold.aggregation import (
+    NANOSECONDS_PER_DAY,
+    NANOSECONDS_PER_SECOND,
+    Aggregation,
+    ClusterCell,
+    MarkerRun,
+    TimeCluster,
+)
 from workfold.config import MarkerStyle
 from workfold.models import Source, Weekday
 from workfold.renderers.terminal.identity import (
@@ -19,9 +26,9 @@ from workfold.renderers.terminal.options import TerminalOptions
 from workfold.renderers.terminal.text import center, column_chunks, rich_text_chunks
 from workfold.reports import Report
 from workfold.sanitization import display_width, pad_right, sanitize_terminal_text
+from workfold.time_bands import BandLabel, ClusterAnchor, duration_nanoseconds
 
 WEEKDAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-GAP_THRESHOLD_NS = 60 * NANOSECONDS_PER_MINUTE
 MAX_LITERAL_EVENT_LINES = 3
 GRID_STYLE = "dim"
 EVENT_VISUALS: dict[tuple[Source, bool], tuple[str, str]] = {
@@ -34,10 +41,13 @@ EVENT_VISUALS: dict[tuple[Source, bool], tuple[str, str]] = {
 
 def render_chart(report: Report, options: TerminalOptions) -> Iterable[Text]:
     aggregation = report.aggregation
-    time_width, day_width = chart_layout(report, options.width)
+    if options.show_empty_bands and aggregation.cluster_anchor is not ClusterAnchor.MIDNIGHT:
+        raise ValueError("show_empty_bands requires midnight-anchored clusters")
+    time_width, day_width = chart_layout(report, options)
     identity_symbols = _identity_symbols(report, options)
+    gap_threshold_ns = duration_nanoseconds(aggregation.cluster_window)
 
-    header = Text(pad_right("Time band", time_width), style="bold")
+    header = Text(pad_right(_time_heading(options), time_width), style="bold")
     for weekday in aggregation.visible_weekdays:
         _append_column_separator(header, options)
         header.append(center(WEEKDAY_LABELS[int(weekday)], day_width), style="bold")
@@ -50,10 +60,22 @@ def render_chart(report: Report, options: TerminalOptions) -> Iterable[Text]:
             options=options,
         )
 
+    if not aggregation.visible_weekdays:
+        yield Text("No occupied days.", style="dim")
+        return
+
+    if options.show_empty_bands:
+        yield from _dense_band_lines(
+            aggregation,
+            time_width=time_width,
+            day_width=day_width,
+            options=options,
+            identity_symbols=identity_symbols,
+        )
+        return
+
     if not aggregation.clusters:
-        if not aggregation.visible_weekdays:
-            message = "No occupied days."
-        elif aggregation.event_count:
+        if aggregation.event_count:
             message = "No events in the displayed weekday/time range."
         else:
             message = "No events in selected scope."
@@ -63,9 +85,8 @@ def render_chart(report: Report, options: TerminalOptions) -> Iterable[Text]:
     previous: TimeCluster | None = None
     for cluster in aggregation.clusters:
         if previous is not None:
-            gap_ns = cluster.start_time_ns - previous.end_time_ns
+            gap_label = _gap_cue_label(previous, cluster, aggregation.cluster_anchor, gap_threshold_ns)
             if options.grid_style.has_horizontal_lines:
-                gap_label = f"⋮ {_format_ns_duration(gap_ns)}" if gap_ns >= GAP_THRESHOLD_NS else None
                 yield _horizontal_rule(
                     time_width=time_width,
                     day_width=day_width,
@@ -73,9 +94,9 @@ def render_chart(report: Report, options: TerminalOptions) -> Iterable[Text]:
                     options=options,
                     label=gap_label,
                 )
-            elif gap_ns >= GAP_THRESHOLD_NS:
+            elif gap_label is not None:
                 yield _gap_line(
-                    f"⋮ {_format_ns_duration(gap_ns)}",
+                    gap_label,
                     time_width=time_width,
                     day_width=day_width,
                     day_count=len(aggregation.visible_weekdays),
@@ -83,7 +104,7 @@ def render_chart(report: Report, options: TerminalOptions) -> Iterable[Text]:
                 )
         yield from _cluster_lines(
             cluster,
-            label=_cluster_label(cluster),
+            label=_cluster_label(cluster, aggregation.cluster_anchor, options.band_label),
             time_width=time_width,
             day_width=day_width,
             options=options,
@@ -91,6 +112,83 @@ def render_chart(report: Report, options: TerminalOptions) -> Iterable[Text]:
             weekdays=aggregation.visible_weekdays,
         )
         previous = cluster
+
+
+def _dense_band_lines(
+    aggregation: Aggregation,
+    *,
+    time_width: int,
+    day_width: int,
+    options: TerminalOptions,
+    identity_symbols: tuple[IdentitySymbol, ...],
+) -> Iterable[Text]:
+    previous_row = False
+    for band_start_ns, band_end_ns, cluster, is_clipped in _dense_band_rows(aggregation):
+        if previous_row and options.grid_style.has_horizontal_lines:
+            yield _horizontal_rule(
+                time_width=time_width,
+                day_width=day_width,
+                day_count=len(aggregation.visible_weekdays),
+                options=options,
+            )
+        label_style = BandLabel.RANGE if is_clipped else options.band_label
+        label = _fixed_band_label(band_start_ns, band_end_ns, label_style)
+        if cluster is None:
+            yield _empty_band_line(
+                label,
+                time_width=time_width,
+                day_width=day_width,
+                options=options,
+                day_count=len(aggregation.visible_weekdays),
+            )
+        else:
+            yield from _cluster_lines(
+                cluster,
+                label=label,
+                time_width=time_width,
+                day_width=day_width,
+                options=options,
+                identity_symbols=identity_symbols,
+                weekdays=aggregation.visible_weekdays,
+            )
+        previous_row = True
+
+
+def _dense_band_rows(aggregation: Aggregation) -> Iterable[tuple[int, int, TimeCluster | None, bool]]:
+    window_ns = duration_nanoseconds(aggregation.cluster_window)
+    display_start_ns = aggregation.display_start_minute * 60 * NANOSECONDS_PER_SECOND
+    display_end_ns = aggregation.display_end_minute * 60 * NANOSECONDS_PER_SECOND
+    band_start_ns = display_start_ns // window_ns * window_ns
+    clusters = iter(aggregation.clusters)
+    current = next(clusters, None)
+
+    while band_start_ns < display_end_ns:
+        band_end_ns = min(band_start_ns + window_ns, NANOSECONDS_PER_DAY)
+        cluster = None
+        if current is not None and current.band_start_time_ns == band_start_ns:
+            cluster = current
+            current = next(clusters, None)
+        visible_start_ns = max(band_start_ns, display_start_ns)
+        visible_end_ns = min(band_end_ns, display_end_ns)
+        if visible_start_ns < visible_end_ns:
+            is_clipped = visible_start_ns != band_start_ns or visible_end_ns != band_end_ns
+            yield visible_start_ns, visible_end_ns, cluster, is_clipped
+        band_start_ns = band_end_ns
+
+
+def _empty_band_line(
+    label: str,
+    *,
+    time_width: int,
+    day_width: int,
+    day_count: int,
+    options: TerminalOptions,
+) -> Text:
+    line = Text(pad_right(label, time_width), style="dim")
+    for _day_index in range(day_count):
+        _append_column_separator(line, options)
+        line.append(" " * day_width)
+    return line
 
 
 def render_legend(report: Report, options: TerminalOptions) -> tuple[Text, ...]:
@@ -130,7 +228,7 @@ def render_legend(report: Report, options: TerminalOptions) -> tuple[Text, ...]:
             )
         )
 
-    _time_width, day_width = chart_layout(report, width)
+    _time_width, day_width = chart_layout(report, options)
     if any(
         not _literal_cell_fits(cell, day_width, options, identity_symbols)
         for cluster in aggregation.clusters
@@ -144,12 +242,35 @@ def render_legend(report: Report, options: TerminalOptions) -> tuple[Text, ...]:
     return tuple(lines)
 
 
-def chart_layout(report: Report, width: int) -> tuple[int, int]:
-    label_width = 11 if report.aggregation.has_multi_minute_cluster else 5
-    time_width = max(label_width, display_width("Time band"))
+def chart_layout(report: Report, options: TerminalOptions) -> tuple[int, int]:
+    aggregation = report.aggregation
+    if options.band_label is BandLabel.START:
+        label_width = 11 if _dense_edges_are_clipped(aggregation, options) else 5
+    elif aggregation.cluster_anchor is ClusterAnchor.MIDNIGHT or aggregation.has_multi_minute_cluster:
+        label_width = 11
+    else:
+        label_width = 5
+    time_width = max(
+        label_width,
+        display_width(_time_heading(options)),
+        0 if options.show_empty_bands else _maximum_gap_label_width(aggregation),
+    )
     day_count = len(report.aggregation.visible_weekdays)
-    day_width = max(3, (width - time_width - day_count) // day_count) if day_count else 0
+    day_width = max(3, (options.width - time_width - day_count) // day_count) if day_count else 0
     return time_width, day_width
+
+
+def _dense_edges_are_clipped(aggregation: Aggregation, options: TerminalOptions) -> bool:
+    if not options.show_empty_bands or not aggregation.display_is_explicit:
+        return False
+    window_ns = duration_nanoseconds(aggregation.cluster_window)
+    display_start_ns = aggregation.display_start_minute * 60 * NANOSECONDS_PER_SECOND
+    display_end_ns = aggregation.display_end_minute * 60 * NANOSECONDS_PER_SECOND
+    return bool(display_start_ns % window_ns or (display_end_ns != NANOSECONDS_PER_DAY and display_end_ns % window_ns))
+
+
+def _time_heading(options: TerminalOptions) -> str:
+    return "Time" if options.band_label is BandLabel.START else "Time band"
 
 
 def _source_legend_item(source: Source, *, within_schedule: bool) -> Text:
@@ -424,10 +545,52 @@ def _identity_legend_item(
     return item
 
 
-def _cluster_label(cluster: TimeCluster) -> str:
-    start = _format_time_ns(cluster.start_time_ns)
-    end = _format_time_ns(cluster.end_time_ns)
+def _cluster_label(cluster: TimeCluster, anchor: ClusterAnchor, label: BandLabel) -> str:
+    start = _format_time_ns(cluster.band_start_time_ns)
+    if label is BandLabel.START:
+        return start
+    if anchor is ClusterAnchor.MIDNIGHT:
+        return f"{start}–{_format_time_ns(cluster.band_end_time_ns)}"
+    start = _format_time_ns(cluster.observed_start_time_ns)
+    end = _format_time_ns(cluster.observed_end_time_ns)
     return start if start == end else f"{start}–{end}"
+
+
+def _fixed_band_label(start_time_ns: int, end_time_ns: int, label: BandLabel) -> str:
+    start = _format_time_ns(start_time_ns)
+    return start if label is BandLabel.START else f"{start}–{_format_time_ns(end_time_ns)}"
+
+
+def _cluster_gap_ns(previous: TimeCluster, current: TimeCluster, anchor: ClusterAnchor) -> int:
+    if anchor is ClusterAnchor.MIDNIGHT:
+        return current.band_start_time_ns - previous.band_end_time_ns
+    return current.observed_start_time_ns - previous.observed_end_time_ns
+
+
+def _gap_cue_label(
+    previous: TimeCluster,
+    current: TimeCluster,
+    anchor: ClusterAnchor,
+    threshold_ns: int,
+) -> str | None:
+    gap_ns = _cluster_gap_ns(previous, current, anchor)
+    # Normal CLI windows have whole-second precision. Preserve the compact cue
+    # unless a programmatic window makes subsecond precision semantically relevant.
+    show_fraction = bool(threshold_ns % NANOSECONDS_PER_SECOND)
+    return f"⋮ {_format_ns_duration(gap_ns, show_fraction=show_fraction)}" if gap_ns >= threshold_ns else None
+
+
+def _maximum_gap_label_width(aggregation: Aggregation) -> int:
+    threshold_ns = duration_nanoseconds(aggregation.cluster_window)
+    maximum = 0
+    previous: TimeCluster | None = None
+    for cluster in aggregation.clusters:
+        if previous is not None:
+            label = _gap_cue_label(previous, cluster, aggregation.cluster_anchor, threshold_ns)
+            if label is not None:
+                maximum = max(maximum, display_width(label))
+        previous = cluster
+    return maximum
 
 
 def _format_time_ns(time_ns: int) -> str:
@@ -437,8 +600,8 @@ def _format_time_ns(time_ns: int) -> str:
     return f"{hour:02d}:{minute:02d}"
 
 
-def _format_ns_duration(value_ns: int) -> str:
-    total_seconds = value_ns // NANOSECONDS_PER_SECOND
+def _format_ns_duration(value_ns: int, *, show_fraction: bool = False) -> str:
+    total_seconds, fractional_ns = divmod(value_ns, NANOSECONDS_PER_SECOND)
     hours, remainder = divmod(total_seconds, 3_600)
     minutes, seconds = divmod(remainder, 60)
     parts: list[str] = []
@@ -446,6 +609,9 @@ def _format_ns_duration(value_ns: int) -> str:
         parts.append(f"{hours}h")
     if minutes:
         parts.append(f"{minutes}m")
-    if not parts and seconds:
+    if fractional_ns and show_fraction:
+        fractional = f"{fractional_ns:09d}".rstrip("0")
+        parts.append(f"{seconds}.{fractional}s")
+    elif seconds:
         parts.append(f"{seconds}s")
     return " ".join(parts) or "0s"

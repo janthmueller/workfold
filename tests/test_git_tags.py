@@ -68,6 +68,7 @@ def test_collects_annotated_alias_and_lightweight_tags_with_honest_slots(tmp_pat
     assert accounting.record_errors == 0
     assert accounting.captured_tagger_timestamps == 2
     assert accounting.unavailable_tagger_timestamps == 1
+    assert accounting.scope_matches == 2
     assert accounting.operational_errors == 0
     assert accounting.successful
     with pytest.raises(FrozenInstanceError):
@@ -251,6 +252,7 @@ def test_tag_repository_accounting_rejects_invalid_partitions(tmp_path: Path) ->
         lightweight_tags=1,
         captured_tagger_timestamps=1,
         unavailable_tagger_timestamps=1,
+        scope_matches=1,
         unavailable_objects=0,
         parse_errors=0,
         operational_errors=0,
@@ -265,6 +267,8 @@ def test_tag_repository_accounting_rejects_invalid_partitions(tmp_path: Path) ->
         replace(valid, annotated_tags=2)
     with pytest.raises(ValueError, match="timestamp accounting"):
         replace(valid, captured_tagger_timestamps=0)
+    with pytest.raises(ValueError, match="scope matches exceed"):
+        replace(valid, scope_matches=2)
 
 
 def test_tag_parsers_reject_malformed_records_and_preserve_raw_signature() -> None:
