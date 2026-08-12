@@ -467,7 +467,7 @@ def test_git_identity_filter_does_not_filter_filesystem_observations(tmp_path: P
             "--time",
             "all",
             "--mode",
-            "all",
+            "both",
             "--fs-times",
             "modified",
             "--git-identity",

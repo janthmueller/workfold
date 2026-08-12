@@ -127,6 +127,16 @@ def test_explicit_this_week_matches_the_implicit_default() -> None:
     assert explicit.all_dates == implicit.all_dates
 
 
+def test_color_flags_enable_or_disable_the_automatic_color_policy() -> None:
+    automatic = parse_options([])
+    enabled = parse_options(["--color"])
+    disabled = parse_options(["--no-color"])
+
+    assert not automatic.no_color
+    assert not enabled.no_color
+    assert disabled.no_color
+
+
 def test_repeated_iso_weeks_form_the_only_supported_selector_union() -> None:
     options = parse_options(["-t", "2026-W30", "--time", "2026-W31", "-t", "2026-W30"])
 
@@ -309,9 +319,9 @@ def test_unconditional_day_hiding_must_leave_one_column(arguments: list[str]) ->
         parse_options(arguments)
 
 
-def test_mode_selects_collectors_without_changing_collection_depth() -> None:
+def test_mode_selects_collectors_without_changing_evidence_preset() -> None:
     filesystem = parse_options(["--mode", "fs"])
-    combined = parse_options(["-m", "all"])
+    combined = parse_options(["-m", "both"])
 
     assert filesystem.source is SourceMode.FILESYSTEM
     assert filesystem.profile is CollectionProfile.STANDARD
@@ -340,7 +350,7 @@ def test_full_git_broadens_only_git_and_preserves_explicit_time() -> None:
     assert not options.coverage
 
 
-@pytest.mark.parametrize("mode", ["fs", "all"])
+@pytest.mark.parametrize("mode", ["fs", "both"])
 def test_full_filesystem_scope_includes_all_metadata_entries_and_ignored(mode: str) -> None:
     options = parse_options(["--mode", mode, "--profile", "full"])
 
@@ -372,7 +382,7 @@ def test_portable_is_the_locked_git_object_backed_preset() -> None:
     assert not options.coverage
 
 
-@pytest.mark.parametrize("mode", ["fs", "all"])
+@pytest.mark.parametrize("mode", ["fs", "both"])
 def test_portable_rejects_non_git_modes(mode: str) -> None:
     with pytest.raises(UsageError, match="only with --mode git"):
         parse_options(["--mode", mode, "--profile", "portable"])

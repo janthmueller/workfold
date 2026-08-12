@@ -546,7 +546,7 @@ def _explicit(values: UnresolvedOptions, name: str) -> bool:
 
 
 def resolve_options(values: UnresolvedOptions) -> RawOptions:
-    """Validate typed setting values and expand collection profiles."""
+    """Validate typed setting values and expand evidence presets."""
     weeks, from_date, to_date, all_dates, rolling_duration = parse_time_selectors(values.time_selectors)
     modes = values.modes
     if len(modes) > 1:
@@ -559,7 +559,7 @@ def resolve_options(values: UnresolvedOptions) -> RawOptions:
     source = {
         "git": SourceMode.GIT,
         "fs": SourceMode.FILESYSTEM,
-        "all": SourceMode.BOTH,
+        "both": SourceMode.BOTH,
     }[mode]
 
     if profile is CollectionProfile.PORTABLE and source is not SourceMode.GIT:

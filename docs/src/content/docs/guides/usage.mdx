@@ -23,14 +23,14 @@ repository are deduplicated. If the selected path is not in a repository, use
 The default view selects:
 
 - the current ISO week in the resolved local timezone;
-- the `standard` evidence profile;
+- the `standard` evidence preset;
 - Git commit records reachable through local branches plus a detached `HEAD`;
 - author timestamps from every recorded Git identity;
 - `Mo-Fr 08:00-16:30` as the working schedule;
 - a `1h` sparse cluster window anchored at events;
 - range labels for occupied time bands.
 
-`-m/--mode` selects `git`, `fs`, or `all` and defaults to `git`. It is
+`-m/--mode` selects `git`, `fs`, or `both` and defaults to `git`. It is
 independent from `-t/--time`: changing one never changes the other.
 
 Git collection invokes the local `git` executable and never fetches or contacts
@@ -97,7 +97,7 @@ Repeatable and comma-separated CLI selections use TOML arrays. `time` also
 accepts one string for its common single-selector form:
 
 ```toml
-mode = "all"
+mode = "both"
 time = ["2026-W30", "2026-W31"]
 git-records = ["commit", "tag"]
 git-commit-times = ["author", "committer"]
@@ -110,7 +110,7 @@ hide-empty-days = ["weekend"]
 ```
 
 Git-only and filesystem-only scope keys must agree with the effective `mode`;
-use `mode = "all"` when configuring both families in one default view. A
+use `mode = "both"` when configuring both families in one default view. A
 higher-precedence mode selection can replace lower-layer settings from the
 collector it disables.
 
@@ -119,6 +119,8 @@ Other configurable keys are `git-commits-from`, `include-ignored`,
 `list-outside`, `limit`, `coverage`, `strict`, and `verbose`. Boolean values use
 TOML `true`/`false`. Positional paths and the configuration-control flags
 themselves are deliberately not configurable.
+`no-color = false` restores the same automatic terminal detection used by
+default; neither it nor `--color` overrides `NO_COLOR` or terminal detection.
 `--no-show-empty-bands` can temporarily override a configured
 `show-empty-bands = true` without disabling the rest of the configuration.
 Use `timezone = "local"` for the operating-system local zone and
@@ -475,7 +477,7 @@ workfold . -m fs --fs-times birth,modified
 workfold . -m fs --fs-times metadata-changed,accessed
 workfold . -m fs --fs-entries file,directory
 workfold . -m fs -p full
-workfold . -m all
+workfold . -m both
 ```
 
 Timestamp labels are deliberately precise:
@@ -506,18 +508,19 @@ subtree it prunes and states that descendant directories were not enumerated.
 Use `--include-ignored` or the full profile when those entries and their
 timestamps should be included.
 
-## Choose an evidence profile
+## Choose an evidence preset
 
 ```bash
 workfold . -p standard
 workfold . -t all -m git -p portable
-workfold . -t all -m all -p full
+workfold . -t all -m both -p full
 workfold . -t 2026-W31 -m fs -p full
 ```
 
-`-p/--profile` defaults to `standard`, which uses the ordinary granular
-evidence selectors and their defaults. Each profile answers a different
-question about the available evidence.
+`-p/--profile` selects an evidence preset and defaults to `standard`, which uses
+the ordinary granular evidence selectors and their defaults. Presets answer
+different questions about the available evidence; they are not merely levels
+of collection depth.
 
 ### Standard: What does the ordinary activity pattern look like?
 
@@ -577,7 +580,7 @@ portable rather than more transferable. It changes collection scope only and
 does not enable the detailed coverage ledger automatically.
 
 Profiles never change the selected time or mode: `full` does not imply
-`-t all` or `-m all`. Portable and full reject granular selectors that would
+`-t all` or `-m both`. Portable and full reject granular selectors that would
 redefine them. `--git-identity` and, when filesystem mode is enabled, repeatable
 `--exclude` may still narrow them. Such narrowing remains visible in coverage
 status and verbose output.
@@ -597,6 +600,7 @@ workfold . --marker-style identity
 workfold . --grid both
 workfold . --hide-empty-days all
 workfold . --hide-days weekend
+workfold . --color
 workfold . --no-color
 NO_COLOR=1 workfold .
 workfold . --list-outside --limit 50
@@ -604,6 +608,11 @@ workfold . --coverage
 workfold . --strict
 workfold . --verbose
 ```
+
+Color is automatic by default and is emitted only for a capable terminal.
+`NO_COLOR` and `--no-color` disable it. `--color` restores automatic color when
+a configuration file sets `no-color = true`; it still respects `NO_COLOR`,
+terminal capability detection, and output redirection.
 
 With the default source markers, every output keeps circle/square for
 Git/filesystem and filled/hollow for inside/outside hours. In identity-marker

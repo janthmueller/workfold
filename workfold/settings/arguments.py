@@ -185,7 +185,7 @@ def _suppress_shadowed_settings(
         irrelevant = {
             "git": ("fs-times", "fs-entries", "include-ignored", "exclude"),
             "fs": ("git-records", "git-commit-times", "git-commits-from", "git-identity"),
-            "all": (),
+            "both": (),
         }[modes[0]]
         _reset_lower_precedence(
             values,

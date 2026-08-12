@@ -129,7 +129,7 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
         "--mode",
         dest="modes",
         action="append",
-        choices=("git", "fs", "all"),
+        choices=("git", "fs", "both"),
         default=[],
         help="evidence collector mode (built-in default: git)",
     )
@@ -141,7 +141,7 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
         choices=("standard", "portable", "full"),
         default=[],
         help=(
-            "collection profile: customizable quick defaults for standard (built-in default); Git object-backed "
+            "evidence preset: customizable low-noise defaults for standard (built-in default); Git object-backed "
             "commits and tags with author, committer, and tagger times for portable (Git mode only; no file "
             "changes or reflogs); every supported kind in the selected mode for full (not all time)"
         ),
@@ -212,7 +212,14 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
         default=None,
         help="include filesystem entries excluded by Git ignore rules",
     )
-    filesystem_group.add_argument("--exclude", dest="exclusions", action="append", default=[], metavar="PATTERN")
+    filesystem_group.add_argument(
+        "--exclude",
+        dest="exclusions",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="exclude root-relative filesystem paths using Git-style patterns; repeatable; explicit exclusions always win",
+    )
 
     output_group = parser.add_argument_group("classification and output")
     output_group.add_argument(
@@ -285,22 +292,48 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
         help="hide matching weekday columns only when empty; accepts all, weekdays, weekend, or days; repeatable",
     )
     color_group = output_group.add_mutually_exclusive_group()
-    color_group.add_argument("--no-color", action="store_true", default=False)
-    color_group.add_argument("--color", dest="no_color", action="store_false", help="allow colored output")
-    output_group.add_argument("--list-outside", action=argparse.BooleanOptionalAction, default=False)
-    output_group.add_argument("--limit", type=int, default=None, metavar="N")
+    color_group.add_argument(
+        "--no-color",
+        action="store_true",
+        default=False,
+        help="never emit color (built-in default: automatic terminal and NO_COLOR detection)",
+    )
+    color_group.add_argument(
+        "--color",
+        dest="no_color",
+        action="store_false",
+        help="allow automatic color, respecting terminal detection and NO_COLOR",
+    )
+    output_group.add_argument(
+        "--list-outside",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="append a chronological list of events outside working hours",
+    )
+    output_group.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="maximum outside-hours rows (built-in default: 50; requires --list-outside)",
+    )
     output_group.add_argument(
         "--coverage",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="show the detailed coverage ledger",
+        help="show the detailed coverage ledger without verbose scope details",
     )
-    output_group.add_argument("--strict", action=argparse.BooleanOptionalAction, default=False)
+    output_group.add_argument(
+        "--strict",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="return non-zero when collection is incomplete",
+    )
     output_group.add_argument(
         "--verbose",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="show expanded coverage and operational detail",
+        help="show scope and operational details plus the detailed coverage ledger",
     )
     if suppress_defaults:
         for action in parser._actions:

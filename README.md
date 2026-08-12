@@ -39,7 +39,7 @@ workfold . -t 2w3d                             # rolling elapsed window
 workfold . -t 2026-07-01..2026-07-31          # inclusive date range
 workfold . -t all -m fs                        # filesystem metadata
 workfold . -t all -m git -p portable           # portable Git-object timestamps
-workfold . -t all -m all -p full               # exhaustive local view
+workfold . -t all -m both -p full              # exhaustive local view
 workfold . --git-identity jan@example.com      # only that recorded Git identity
 workfold . --marker-style identity             # identity codes instead of circles
 workfold . --timezone Europe/Berlin
@@ -55,13 +55,17 @@ workfold . --grid vertical                     # add column separators
 workfold . --list-outside --limit 50
 ```
 
-The three main selectors are independent:
+The three main selectors control separate parts of the request:
 
 | Selector | Purpose | Values |
 | --- | --- | --- |
 | `-t`, `--time` | Date scope | `this-week`, `2w3d`, `YYYY-Www`, `DATE..DATE`, `all` |
-| `-m`, `--mode` | Evidence source | `git`, `fs`, `all` |
-| `-p`, `--profile` | Collection depth | `standard`, `portable`, `full` |
+| `-m`, `--mode` | Evidence source | `git`, `fs`, `both` |
+| `-p`, `--profile` | Evidence preset | `standard`, `portable`, `full` |
+
+Time and mode independently choose when and where to collect. A profile chooses
+which evidence kinds to use inside that request and never changes time or mode;
+the `portable` preset is intentionally available only with Git mode.
 
 - `standard` — **What does the ordinary activity pattern look like?** Git uses
   commit author dates reachable from local branches (plus a detached `HEAD`);
@@ -72,7 +76,7 @@ The three main selectors are independent:
   evidence.
 - `full` — **What dated evidence can this local machine still discover?**
   Enables every supported kind inside the selected time and mode; it does not
-  imply `-t all` or `-m all`.
+  imply `-t all` or `-m both`.
 
 Use `--cluster-window 10m`, `--cluster-window 1h5m`, or another duration to tune
 row clustering. The default `--cluster-anchor event` starts a band at each
@@ -84,8 +88,9 @@ starting minute. `--show-empty-bands` with midnight anchoring renders every
 fixed interval intersecting the display range; automatic ranges expand to full
 fixed bands. An explicitly cropped partial edge always shows its exact range,
 even with `--band-label start`. Without dense output, empty time stays compressed.
-Use `--no-color` or the standard `NO_COLOR` environment variable for colorless
-output.
+Color is automatic by default. Use `--no-color` or the standard `NO_COLOR`
+environment variable for colorless output. `--color` restores automatic color
+when a configuration file sets `no-color = true`.
 
 ## Configuration
 

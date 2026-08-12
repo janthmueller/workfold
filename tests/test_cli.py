@@ -88,8 +88,10 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     } <= public_options
     assert "--time SELECTOR" in normalized_help
     assert "rolling duration such as 2w3d" in normalized_help
-    assert "--mode {git,fs,all}" in normalized_help
+    assert "--mode {git,fs,both}" in normalized_help
     assert "--profile {standard,portable,full}" in normalized_help
+    assert "evidence preset" in normalized_help
+    assert "customizable low-noise defaults" in normalized_help
     assert "standard (built-in default)" in normalized_help
     assert "author, committer, and tagger" in normalized_help
     assert "no file changes or reflogs" in normalized_help
@@ -114,7 +116,13 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     assert "author, committer, tagger, or reflog identity" in normalized_help
     assert "--fs-times KINDS" in help_text
     assert "--fs-entries KINDS" in help_text
+    assert "exclude root-relative filesystem paths using Git-style patterns" in normalized_help
+    assert "allow automatic color, respecting terminal detection and NO_COLOR" in normalized_help
+    assert "append a chronological list of events outside working hours" in normalized_help
+    assert "maximum outside-hours rows (built-in default: 50; requires --list-outside)" in normalized_help
     assert "show the detailed coverage ledger" in normalized_help
+    assert "return non-zero when collection is incomplete" in normalized_help
+    assert "scope and operational details plus the detailed coverage ledger" in normalized_help
     assert "Built-in defaults may be overridden" in normalized_help
     assert "--show-config to inspect effective values and origins" in normalized_help
     assert {
@@ -161,6 +169,13 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
 def test_cli_rejects_retired_collection_options(option: str) -> None:
     with pytest.raises(SystemExit) as error:
         build_parser().parse_args([option])
+
+    assert error.value.code == 2
+
+
+def test_cli_rejects_retired_all_mode_value() -> None:
+    with pytest.raises(SystemExit) as error:
+        build_parser().parse_args(["--mode", "all"])
 
     assert error.value.code == 2
 

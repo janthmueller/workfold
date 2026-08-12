@@ -102,7 +102,7 @@ jobs:
           GIT_AUTHOR_DATE="2026-08-03T10:00:00+02:00" GIT_COMMITTER_DATE="2026-08-03T10:00:00+02:00" git -C "$FIXTURE" commit -m "fixture activity"
           "$BINARY" "$FIXTURE" --time all --timezone Europe/Berlin --no-color > binary-report.txt
           grep -Eq '^Events[[:space:]]+1[[:space:]]*$' binary-report.txt
-          NO_COLOR=1 "$BINARY" "$FIXTURE" --mode all --time all --fs-times modified --timezone Europe/Berlin --strict --coverage > combined-report.txt
+          NO_COLOR=1 "$BINARY" "$FIXTURE" --mode both --time all --fs-times modified --timezone Europe/Berlin --strict --coverage > combined-report.txt
           grep -Eq '^Events[[:space:]]+2[[:space:]]*$' combined-report.txt
           grep -F "Git commits discovered: 1" combined-report.txt
           grep -F "filesystem entries discovered: 2; eligible=1, Git admin excluded=1" combined-report.txt

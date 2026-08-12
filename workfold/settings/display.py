@@ -87,7 +87,7 @@ def _effective_values(options: RawOptions) -> dict[str, SettingValue]:
         "changed": "metadata-changed",
         "accessed": "accessed",
     }
-    source_mode = "all" if options.source.value == "both" else options.source.value
+    source_mode = options.source.value
     return {
         "time": time_value,
         "mode": source_mode,

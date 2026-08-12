@@ -118,9 +118,9 @@ not retain the full record or observation inventory after its counters have
 been updated. Batch sizes are memory controls, never collection, query, or chart
 semantics.
 
-Configuration resolves time, mode, and the evidence profile as three independent
-axes. The profile defaults to `standard`; neither portable nor full expansion
-may rewrite time or mode.
+Configuration resolves time, mode, and the evidence preset as three separate
+axes. The preset defaults to `standard` and never rewrites time or mode;
+`portable` is intentionally valid only with Git mode.
 
 TOML defaults are resolved before `RawOptions` validation as built-ins, the
 platform global file, the nearest selected-path project file, and explicit CLI

@@ -318,7 +318,7 @@ def test_directory_coverage_discloses_pruned_ignored_subtrees(tmp_path: Path) ->
     assert "1 ignored filesystem subtree pruned; descendant directories not counted" in normalized
 
 
-def test_all_mode_preserves_git_and_filesystem_as_distinct_evidence(tmp_path: Path) -> None:
+def test_both_mode_preserves_git_and_filesystem_as_distinct_evidence(tmp_path: Path) -> None:
     repo = GitRepo.create(tmp_path / "repo")
     instant = datetime(2026, 8, 3, 10, 5, tzinfo=UTC)
     repo.commit(
@@ -336,7 +336,7 @@ def test_all_mode_preserves_git_and_filesystem_as_distinct_evidence(tmp_path: Pa
         [
             str(repo.path),
             "--mode",
-            "all",
+            "both",
             "--fs-times",
             "modified",
             "--include-ignored",
@@ -384,7 +384,7 @@ def test_full_profile_keeps_default_report_lean_and_coverage_opt_in(tmp_path: Pa
     assert "Details\n" not in rendered
 
 
-def test_full_all_mode_collects_all_record_families_and_reports_capabilities(
+def test_full_both_mode_collects_all_record_families_and_reports_capabilities(
     tmp_path: Path,
 ) -> None:
     repo = GitRepo.create(tmp_path / "repo")
@@ -421,7 +421,7 @@ def test_full_all_mode_collects_all_record_families_and_reports_capabilities(
             "--time",
             "all",
             "--mode",
-            "all",
+            "both",
             "--profile",
             "full",
             "--coverage",

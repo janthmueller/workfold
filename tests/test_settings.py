@@ -360,6 +360,37 @@ def test_higher_precedence_mode_discards_lower_disabled_collector_settings(
     assert options.exclusions == ()
 
 
+def test_combined_mode_is_supported_in_configuration(tmp_path: Path) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    _write(project / "workfold.toml", 'mode = "both"\n')
+
+    options = parse_invocation(
+        [str(project)],
+        cwd=tmp_path,
+        environ=environ,
+        platform_name="linux",
+    ).options
+
+    assert options.source is SourceMode.BOTH
+
+
+def test_retired_all_mode_is_rejected_in_configuration(tmp_path: Path) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    _write(project / "workfold.toml", 'mode = "all"\n')
+
+    with pytest.raises(UsageError, match="must be one of both, fs, git"):
+        parse_invocation(
+            [str(project)],
+            cwd=tmp_path,
+            environ=environ,
+            platform_name="linux",
+        )
+
+
 def test_locked_profile_and_scope_details_in_one_layer_are_rejected(tmp_path: Path) -> None:
     environ = _environment(tmp_path)
     project = tmp_path / "project"

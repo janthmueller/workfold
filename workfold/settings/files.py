@@ -65,7 +65,7 @@ _ARRAY_KEYS = frozenset(
 _SCALAR_ARRAY_KEYS = frozenset({"mode", "profile"})
 _CONFIG_KEYS = frozenset(DEFAULT_SETTINGS)
 _CHOICES: dict[str, frozenset[str]] = {
-    "mode": frozenset({"git", "fs", "all"}),
+    "mode": frozenset({"git", "fs", "both"}),
     "profile": frozenset({"standard", "portable", "full"}),
     "git-records": frozenset({"commit", "file-change", "tag", "reflog"}),
     "git-commit-times": frozenset({"author", "committer"}),
