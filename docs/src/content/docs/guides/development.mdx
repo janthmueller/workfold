@@ -23,6 +23,7 @@ workfold/
 │   ├── configuration/   # option and TOML resolution
 │   └── cli/             # entrypoint and composition boundary
 ├── tests/               # architecture, unit, integration, and end-to-end
+├── benchmarks/          # opt-in CLI time and process-tree memory measurements
 ├── docs/                # Astro Starlight product documentation
 ├── README.md            # installation and quick-start overview
 └── pyproject.toml
@@ -63,6 +64,40 @@ behavior. Filesystem capability tests must report or skip unavailable creation
 time rather than substituting POSIX ctime. Linux tests exercise the native
 `statx` adapter, nanosecond provenance, identity validation, and final-symlink
 no-follow behavior.
+
+## Measure performance
+
+Performance measurements live outside the ordinary test suite because wall
+time, process memory, and operating-system caches are machine-dependent. The
+benchmark runner invokes the complete CLI in a subprocess, checks its output,
+and records repeated wall/CPU timings, main-process high-water RSS and sampled
+peak process-tree RSS on Linux, page faults, context switches, output size,
+event count, and host/target metadata. Each workload enables strict collection,
+so an incomplete result cannot become a successful performance sample.
+
+Run representative current-scope cases against a real repository:
+
+```bash
+uv run python -m benchmarks.run ~/linux --suite quick --warmups 1 --repetitions 3
+```
+
+Exercise every mode, date scope, and evidence profile against a disposable
+medium fixture:
+
+```bash
+uv run python -m benchmarks.run \
+  --fixture medium \
+  --suite complete \
+  --warmups 1 \
+  --repetitions 3 \
+  --json benchmarks/results/medium.json
+```
+
+The runner never clears system caches. Use the same host, command, fixture, and
+warmup policy when comparing JSON results. Full-profile all-history collection
+includes per-file Git derivation and can be intentionally expensive on a very
+large real repository; use the synthetic fixture before selecting that case on
+Linux-sized history.
 
 ## Build packages
 
