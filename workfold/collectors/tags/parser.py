@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from typing import Final
 
-from workfold.collectors.git_objects import GitObjectParseError, parse_git_signature
+from workfold.collectors.git_core.object_model import GitObjectParseError
+from workfold.collectors.git_core.signatures import parse_git_signature
 from workfold.collectors.tags.models import DiscoveredGitTag, ParsedTagObject
 
 _OID_RE: Final[re.Pattern[bytes]] = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")

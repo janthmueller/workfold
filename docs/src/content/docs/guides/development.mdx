@@ -104,23 +104,58 @@ before rich observation materialization. Pipeline accounting independently
 records received observations and plotted or coalesced markers. Known
 non-matching timestamps do not need a filtered counter. Values read need not
 equal the selected result, but every scope match must become a selected
-observation or an explicit materialization error.
+observation or an explicit materialization error. If rich source metadata is
+required to finish scope evaluation and cannot be read, coverage records a
+scope-evaluation error instead of guessing that the timestamp matched.
 
-Git revision output is streamed. A lightweight exact scan applies the requested
-author/committer roles independently, and commit objects plus tree differences
-are hydrated in bounded batches only for matching commits. This remains exact
-for file-change observations because they inherit those commit roles. Do not
-replace author-date selection with ordinary `git --since`: author dates are not
-topologically monotonic. Filesystem discovery still inventories and stats every
-candidate required by entry and ignore scope, but it need not materialize a
-normalized observation for a known out-of-range timestamp. Production runs do
-not retain the full record or observation inventory after its counters have
-been updated. Batch sizes are memory controls, never collection, query, or chart
-semantics.
+Git revision output is streamed. Its lightweight scan contains only ASCII-safe
+object IDs and epoch timestamps and applies the requested author/committer roles
+independently. Git identities, offsets, subjects, and other provenance always
+come from byte-counted raw commit objects; display-formatted Git output is never
+treated as source metadata. Date-matching object IDs are spooled to an
+automatically removed temporary file, then raw commit objects are read through
+one Git process and delivered to consumers in bounded batches. The raw-object
+reader retains only provenance headers and the first subject line, while it
+drains the rest of each commit message in fixed-size chunks. An exceptionally
+long subject is explicitly marked as shortened without discarding its commit's
+timestamps or identities. Identity filters are then applied to the raw
+signatures. This remains exact for file-change observations because they
+inherit those commit roles. Streamed `diff-tree` records are provisional until
+the boundary for their owning commit has been parsed. Workfold stages them in a
+bounded-memory spool that rolls over to an automatically removed temporary
+file, then publishes them only after commit completion; the final commit also
+waits for a successful Git process exit. A malformed, interrupted, or failed
+commit therefore cannot leak a partial subset of its file changes into the
+chart. Do not replace author-date selection with ordinary `git --since`: author
+dates are not topologically monotonic.
+Filesystem discovery still inventories and stats every candidate required by
+entry and ignore scope, but it need not materialize a normalized observation
+for a known out-of-range timestamp. Production runs do not retain the full
+record or observation inventory after its counters have been updated. Batch
+sizes are memory controls, never collection, query, or chart semantics.
+
+The public `collectors.git`, `collectors.git_objects`,
+`collectors.git_changes`, and `git_core.commits` modules are thin import
+façades for the current collector API. Alpha releases do not retain obsolete
+parser signatures solely through these façades. Implementation modules in
+`collectors/git_core/` separate immutable models and accounting, lightweight
+revision scans, raw commit parsing, `cat-file` envelope handling, bounded
+object extraction, per-repository commit hydration, provisional change
+spooling, subprocess-stream lifecycle, and multi-repository collector
+orchestration. Collector internals import those focused modules directly. Keep
+protocol state machines independent from domain conversion and coverage; do
+not grow the façades back into multi-purpose implementation modules.
 
 Configuration resolves time, mode, and the evidence preset as three separate
 axes. The preset defaults to `standard` and never rewrites time or mode;
 `portable` is intentionally valid only with Git mode.
+
+`config_types` owns immutable option values and built-in defaults,
+`config_parsing` owns individual value grammars, and the public `config` module
+owns cross-option resolution and re-exports the supported configuration API.
+Likewise, `settings.cli_parser` declares argparse presentation while `cli`
+handles configuration layering and runtime dispatch. Keep argparse details out
+of domain validation.
 
 TOML defaults are resolved before `RawOptions` validation as built-ins, the
 platform global file, the nearest selected-path project file, and explicit CLI
@@ -130,6 +165,13 @@ arguments. Standalone `workfold.toml` and `[tool.workfold]` use the same strict
 schema. Keep discovery, parsing, precedence, CLI materialization, and final
 domain validation separate so unknown keys and invalid cross-option states
 cannot be silently ignored.
+
+Coverage data and coverage prose are also separate. `coverage_models` defines
+immutable partitions and reconciliation invariants; `coverage_builder` owns
+mutable collection-time accumulation; `coverage` is their public façade. In
+the application layer, `coverage_scope` names requested evidence,
+`coverage_status` produces the compact completeness statement, and
+`coverage_text` composes the verbose ledger.
 
 Filesystem path inventory and filesystem metadata extraction are distinct
 boundaries. For a file/symlink scan that respects ignore rules inside a Git
@@ -147,6 +189,8 @@ entries traverse them instead. Scans outside Git and scans that include ignored
 entries use the native walker alone. Keep the fast inventory and native
 reference behavior equivalent for requested regular files, and never
 reintroduce per-entry path resolution for repository/admin containment.
+`FilesystemCollector` resolves and schedules roots; `filesystem.root_collector`
+applies entry, ignore, and extraction policy to one prepared root.
 
 Filesystem record discovery is defined by requested metadata-bearing entry
 kinds, not by walker implementation details. A directory used only to reach

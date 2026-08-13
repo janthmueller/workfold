@@ -12,7 +12,7 @@ from workfold.app.collection import Collection, collect
 from workfold.app.coverage import build_coverage
 from workfold.app.report_context import build_report_context
 from workfold.app.resolution import resolve_date_range, resolve_schedule, resolve_timezone_selection
-from workfold.collectors.base import DiagnosticSeverity
+from workfold.collectors.base import diagnostics_are_partial
 from workfold.collectors.filesystem import FilesystemCollector
 from workfold.collectors.git import GitCollector, GitRepositoryResolver
 from workfold.collectors.git_changes import GitFileChangeCollector
@@ -35,11 +35,9 @@ class ExecutionResult:
 
     @property
     def is_partial(self) -> bool:
-        diagnostics_are_partial = any(
-            item.occurrence_count(DiagnosticSeverity.ERROR) or item.completeness_failure_count
-            for item in self.collection.diagnostics
+        return diagnostics_are_partial(self.collection.diagnostics) or bool(
+            self.coverage and self.coverage.has_operational_errors
         )
-        return diagnostics_are_partial or bool(self.coverage and self.coverage.has_operational_errors)
 
 
 def execute(

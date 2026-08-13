@@ -6,7 +6,7 @@ from collections.abc import Mapping, Set
 from dataclasses import dataclass
 from pathlib import Path
 
-from workfold.collectors.base import CollectorDiagnostic, DiagnosticSeverity
+from workfold.collectors.base import CollectorDiagnostic, diagnostics_are_partial
 from workfold.coverage import (
     Capability,
     CoverageLedger,
@@ -196,7 +196,7 @@ class FilesystemCollectionResult:
     def is_partial(self) -> bool:
         """Return whether an operational error prevented complete collection."""
 
-        return any(item.severity is DiagnosticSeverity.ERROR or item.affects_completeness for item in self.diagnostics)
+        return diagnostics_are_partial(self.diagnostics)
 
     def build_coverage(
         self,

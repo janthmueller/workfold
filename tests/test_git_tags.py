@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from workfold.collectors.git import GitCollector, GitCommandError, GitRepository, GitRunner
 from workfold.collectors.git_tags import (
+    CollectedGitTag,
     GitTagCollector,
     GitTagParseError,
     GitTagRepositoryAccounting,
@@ -216,6 +217,31 @@ def test_tag_collector_emits_bounded_ref_batches_without_retaining_records(tmp_p
     assert result.records_retained is False
     assert [len(batch) for batch in batches] == [2, 2, 1]
     assert {ref for batch in batches for ref in batch} == {f"refs/tags/tag-{index}" for index in range(5)}
+
+    byte_bounded_batches: list[tuple[CollectedGitTag, ...]] = []
+    GitTagCollector(ref_batch_size=5, tag_batch_size=10, tag_batch_bytes=1).collect(
+        repositories,
+        tag_consumer=byte_bounded_batches.append,
+        retain_tags=False,
+    )
+    assert [len(batch) for batch in byte_bounded_batches] == [1, 1, 1, 1, 1]
+
+    with pytest.raises(ValueError, match="ref_batch_size"):
+        GitTagCollector(ref_batch_size=0)
+    with pytest.raises(ValueError, match="tag_batch_size"):
+        GitTagCollector(tag_batch_size=0)
+    with pytest.raises(ValueError, match="tag_batch_bytes"):
+        GitTagCollector(tag_batch_bytes=0)
+
+    def fail_consumer(_batch: tuple[CollectedGitTag, ...]) -> None:
+        raise OSError("downstream storage failed")
+
+    with pytest.raises(OSError, match="downstream storage failed"):
+        GitTagCollector().collect(
+            repositories,
+            tag_consumer=fail_consumer,
+            retain_tags=False,
+        )
 
 
 def test_linked_worktree_contexts_share_one_tag_traversal(tmp_path: Path) -> None:
@@ -432,6 +458,33 @@ def test_tag_collector_handles_repository_without_tags(tmp_path: Path) -> None:
     assert result.successful_repositories == 1
     assert result.discovered_tags == 0
     assert not result.tags
+    assert not result.is_partial
+
+
+def test_large_annotated_tag_message_is_streamed_and_keeps_complete_timestamp_coverage(
+    tmp_path: Path,
+) -> None:
+    repo = GitRepo.create(tmp_path / "large-tag")
+    commit_id = repo.commit(
+        "one.txt",
+        "one",
+        "one",
+        author_date="1700000000 +0000",
+        committer_date="1700000000 +0000",
+    )
+    raw_tag = (
+        f"object {commit_id}\ntype commit\ntag large\ntagger Tagger <tagger@example.test> 1700000001 +0000\n\n"
+    ).encode() + b"s" * 1_100_000
+    tag_object = repo.run("hash-object", "-t", "tag", "-w", "--stdin", input_data=raw_tag).decode().strip()
+    repo.point_ref("refs/tags/large", tag_object)
+
+    repositories = GitCollector().collect((repo.path,)).repositories
+    result = GitTagCollector().collect(repositories)
+
+    assert result.captured_tagger_timestamps == 1
+    assert result.tags[0].tagger is not None
+    assert len(result.tags[0].subject or "") == 1_048_577
+    assert [item.code for item in result.diagnostics] == ["git_tag_subject_truncated"]
     assert not result.is_partial
 
 

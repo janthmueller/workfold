@@ -8,7 +8,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from workfold.collectors.git import GitRepository
+from workfold.collectors.git_core.repository import GitRepository
 from workfold.collectors.reflogs.models import (
     GitReflogParseError,
     GitReflogReadError,

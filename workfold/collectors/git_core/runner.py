@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import os
 import subprocess
-import tempfile
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Generator, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Final
+from typing import BinaryIO, Final
 
 from workfold.collectors.base import CollectorDiagnostic
-from workfold.collectors.process_timeout import streaming_deadline
+from workfold.collectors.git_core.command_error import GitCommandError
+from workfold.collectors.git_core.streaming_process import open_git_stdout
 
 LOCAL_READ_COMMANDS: Final[frozenset[str]] = frozenset(
     {
@@ -54,39 +55,6 @@ REPOSITORY_ENVIRONMENT_PREFIXES: Final[tuple[str, ...]] = (
     "GIT_TRACE",
 )
 
-
-class GitCommandError(RuntimeError):
-    """Structured subprocess failure raised by :class:`GitRunner`."""
-
-    def __init__(
-        self,
-        *,
-        code: str,
-        message: str,
-        command: tuple[str, ...],
-        cwd: Path,
-        returncode: int | None = None,
-        stderr: bytes = b"",
-        stderr_truncated: bool = False,
-        hint: str | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.command = command
-        self.cwd = cwd
-        self.returncode = returncode
-        self.stderr = stderr
-        self.stderr_truncated = stderr_truncated
-        self.hint = hint
-
-    @property
-    def stderr_text(self) -> str:
-        """Decode diagnostic stderr without discarding invalid bytes."""
-
-        text = self.stderr.decode("utf-8", errors="surrogateescape").rstrip()
-        return f"{text}…" if self.stderr_truncated else text
-
-
 ProcessRunner = Callable[..., subprocess.CompletedProcess[bytes]]
 
 
@@ -115,6 +83,12 @@ class GitRunner:
         self._stream_output = process_runner is subprocess.run if stream_output is None else stream_output
         if self._stream_output and process_runner is not subprocess.run:
             raise ValueError("stream_output requires the default subprocess runner")
+
+    @property
+    def streams_subprocess_output(self) -> bool:
+        """Return whether production subprocess streaming is available."""
+
+        return self._stream_output
 
     def run(
         self,
@@ -193,77 +167,37 @@ class GitRunner:
             )
             return
 
+        with self.open_stdout(arguments, cwd=cwd, allowed_returncodes=allowed_returncodes) as stdout:
+            yield from stdout
+
+    @contextmanager
+    def open_stdout(
+        self,
+        arguments: Sequence[str],
+        *,
+        cwd: Path,
+        input_stream: BinaryIO | None = None,
+        allowed_returncodes: Collection[int] = (0,),
+    ) -> Generator[BinaryIO, None, None]:
+        """Open bounded-memory stdout for one production Git subprocess.
+
+        ``input_stream`` is passed directly to Git instead of copied into a
+        Python ``bytes`` value. Callers must keep it open for the context.
+        """
+
+        if not self._stream_output:
+            raise RuntimeError("streaming Git output is unavailable for the configured process runner")
         command = self._command(arguments, cwd=cwd)
-        with tempfile.TemporaryFile() as stderr_file:
-            try:
-                process = subprocess.Popen(
-                    command,
-                    cwd=os.fspath(cwd),
-                    env=self._environment(),
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=stderr_file,
-                    shell=False,
-                )
-            except FileNotFoundError as error:
-                raise GitCommandError(
-                    code="git_not_found",
-                    message=f"Git executable was not found: {self._executable}",
-                    command=command,
-                    cwd=cwd,
-                    hint="Install Git or use --mode fs.",
-                ) from error
-            except OSError as error:
-                raise GitCommandError(
-                    code="git_spawn_error",
-                    message=f"Git command could not be started: {error}",
-                    command=command,
-                    cwd=cwd,
-                ) from error
-
-            completed = False
-            try:
-                with streaming_deadline(process, self._timeout) as expired:
-                    if process.stdout is None:
-                        raise RuntimeError("streaming Git process omitted stdout")
-                    yield from process.stdout
-                    process.stdout.close()
-                    returncode = process.wait()
-                    if expired.is_set():
-                        stderr_file.seek(0)
-                        stderr = stderr_file.read(self._stderr_limit + 1)
-                        bounded, truncated = self._bounded_stderr(stderr)
-                        raise GitCommandError(
-                            code="git_command_timeout",
-                            message="Git command exceeded the configured timeout",
-                            command=command,
-                            cwd=cwd,
-                            stderr=bounded,
-                            stderr_truncated=truncated,
-                        )
-                    completed = True
-            finally:
-                if not completed and process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=1)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-
-            if returncode not in allowed_returncodes:
-                stderr_file.seek(0)
-                stderr = stderr_file.read(self._stderr_limit + 1)
-                bounded, truncated = self._bounded_stderr(stderr)
-                raise GitCommandError(
-                    code="git_command_failed",
-                    message=f"Git command failed with exit status {returncode}",
-                    command=command,
-                    cwd=cwd,
-                    returncode=returncode,
-                    stderr=bounded,
-                    stderr_truncated=truncated,
-                )
+        with open_git_stdout(
+            command=command,
+            cwd=cwd,
+            environment=self._environment(),
+            input_stream=input_stream,
+            allowed_returncodes=allowed_returncodes,
+            timeout=self._timeout,
+            stderr_limit=self._stderr_limit,
+        ) as stdout:
+            yield stdout
 
     def _environment(self) -> dict[str, str]:
         environment = dict(self._base_environment)
@@ -337,3 +271,6 @@ def command_diagnostic(error: GitCommandError, *, stage: str, target: Path) -> C
         message=message,
         hint=error.hint,
     )
+
+
+__all__ = ["GitCommandError", "GitRunner", "command_diagnostic"]

@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import os
 import subprocess
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Generator, Sequence
+from contextlib import contextmanager
 from dataclasses import FrozenInstanceError, replace
+from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, NoReturn
 
 import pytest
+from workfold.collectors.base import CollectorDiagnostic, DiagnosticSeverity
 from workfold.collectors.git import (
     CollectedGitCommit,
+    GitCollectionResult,
     GitCollector,
     GitCommandError,
     GitCommitRepositoryAccounting,
@@ -21,6 +25,7 @@ from workfold.collectors.git import (
     parse_commit_ids,
     resolve_repository,
 )
+from workfold.collectors.git_objects import GitObjectParseError
 from workfold.models import RecordKind, TimestampKind
 
 from support.git_repo import GitRepo
@@ -105,6 +110,11 @@ def test_git_runner_validates_limits_and_structures_spawn_failures(tmp_path: Pat
         GitRunner(process_runner=os_error).run(("rev-parse", "--git-dir"), cwd=tmp_path)
     assert spawn_error.value.code == "git_spawn_error"
 
+    with pytest.raises(ValueError, match="object_batch_size"):
+        GitCollector(object_batch_size=0)
+    with pytest.raises(ValueError, match="object_batch_bytes"):
+        GitCollector(object_batch_bytes=0)
+
 
 def test_git_runner_reports_missing_executable_and_bounds_stderr(tmp_path: Path) -> None:
     def missing(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
@@ -122,6 +132,199 @@ def test_git_runner_reports_missing_executable_and_bounds_stderr(tmp_path: Path)
         GitRunner(process_runner=failed, stderr_limit=4).run(("rev-parse", "--git-dir"), cwd=tmp_path)
     assert failure.value.stderr == b"abcd"
     assert failure.value.stderr_text == "abcd…"
+
+
+def test_streaming_runner_structures_temporary_capture_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> NoReturn:
+        raise OSError("temporary storage unavailable")
+
+    monkeypatch.setattr("workfold.collectors.git_core.streaming_process.tempfile.TemporaryFile", fail)
+
+    with pytest.raises(GitCommandError) as failure:
+        with GitRunner().open_stdout(("cat-file", "--batch"), cwd=tmp_path):
+            pass
+
+    assert failure.value.code == "git_stream_setup_error"
+    assert "temporary storage unavailable" in str(failure.value)
+    assert failure.value.hint is not None
+
+
+def test_streaming_runner_preserves_git_failure_when_the_consumer_sees_broken_output(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+
+    with pytest.raises(GitCommandError) as failure:
+        with GitRunner().open_stdout(("cat-file", "--definitely-invalid-option"), cwd=repo.path) as stdout:
+            stdout.read(1)
+            raise GitObjectParseError("truncated_cat_file_batch", "consumer saw incomplete output")
+
+    assert failure.value.code == "git_command_failed"
+    assert failure.value.returncode not in {None, 0}
+    assert failure.value.stderr
+    assert isinstance(failure.value.__cause__, GitObjectParseError)
+
+
+def test_streaming_runner_waits_for_a_delayed_failure_after_observed_eof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wait_timeouts: list[float | None] = []
+
+    class DelayedFailureProcess:
+        def __init__(self, stderr: BinaryIO) -> None:
+            self.stdout = BytesIO()
+            self.returncode: int | None = None
+            stderr.write(b"delayed Git failure")
+
+        def wait(self, timeout: float | None = None) -> int:
+            wait_timeouts.append(timeout)
+            self.returncode = 9
+            return self.returncode
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = -15
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    def popen(*_args: Any, stderr: BinaryIO, **_kwargs: Any) -> DelayedFailureProcess:
+        return DelayedFailureProcess(stderr)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    parser_error = GitObjectParseError("truncated_cat_file_batch", "consumer observed EOF")
+
+    with pytest.raises(GitCommandError) as failure:
+        with GitRunner().open_stdout(("cat-file", "--batch"), cwd=tmp_path) as stdout:
+            assert stdout.read(1) == b""
+            raise parser_error
+
+    assert failure.value.returncode == 9
+    assert failure.value.stderr == b"delayed Git failure"
+    assert failure.value.__cause__ is parser_error
+    assert wait_timeouts == [None]
+
+
+def test_streaming_runner_reports_timeout_after_consumer_finishes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Expired:
+        @staticmethod
+        def is_set() -> bool:
+            return True
+
+    @contextmanager
+    def expired_deadline(_process: object, _timeout: float | None) -> Generator[Expired, None, None]:
+        yield Expired()
+
+    class TimedOutProcess:
+        def __init__(self, stderr: BinaryIO) -> None:
+            self.stdout = BytesIO()
+            stderr.write(b"stream deadline reached")
+
+        @staticmethod
+        def wait(timeout: float | None = None) -> int:
+            return -9
+
+        @staticmethod
+        def poll() -> int:
+            return -9
+
+        @staticmethod
+        def terminate() -> None:
+            raise AssertionError("completed timeout process must not be terminated again")
+
+        @staticmethod
+        def kill() -> None:
+            raise AssertionError("completed timeout process must not be killed again")
+
+    def popen(*_args: Any, stderr: BinaryIO, **_kwargs: Any) -> TimedOutProcess:
+        return TimedOutProcess(stderr)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr("workfold.collectors.git_core.streaming_process.streaming_deadline", expired_deadline)
+
+    with pytest.raises(GitCommandError) as failure:
+        with GitRunner(timeout=1).open_stdout(("cat-file", "--batch"), cwd=tmp_path) as stdout:
+            assert stdout.read() == b""
+
+    assert failure.value.code == "git_command_timeout"
+    assert failure.value.stderr == b"stream deadline reached"
+
+
+def test_streaming_runner_cleans_up_stuck_process_without_masking_consumer_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StuckProcess:
+        def __init__(self) -> None:
+            self.stdout = BytesIO(b"unconsumed output")
+            self.returncode: int | None = None
+            self.terminated = False
+            self.killed = False
+
+        def wait(self, timeout: float | None = None) -> int:
+            if timeout is not None and not self.killed:
+                raise subprocess.TimeoutExpired("git", timeout)
+            if self.returncode is None:
+                raise AssertionError("process was neither terminated nor killed")
+            return self.returncode
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            self.killed = True
+            self.returncode = -9
+
+    process = StuckProcess()
+
+    def popen(*_args: Any, **_kwargs: Any) -> StuckProcess:
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+
+    downstream = RuntimeError("consumer rejected the stream")
+    with pytest.raises(RuntimeError) as failure:
+        with GitRunner().open_stdout(("cat-file", "--batch"), cwd=tmp_path):
+            raise downstream
+
+    assert failure.value is downstream
+    assert process.terminated
+    assert process.killed
+
+
+def test_git_collection_warning_does_not_imply_partial_coverage() -> None:
+    warning = CollectorDiagnostic(
+        code="metadata_truncated",
+        stage="git_object_parse",
+        target="fixture",
+        message="display-only metadata was truncated",
+        severity=DiagnosticSeverity.WARNING,
+    )
+    result = GitCollectionResult(
+        repositories=(),
+        commits=(),
+        diagnostics=(warning,),
+        requested_targets=0,
+        successful_repositories=0,
+        discovered_commit_ids=0,
+        duplicate_commit_ids=0,
+        unavailable_objects=0,
+        parse_errors=0,
+    )
+
+    assert not result.is_partial
+    assert replace(result, diagnostics=(replace(warning, affects_completeness=True),)).is_partial
+    assert replace(result, diagnostics=(replace(warning, severity=DiagnosticSeverity.ERROR),)).is_partial
 
 
 def test_collector_resolves_whole_repository_and_preserves_raw_dates(tmp_path: Path) -> None:
@@ -326,6 +529,7 @@ def test_commit_repository_accounting_rejects_invalid_partitions(tmp_path: Path)
         repository=repository,
         discovered_commit_ids=1,
         examined_commits=1,
+        candidate_commits=1,
         selected_commits=1,
         hydrated_commits=1,
         duplicate_commit_ids=0,
@@ -337,6 +541,7 @@ def test_commit_repository_accounting_rejects_invalid_partitions(tmp_path: Path)
         timestamp_values_read=(("author", 1),),
         scope_matches=(("author", 1),),
         materialized_scope_matches=(("author", 1),),
+        scope_evaluation_errors=(("author", 0),),
     )
 
     with pytest.raises(ValueError, match="non-negative"):
@@ -344,9 +549,11 @@ def test_commit_repository_accounting_rejects_invalid_partitions(tmp_path: Path)
     with pytest.raises(ValueError, match="exceed reachable"):
         replace(valid, examined_commits=2)
     with pytest.raises(ValueError, match="exceed examined"):
-        replace(valid, selected_commits=2)
-    with pytest.raises(ValueError, match="exceed selected"):
+        replace(valid, candidate_commits=2)
+    with pytest.raises(ValueError, match="exceed candidates"):
         replace(valid, hydrated_commits=2)
+    with pytest.raises(ValueError, match="exceed hydrated"):
+        replace(valid, selected_commits=2)
     with pytest.raises(ValueError, match="cover the requested timestamp roles exactly once"):
         replace(valid, timestamp_values_read=(("author", 1), ("author", 1)))
     with pytest.raises(ValueError, match="scope matches exceed"):
@@ -364,10 +571,10 @@ def test_commit_repository_accounting_rejects_invalid_partitions(tmp_path: Path)
         )
     with pytest.raises(ValueError, match="timestamp values must equal examined"):
         replace(valid, timestamp_values_read=(("author", 2),))
-    with pytest.raises(ValueError, match="selected Git commits exceed matching"):
+    with pytest.raises(ValueError, match="selected Git commits exceed materialized"):
         replace(valid, scope_matches=(("author", 0),), materialized_scope_matches=(("author", 0),))
-    with pytest.raises(ValueError, match="hydrated Git commits exceed materialized"):
-        replace(valid, materialized_scope_matches=(("author", 0),))
+    with pytest.raises(ValueError, match="scope outcomes exceed"):
+        replace(valid, scope_evaluation_errors=(("author", 1),))
 
 
 def test_collector_ignores_git_replace_objects_to_preserve_object_provenance(tmp_path: Path) -> None:
@@ -577,10 +784,14 @@ def test_collector_never_adds_date_pruning_to_git_traversal(tmp_path: Path) -> N
 
     assert len(result.commits) == 1
     traversal = next(arguments for arguments in runner.arguments if arguments[0] == "rev-list")
-    assert traversal[1:4] == ("--no-commit-header", "--encoding=none", "--date=raw")
+    assert traversal[1:4] == (
+        "--no-commit-header",
+        "--encoding=none",
+        "--format=%H%x00%at%x00%ct%x00",
+    )
     assert traversal[-1] == "--all"
     assert sum(arguments[0] == "rev-list" for arguments in runner.arguments) == 1
-    assert not any(arguments[0] == "cat-file" for arguments in runner.arguments)
+    assert sum(arguments[0] == "cat-file" for arguments in runner.arguments) == 1
     assert not any("since" in argument or "until" in argument for argument in traversal)
 
 
@@ -737,9 +948,9 @@ def test_repository_resolution_validates_every_git_response(tmp_path: Path) -> N
     ("fault", "expected_code"),
     [
         ("discovery", "git_command_failed"),
-        ("metadata-fields", "invalid_rev_list_record"),
-        ("metadata-object-id", "invalid_rev_list_record"),
-        ("metadata-commit", "invalid_git_timestamp"),
+        ("scan-fields", "invalid_rev_list_record"),
+        ("scan-object-id", "invalid_rev_list_record"),
+        ("scan-timestamp", "invalid_git_timestamp"),
     ],
 )
 def test_collector_accounts_for_discovery_and_metadata_failures(
@@ -780,15 +991,15 @@ def test_collector_accounts_for_discovery_and_metadata_failures(
             )
             if arguments[0] != "rev-list":
                 return completed
-            if fault == "metadata-fields":
+            if fault == "scan-fields":
                 output = b"broken\n"
-            elif fault == "metadata-object-id":
+            elif fault == "scan-object-id":
                 fields = completed.stdout.split(b"\0")
                 fields[0] = b"not-an-object"
                 output = b"\0".join(fields)
             else:
                 fields = completed.stdout.split(b"\0")
-                fields[5] = b"invalid +0000"
+                fields[1] = b"invalid"
                 output = b"\0".join(fields)
             return subprocess.CompletedProcess(arguments, 0, stdout=output, stderr=b"")
 
@@ -799,6 +1010,7 @@ def test_collector_accounts_for_discovery_and_metadata_failures(
     (accounting,) = result.repository_accounting
     assert accounting.discovered_commit_ids == (0 if fault == "discovery" else 1)
     assert accounting.examined_commits == 0
+    assert accounting.candidate_commits == 0
     assert accounting.selected_commits == 0
     assert accounting.hydrated_commits == 0
     assert accounting.record_errors == accounting.discovered_commit_ids
@@ -833,23 +1045,29 @@ def test_filtered_collector_accounts_for_selected_object_failures(
     )
 
     class FaultRunner(GitRunner):
-        def run(
+        @contextmanager
+        def open_stdout(
             self,
             arguments: Sequence[str],
             *,
             cwd: Path,
-            input_data: bytes | None = None,
+            input_stream: BinaryIO | None = None,
             allowed_returncodes: Collection[int] = (0,),
-        ) -> subprocess.CompletedProcess[bytes]:
+        ) -> Generator[BinaryIO, None, None]:
             if arguments[0] != "cat-file":
-                return super().run(
+                with super().open_stdout(
                     arguments,
                     cwd=cwd,
-                    input_data=input_data,
+                    input_stream=input_stream,
                     allowed_returncodes=allowed_returncodes,
-                )
-            assert input_data is not None
-            object_id = input_data.decode("ascii").strip()
+                ) as stdout:
+                    yield stdout
+                return
+            assert input_stream is not None
+            request = input_stream.readline().rstrip(b"\n")
+            object_id_raw, separator, metadata = request.partition(b" ")
+            assert separator
+            object_id = object_id_raw.decode("ascii")
             if fault == "cat-file-command":
                 raise GitCommandError(
                     code="git_command_failed",
@@ -862,13 +1080,13 @@ def test_filtered_collector_accounts_for_selected_object_failures(
             elif fault == "missing":
                 output = f"{object_id} missing\n".encode()
             elif fault == "wrong-type":
-                output = f"{object_id} blob 0\n\n".encode()
+                output = f"{object_id} blob 0 ".encode() + metadata + b"\n\n"
             else:
                 malformed = b"tree only-no-boundary"
-                output = f"{object_id} commit {len(malformed)}\n".encode() + malformed + b"\n"
-            return subprocess.CompletedProcess(arguments, 0, stdout=output, stderr=b"")
+                output = f"{object_id} commit {len(malformed)} ".encode() + metadata + b"\n" + malformed + b"\n"
+            yield BytesIO(output)
 
-    result = GitCollector(FaultRunner(stream_output=False)).collect(
+    result = GitCollector(FaultRunner()).collect(
         (repo.path,),
         scan_spec=RevListScanSpec(("author",)),
         commit_filter=lambda _repository, _commit: True,
@@ -880,7 +1098,8 @@ def test_filtered_collector_accounts_for_selected_object_failures(
     (accounting,) = result.repository_accounting
     assert accounting.discovered_commit_ids == 1
     assert accounting.examined_commits == 1
-    assert accounting.selected_commits == 1
+    assert accounting.candidate_commits == 1
+    assert accounting.selected_commits == 0
     assert accounting.hydrated_commits == 0
     assert accounting.record_errors == 1
     assert accounting.operational_errors == 1
@@ -907,7 +1126,7 @@ def test_non_retaining_commit_collection_streams_bounded_batches(tmp_path: Path)
         )
     received: list[tuple[CollectedGitCommit, ...]] = []
 
-    result = GitCollector(object_batch_size=1).collect(
+    result = GitCollector(object_batch_size=10, object_batch_bytes=1).collect(
         (repo.path,),
         commit_consumer=received.append,
         retain_commits=False,
@@ -918,3 +1137,46 @@ def test_non_retaining_commit_collection_streams_bounded_batches(tmp_path: Path)
     assert result.discovered_commit_ids == 3
     assert sum(len(batch) for batch in received) == 3
     assert all(len(batch) == 1 for batch in received)
+
+
+def test_production_hydration_uses_one_streaming_cat_file_process(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    for index in range(3):
+        repo.commit(
+            f"{index}.txt",
+            str(index),
+            f"commit {index}",
+            author_date=f"170000000{index} +0000",
+            committer_date=f"170000000{index} +0000",
+        )
+
+    class StreamingRecordingRunner(GitRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stream_commands: list[tuple[str, ...]] = []
+
+        @contextmanager
+        def open_stdout(
+            self,
+            arguments: Sequence[str],
+            *,
+            cwd: Path,
+            input_stream: BinaryIO | None = None,
+            allowed_returncodes: Collection[int] = (0,),
+        ) -> Generator[BinaryIO, None, None]:
+            self.stream_commands.append(tuple(arguments))
+            with super().open_stdout(
+                arguments,
+                cwd=cwd,
+                input_stream=input_stream,
+                allowed_returncodes=allowed_returncodes,
+            ) as stdout:
+                yield stdout
+
+    runner = StreamingRecordingRunner()
+    result = GitCollector(runner, object_batch_size=1).collect((repo.path,))
+
+    assert len(result.commits) == 3
+    object_commands = [command for command in runner.stream_commands if command[0] == "cat-file"]
+    assert len(object_commands) == 1
+    assert object_commands[0][1].startswith("--batch=")

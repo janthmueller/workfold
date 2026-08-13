@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from workfold.collectors.base import CollectorDiagnostic
-from workfold.collectors.git import GitRepository
-from workfold.collectors.git_objects import GitSignature
+from workfold.collectors.base import CollectorDiagnostic, diagnostics_are_partial
+from workfold.collectors.git_core.object_model import GitSignature
+from workfold.collectors.git_core.repository import GitRepository
 from workfold.models import RecordKind, RecordOrigin, Source, TimestampKind, TimestampObservation
 from workfold.provenance import git_tag_id
 
@@ -185,4 +185,4 @@ class GitTagCollectionResult:
 
     @property
     def is_partial(self) -> bool:
-        return bool(self.diagnostics)
+        return diagnostics_are_partial(self.diagnostics)

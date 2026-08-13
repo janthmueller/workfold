@@ -3,12 +3,15 @@ from __future__ import annotations
 import errno
 import os
 import subprocess
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Generator, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
+from io import BytesIO
 from pathlib import Path
+from typing import BinaryIO
 
 import pytest
-from workfold.collectors.git import GitCollector, GitRunner
+from workfold.collectors.git import GitCollector, GitCommandError, GitRunner
 from workfold.collectors.git_changes import (
     CollectedGitFileChange,
     GitChangeParseError,
@@ -16,6 +19,7 @@ from workfold.collectors.git_changes import (
     GitFileChangeRepositoryAccounting,
     parse_diff_tree_name_status,
 )
+from workfold.collectors.git_core.diff_tree import DiffCommitComplete, iter_diff_tree_name_status
 from workfold.models import GitChangeKind, RecordKind, TimestampKind
 from workfold.scope import ObservationScope
 from workfold.time_ranges import InstantRange, InstantRangeUnion
@@ -250,21 +254,23 @@ def test_batches_all_commits_for_a_repository_in_one_diff_process(tmp_path: Path
             super().__init__()
             self.calls: list[tuple[str, ...]] = []
 
-        def run(
+        @contextmanager
+        def open_stdout(
             self,
             arguments: Sequence[str],
             *,
             cwd: Path,
-            input_data: bytes | None = None,
+            input_stream: BinaryIO | None = None,
             allowed_returncodes: Collection[int] = (0,),
-        ) -> subprocess.CompletedProcess[bytes]:
+        ) -> Generator[BinaryIO, None, None]:
             self.calls.append(tuple(arguments))
-            return super().run(
+            with super().open_stdout(
                 arguments,
                 cwd=cwd,
-                input_data=input_data,
+                input_stream=input_stream,
                 allowed_returncodes=allowed_returncodes,
-            )
+            ) as stdout:
+                yield stdout
 
     runner = RecordingRunner()
     result = GitFileChangeCollector(runner).collect(commits)
@@ -272,6 +278,32 @@ def test_batches_all_commits_for_a_repository_in_one_diff_process(tmp_path: Path
     assert result.discovered_changes == 2
     assert [call[0] for call in runner.calls] == ["diff-tree"]
     assert runner.calls[0][1:3] == ("--stdin", "--root")
+
+
+def test_non_streaming_runner_preserves_multi_commit_boundaries(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "non-streaming-batch")
+    repo.commit(
+        "one.txt",
+        "one",
+        "one",
+        author_date="1700000000 +0000",
+        committer_date="1700000000 +0000",
+    )
+    repo.commit(
+        "two.txt",
+        "two",
+        "two",
+        author_date="1700000100 +0000",
+        committer_date="1700000100 +0000",
+    )
+    commits = GitCollector().collect((repo.path,)).commits
+
+    result = GitFileChangeCollector(GitRunner(stream_output=False)).collect(commits)
+
+    assert result.successful_commits == 2
+    assert result.discovered_changes == 2
+    assert {item.change.commit_id for item in result.changes} == {item.commit.object_id for item in commits}
+    assert not result.diagnostics
 
 
 def test_repository_accounting_includes_empty_repositories_and_validates_partitions(
@@ -319,6 +351,13 @@ def test_repository_accounting_includes_empty_repositories_and_validates_partiti
         replace(valid, scope_matches=())
     with pytest.raises(ValueError, match="within discovered"):
         replace(valid, scope_matches=((TimestampKind.GIT_AUTHOR, 3),))
+
+    with pytest.raises(ValueError, match="commit_batch_size"):
+        GitFileChangeCollector(commit_batch_size=0)
+    with pytest.raises(ValueError, match="change_batch_size"):
+        GitFileChangeCollector(change_batch_size=0)
+    with pytest.raises(ValueError, match="change_batch_bytes"):
+        GitFileChangeCollector(change_batch_bytes=0)
 
 
 def test_parser_validates_commit_boundaries_statuses_and_similarity() -> None:
@@ -369,6 +408,26 @@ def test_parser_validates_commit_boundaries_statuses_and_similarity() -> None:
     assert copied[0].similarity == 50
 
 
+def test_streaming_diff_parser_never_requests_unbounded_reads() -> None:
+    commit_id = "a" * 40
+    payload = commit_id.encode() + b"\0\0\n" + b"A\0path\0" * 10_000
+
+    class TrackingStream(BytesIO):
+        max_read_size = 0
+
+        def read(self, size: int | None = -1) -> bytes:
+            assert size is not None and size >= 0
+            self.max_read_size = max(self.max_read_size, size)
+            return super().read(size)
+
+    stream = TrackingStream(payload)
+    records = tuple(iter_diff_tree_name_status(stream, (commit_id,)))
+
+    assert len(records) == 10_001
+    assert isinstance(records[-1], DiffCommitComplete)
+    assert stream.max_read_size <= 65_536
+
+
 def test_command_failure_is_structured_for_the_whole_repository_batch(tmp_path: Path) -> None:
     repo = GitRepo.create(tmp_path / "failure")
     repo.commit(
@@ -406,7 +465,7 @@ def test_command_failure_is_structured_for_the_whole_repository_batch(tmp_path: 
                 allowed_returncodes=allowed_returncodes,
             )
 
-    result = GitFileChangeCollector(FailureRunner()).collect(commits)
+    result = GitFileChangeCollector(FailureRunner(stream_output=False)).collect(commits)
     assert not result.changes
     assert result.successful_commits == 0
     assert result.parse_errors == 0
@@ -451,7 +510,7 @@ def test_parse_failure_accounts_for_every_commit_in_repository_batch(tmp_path: P
         ) -> subprocess.CompletedProcess[bytes]:
             return subprocess.CompletedProcess(arguments, 0, stdout=b"malformed", stderr=b"")
 
-    result = GitFileChangeCollector(MalformedRunner()).collect(commits)
+    result = GitFileChangeCollector(MalformedRunner(stream_output=False)).collect(commits)
 
     assert result.requested_commits == 2
     assert result.successful_commits == 0
@@ -465,6 +524,123 @@ def test_parse_failure_accounts_for_every_commit_in_repository_batch(tmp_path: P
     assert accounting.discovered_changes == 0
     assert result.diagnostics[0].code == "unexpected_git_change_commit"
     assert result.diagnostics[0].provenance_id is not None
+
+
+def test_streaming_parse_failure_preserves_completed_commit_accounting(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "streaming-parse-failure")
+    for index in range(2):
+        repo.commit(
+            f"{index}.txt",
+            str(index),
+            str(index),
+            author_date=f"170000000{index} +0000",
+            committer_date=f"170000000{index} +0000",
+        )
+    commits = GitCollector().collect((repo.path,)).commits
+    first, second = (item.commit.object_id for item in commits)
+    output = first.encode() + b"\0\0\nA\0first\0" + second.encode() + b"\0\0\ninvalid-status\0"
+
+    class MalformedStreamingRunner(GitRunner):
+        @contextmanager
+        def open_stdout(
+            self,
+            arguments: Sequence[str],
+            *,
+            cwd: Path,
+            input_stream: BinaryIO | None = None,
+            allowed_returncodes: Collection[int] = (0,),
+        ) -> Generator[BinaryIO, None, None]:
+            yield BytesIO(output)
+
+    result = GitFileChangeCollector(MalformedStreamingRunner()).collect(commits)
+
+    assert result.successful_commits == 1
+    assert result.parse_errors == 1
+    assert result.discovered_changes == 1
+    assert result.changes[0].change.commit_id == first
+
+
+def test_streaming_parse_failure_discards_provisional_changes_from_failed_commit(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "provisional-parse-failure")
+    repo.commit(
+        "one.txt",
+        "one",
+        "one",
+        author_date="1700000000 +0000",
+        committer_date="1700000000 +0000",
+    )
+    commits = GitCollector().collect((repo.path,)).commits
+    commit_id = commits[0].commit.object_id
+    output = commit_id.encode() + b"\0\0\nA\0provisional\0invalid-status\0"
+
+    class MalformedStreamingRunner(GitRunner):
+        @contextmanager
+        def open_stdout(
+            self,
+            arguments: Sequence[str],
+            *,
+            cwd: Path,
+            input_stream: BinaryIO | None = None,
+            allowed_returncodes: Collection[int] = (0,),
+        ) -> Generator[BinaryIO, None, None]:
+            yield BytesIO(output)
+
+    delivered: list[tuple[CollectedGitFileChange, ...]] = []
+    result = GitFileChangeCollector(MalformedStreamingRunner()).collect(
+        commits,
+        change_consumer=delivered.append,
+    )
+
+    assert result.changes == ()
+    assert delivered == []
+    assert result.discovered_changes == 0
+    assert result.successful_commits == 0
+    assert result.parse_errors == 1
+
+
+def test_streaming_command_failure_discards_final_commit_before_publication(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "provisional-command-failure")
+    repo.commit(
+        "one.txt",
+        "one",
+        "one",
+        author_date="1700000000 +0000",
+        committer_date="1700000000 +0000",
+    )
+    commits = GitCollector().collect((repo.path,)).commits
+    commit_id = commits[0].commit.object_id
+    output = commit_id.encode() + b"\0\0\nA\0provisional\0"
+
+    class FailedExitRunner(GitRunner):
+        @contextmanager
+        def open_stdout(
+            self,
+            arguments: Sequence[str],
+            *,
+            cwd: Path,
+            input_stream: BinaryIO | None = None,
+            allowed_returncodes: Collection[int] = (0,),
+        ) -> Generator[BinaryIO, None, None]:
+            yield BytesIO(output)
+            raise GitCommandError(
+                code="git_command_failed",
+                message="diff-tree failed after writing output",
+                command=tuple(arguments),
+                cwd=cwd,
+                returncode=9,
+            )
+
+    delivered: list[tuple[CollectedGitFileChange, ...]] = []
+    result = GitFileChangeCollector(FailedExitRunner()).collect(
+        commits,
+        change_consumer=delivered.append,
+    )
+
+    assert result.changes == ()
+    assert delivered == []
+    assert result.discovered_changes == 0
+    assert result.successful_commits == 0
+    assert result.subprocess_errors == 1
 
 
 def test_non_retaining_file_change_collection_streams_batches(tmp_path: Path) -> None:
@@ -486,7 +662,11 @@ def test_non_retaining_file_change_collection_streams_batches(tmp_path: Path) ->
     commits = GitCollector().collect((repo.path,)).commits
     received: list[tuple[CollectedGitFileChange, ...]] = []
 
-    result = GitFileChangeCollector(commit_batch_size=1).collect(
+    result = GitFileChangeCollector(
+        commit_batch_size=10,
+        change_batch_size=10,
+        change_batch_bytes=1,
+    ).collect(
         commits,
         change_consumer=received.append,
         retain_changes=False,
@@ -496,3 +676,14 @@ def test_non_retaining_file_change_collection_streams_batches(tmp_path: Path) ->
     assert result.changes == ()
     assert result.discovered_changes == 2
     assert sum(len(batch) for batch in received) == 2
+    assert all(len(batch) == 1 for batch in received)
+
+    def fail_consumer(_batch: tuple[CollectedGitFileChange, ...]) -> None:
+        raise OSError("downstream storage failed")
+
+    with pytest.raises(OSError, match="downstream storage failed"):
+        GitFileChangeCollector().collect(
+            commits,
+            change_consumer=fail_consumer,
+            retain_changes=False,
+        )

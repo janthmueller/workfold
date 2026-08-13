@@ -165,9 +165,18 @@ class DiagnosticBuffer(list[CollectorDiagnostic]):
         return (*self, summary)
 
 
+def diagnostics_are_partial(diagnostics: Iterable[CollectorDiagnostic]) -> bool:
+    """Return whether diagnostics report missing requested collection scope."""
+
+    return any(
+        item.occurrence_count(DiagnosticSeverity.ERROR) or item.completeness_failure_count for item in diagnostics
+    )
+
+
 __all__ = [
     "CollectorDiagnostic",
     "DiagnosticBuffer",
     "DiagnosticOccurrences",
     "DiagnosticSeverity",
+    "diagnostics_are_partial",
 ]

@@ -15,7 +15,9 @@ from collections.abc import Callable, Sequence
 from typing import Final
 
 from workfold.collectors.base import CollectorDiagnostic, DiagnosticBuffer
-from workfold.collectors.git import GitCommandError, GitRepository, GitRunner
+from workfold.collectors.git_core.command_error import GitCommandError
+from workfold.collectors.git_core.repository import GitRepository
+from workfold.collectors.git_core.runner import GitRunner
 from workfold.collectors.reflogs.models import (
     CollectedGitReflog,
     GitReflogCollectionResult,

@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from workfold.collectors.base import CollectorDiagnostic, DiagnosticSeverity
-from workfold.collectors.git import GitRepository
+from workfold.collectors.base import CollectorDiagnostic, diagnostics_are_partial
+from workfold.collectors.git_core.repository import GitRepository
 from workfold.models import RecordKind, RecordOrigin, Source, TimestampKind, TimestampObservation
 from workfold.provenance import git_reflog_id
 
@@ -171,4 +171,4 @@ class GitReflogCollectionResult:
 
     @property
     def is_partial(self) -> bool:
-        return any(item.severity is DiagnosticSeverity.ERROR for item in self.diagnostics)
+        return diagnostics_are_partial(self.diagnostics)

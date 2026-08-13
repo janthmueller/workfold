@@ -9,7 +9,8 @@ from typing import TextIO
 from rich.console import Console
 from rich.text import Text
 
-from workfold.renderers.terminal.chart import render_chart, render_legend
+from workfold.renderers.terminal.chart import render_chart
+from workfold.renderers.terminal.legend import render_legend
 from workfold.renderers.terminal.options import TerminalOptions
 from workfold.renderers.terminal.outside import render_outside
 from workfold.renderers.terminal.summary import render_details, render_summary

@@ -1,140 +1,27 @@
-"""Describe coverage scope and reconciliation for terminal reports."""
+"""Verbose coverage reconciliation and public reporting façade."""
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping, Sequence
-from collections.abc import Set as AbstractSet
-from typing import TypeVar
 
 from workfold.app.collection import Collection
-from workfold.app.resolution import filesystem_timestamp_kinds, git_timestamp_kinds
+from workfold.app.coverage_scope import (
+    coverage_scope_details,
+    pruned_ignored_subtree_label,
+    record_label,
+    timestamp_label,
+)
+from workfold.app.coverage_scope import (
+    enabled_record_kinds as enabled_record_kinds,
+)
+from workfold.app.coverage_scope import (
+    enabled_sources as enabled_sources,
+)
+from workfold.app.coverage_status import coverage_status_label as coverage_status_label
 from workfold.collectors.base import DiagnosticSeverity
 from workfold.config import RawOptions
 from workfold.coverage import CapabilityStatus, CoverageLedger
-from workfold.models import RecordKind, Source, TimestampKind
-from workfold.reports import COMPLETE_COVERAGE_STATUS
-
-_ScopeValue = TypeVar("_ScopeValue", Source, RecordKind, TimestampKind)
-
-
-def enabled_sources(options: RawOptions) -> tuple[Source, ...]:
-    """Return the source kinds enabled by the resolved options."""
-
-    sources: list[Source] = []
-    if options.source.includes_git:
-        sources.append(Source.GIT)
-    if options.source.includes_filesystem:
-        sources.append(Source.FILESYSTEM)
-    return tuple(sources)
-
-
-def enabled_record_kinds(options: RawOptions) -> tuple[RecordKind, ...]:
-    """Return the record kinds enabled by the resolved options."""
-
-    kinds: list[RecordKind] = []
-    if options.source.includes_git:
-        if options.git_records.includes_commits and options.git_mode.includes_commit_markers:
-            kinds.append(RecordKind.COMMIT)
-        if options.git_records.includes_commits and options.git_mode.includes_file_changes:
-            kinds.append(RecordKind.GIT_FILE_CHANGE)
-        if options.git_records.includes_tags:
-            kinds.append(RecordKind.TAG)
-        if options.git_records.includes_reflogs:
-            kinds.append(RecordKind.REFLOG)
-    if options.source.includes_filesystem:
-        kinds.append(RecordKind.FILESYSTEM_ENTRY)
-    return tuple(kinds)
-
-
-def coverage_status_label(
-    collection: Collection,
-    ledger: CoverageLedger,
-    options: RawOptions,
-) -> str:
-    """Summarize whether enabled collectors completed their requested scope."""
-
-    error_count = sum(item.occurrence_count(DiagnosticSeverity.ERROR) for item in collection.diagnostics)
-    filesystem_inventory_incomplete = sum(
-        item.completeness_failure_count
-        for item in collection.diagnostics
-        if item.code == "git_filesystem_inventory_incomplete"
-    )
-    other_partial_warning_count = sum(
-        item.completeness_failure_count
-        for item in collection.diagnostics
-        if item.code != "git_filesystem_inventory_incomplete"
-    )
-    if error_count or filesystem_inventory_incomplete or other_partial_warning_count or ledger.has_operational_errors:
-        reasons: list[str] = []
-        if filesystem_inventory_incomplete:
-            reasons.append(
-                "filesystem inventory incomplete"
-                if filesystem_inventory_incomplete == 1
-                else f"{filesystem_inventory_incomplete:,} filesystem inventories incomplete"
-            )
-        if error_count:
-            reasons.append(_counted(error_count, "collection error"))
-        if other_partial_warning_count:
-            reasons.append(_counted(other_partial_warning_count, "collection warning"))
-        if not reasons:
-            reasons.append("collection incomplete")
-        label = "partial · " + " · ".join(reasons)
-    else:
-        label = COMPLETE_COVERAGE_STATUS
-    qualifiers: list[str] = []
-    if options.git_identities:
-        qualifiers.append("Git identity scope active")
-    if options.exclusions:
-        qualifiers.append("explicit exclusions active")
-    pruned_ignored_subtrees = (
-        collection.filesystem_result.accounting.pruned_ignored_subtrees
-        if collection.filesystem_result is not None
-        else 0
-    )
-    if pruned_ignored_subtrees:
-        qualifiers.append(_pruned_ignored_subtree_label(pruned_ignored_subtrees))
-    unsupported_capabilities: dict[str, str | None] = {}
-    for capability in collection.capabilities:
-        if capability.status is CapabilityStatus.UNSUPPORTED:
-            unsupported_capabilities.setdefault(capability.name, capability.note)
-    for name, note in unsupported_capabilities.items():
-        qualifier = f"{name} unavailable"
-        if note:
-            qualifier += f": {note}"
-        qualifiers.append(qualifier)
-    unavailable_by_kind = Counter[TimestampKind]()
-    for item in ledger.timestamps:
-        unavailable_by_kind[item.key.timestamp_kind] += item.unavailable
-    unavailable_by_kind += Counter()
-    if unavailable_by_kind:
-        qualifiers.append(_unavailable_timestamp_label(unavailable_by_kind))
-    if qualifiers:
-        label += "; " + "; ".join(qualifiers)
-    return label
-
-
-def _counted(count: int, singular: str) -> str:
-    return f"{count:,} {singular if count == 1 else singular + 's'}"
-
-
-def _pruned_ignored_subtree_label(count: int) -> str:
-    noun = "subtree" if count == 1 else "subtrees"
-    return f"{count:,} ignored filesystem {noun} pruned; descendant directories not counted"
-
-
-def _unavailable_timestamp_label(counts: Mapping[TimestampKind, int]) -> str:
-    total = sum(counts.values())
-    if len(counts) == 1:
-        kind, count = next(iter(counts.items()))
-        noun = "timestamp" if count == 1 else "timestamps"
-        record_noun = "source record" if count == 1 else "source records"
-        return f"{count:,} {_timestamp_label(kind)} {noun} unavailable on {record_noun}"
-    details = ", ".join(
-        f"{count:,} {_timestamp_label(kind)}" for kind, count in sorted(counts.items(), key=lambda item: item[0].value)
-    )
-    noun = "timestamp slot" if total == 1 else "timestamp slots"
-    return f"{total:,} {noun} unavailable on source records ({details})"
+from workfold.models import RecordKind, TimestampKind
 
 
 def coverage_details(
@@ -150,7 +37,7 @@ def coverage_details(
         f"timestamp values matching scope: {ledger.timestamp_values_matching_scope:,}",
         f"timestamp observations selected: {ledger.observations_selected:,}",
         f"activity markers plotted: {ledger.markers_plotted:,}",
-        *_coverage_scope_details(options),
+        *coverage_scope_details(options),
     ]
     coalesced_total = sum(item.coalesced_into_markers for item in ledger.timestamps)
     if coalesced_total:
@@ -169,7 +56,7 @@ def coverage_details(
         )
     for kind in sorted(record_counts, key=lambda item: item.value):
         counts = record_counts[kind]
-        line = f"{_record_label(kind)} discovered: {counts['discovered']:,}"
+        line = f"{record_label(kind)} discovered: {counts['discovered']:,}"
         outcomes = (
             ("eligible", "eligible"),
             ("ignored", "ignored"),
@@ -183,7 +70,7 @@ def coverage_details(
     if collection.filesystem_result is not None:
         pruned = collection.filesystem_result.accounting.pruned_ignored_subtrees
         if pruned:
-            details.append(_pruned_ignored_subtree_label(pruned))
+            details.append(pruned_ignored_subtree_label(pruned))
 
     timestamp_counts: dict[TimestampKind, Counter[str]] = {}
     for item in ledger.timestamps:
@@ -192,6 +79,7 @@ def coverage_details(
             examined=item.examined,
             values_read=item.values_read,
             scope_matches=item.scope_matches,
+            scope_errors=item.scope_errors,
             materialization_errors=item.materialization_errors,
             selected=item.selected,
             markers=item.markers,
@@ -202,13 +90,14 @@ def coverage_details(
         )
     for kind in sorted(timestamp_counts, key=lambda item: item.value):
         counts = timestamp_counts[kind]
-        line = f"{_timestamp_label(kind)} selected: {counts['selected']:,}"
+        line = f"{timestamp_label(kind)} selected: {counts['selected']:,}"
         extras = [
             f"{name.replace('_', ' ')}={counts[name]:,}"
             for name in (
                 "examined",
                 "values_read",
                 "scope_matches",
+                "scope_errors",
                 "materialization_errors",
                 "markers",
                 "unavailable",
@@ -227,24 +116,32 @@ def coverage_details(
     ):
         commit_result = collection.commit_result
         examined_commits = sum(item.examined_commits for item in commit_result.repository_accounting)
+        candidate_commits = sum(item.candidate_commits for item in commit_result.repository_accounting)
         selected_commits = sum(item.selected_commits for item in commit_result.repository_accounting)
         hydrated_commits = sum(item.hydrated_commits for item in commit_result.repository_accounting)
+        scope_evaluation_errors = sum(
+            count for item in commit_result.repository_accounting for _role, count in item.scope_evaluation_errors
+        )
         if not commit_result.repository_accounting:
-            examined_commits = selected_commits = hydrated_commits = len(commit_result.commits)
+            examined_commits = candidate_commits = selected_commits = hydrated_commits = len(commit_result.commits)
         details.append(
             "Git commit inputs for file-change derivation: "
             f"reachable={commit_result.discovered_commit_ids:,}, "
-            f"examined={examined_commits:,}, selected={selected_commits:,}, "
-            f"hydrated={hydrated_commits:,}, "
+            f"examined={examined_commits:,}, candidates={candidate_commits:,}, "
+            f"hydrated={hydrated_commits:,}, selected={selected_commits:,}, "
+            f"scope evaluation errors={scope_evaluation_errors:,}, "
             f"record errors={sum(item.record_errors for item in commit_result.repository_accounting):,}"
         )
         for accounting in commit_result.repository_accounting:
+            target_scope_errors = sum(count for _role, count in accounting.scope_evaluation_errors)
             details.append(
                 f"target Git commit inputs [git] {accounting.repository.root}: "
                 f"reachable={accounting.discovered_commit_ids:,}, "
                 f"examined={accounting.examined_commits:,}, "
-                f"selected={accounting.selected_commits:,}, "
+                f"candidates={accounting.candidate_commits:,}, "
                 f"hydrated={accounting.hydrated_commits:,}, "
+                f"selected={accounting.selected_commits:,}, "
+                f"scope evaluation errors={target_scope_errors:,}, "
                 f"unavailable={accounting.unavailable_objects:,}, "
                 f"parse failures={accounting.parse_errors:,}, "
                 f"operational errors={accounting.operational_errors:,}"
@@ -285,6 +182,7 @@ def coverage_details(
             f"examined={item.examined:,}, values read={item.values_read:,}, "
             f"unavailable={item.unavailable:,}, unsupported={item.unsupported:,}, "
             f"errors={item.extraction_errors:,}, scope matches={item.scope_matches:,}, "
+            f"scope errors={item.scope_errors:,}, "
             f"materialization errors={item.materialization_errors:,}, selected={item.selected:,}, "
             f"markers={item.markers:,}, coalesced={item.coalesced_into_markers:,}"
         )
@@ -336,58 +234,3 @@ def coverage_details(
             counts.append(f"{infos:,} info message(s)")
         details.append("operational diagnostics: " + ", ".join(counts))
     return tuple(details)
-
-
-def _coverage_scope_details(options: RawOptions) -> tuple[str, ...]:
-    requested_sources = set(enabled_sources(options))
-    requested_records = set(enabled_record_kinds(options))
-    requested_timestamps: set[TimestampKind] = set()
-    if options.source.includes_git:
-        if options.git_records.includes_commits:
-            requested_timestamps.update(git_timestamp_kinds(options.git_date))
-        if options.git_records.includes_tags:
-            requested_timestamps.add(TimestampKind.GIT_TAGGER)
-        if options.git_records.includes_reflogs:
-            requested_timestamps.add(TimestampKind.GIT_REFLOG)
-    if options.source.includes_filesystem:
-        requested_timestamps.update(filesystem_timestamp_kinds(options.filesystem_times))
-
-    source_names = {Source.GIT: "git", Source.FILESYSTEM: "filesystem"}
-    record_names = {
-        RecordKind.COMMIT: "commits",
-        RecordKind.GIT_FILE_CHANGE: "file changes",
-        RecordKind.TAG: "tags",
-        RecordKind.REFLOG: "reflogs",
-        RecordKind.FILESYSTEM_ENTRY: "filesystem entries",
-    }
-    timestamp_names = {kind: _timestamp_label(kind) for kind in TimestampKind}
-    return (
-        _scope_line("sources", tuple(Source), requested_sources, source_names),
-        _scope_line("record kinds", tuple(RecordKind), requested_records, record_names),
-        _scope_line("timestamp kinds", tuple(TimestampKind), requested_timestamps, timestamp_names),
-    )
-
-
-def _scope_line(
-    label: str,
-    all_values: Sequence[_ScopeValue],
-    requested: AbstractSet[_ScopeValue],
-    names: Mapping[_ScopeValue, str],
-) -> str:
-    requested_text = ", ".join(names[item] for item in all_values if item in requested)
-    omitted_text = ", ".join(names[item] for item in all_values if item not in requested)
-    return f"scope {label}: requested={requested_text or 'none'}; not requested={omitted_text or 'none'}"
-
-
-def _record_label(kind: RecordKind) -> str:
-    return {
-        RecordKind.COMMIT: "Git commits",
-        RecordKind.GIT_FILE_CHANGE: "Git file changes",
-        RecordKind.TAG: "Git tags",
-        RecordKind.REFLOG: "Git reflog entries",
-        RecordKind.FILESYSTEM_ENTRY: "filesystem entries",
-    }[kind]
-
-
-def _timestamp_label(kind: TimestampKind) -> str:
-    return kind.value.replace("git_", "Git ").replace("fs_", "filesystem ").replace("_", " ")

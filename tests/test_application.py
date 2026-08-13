@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Generator, Sequence
+from contextlib import contextmanager
 from datetime import datetime
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
+from typing import BinaryIO
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -681,9 +683,32 @@ def test_bounded_git_identity_filter_matches_only_in_range_identity(tmp_path: Pa
         "selected author identity",
         author_date=_git_date(instant),
         committer_date=_git_date(instant),
-        author_name="Ada Person",
+        author_name="Ada Üser",
         author_email="ADA@EXAMPLE.TEST",
     )
+
+    class RecordingRunner(GitRunner):
+        def __init__(self) -> None:
+            super().__init__(stream_output=False)
+            self.arguments: list[tuple[str, ...]] = []
+
+        def run(
+            self,
+            arguments: Sequence[str],
+            *,
+            cwd: Path,
+            input_data: bytes | None = None,
+            allowed_returncodes: Collection[int] = (0,),
+        ) -> subprocess.CompletedProcess[bytes]:
+            self.arguments.append(tuple(arguments))
+            return super().run(
+                arguments,
+                cwd=cwd,
+                input_data=input_data,
+                allowed_returncodes=allowed_returncodes,
+            )
+
+    runner = RecordingRunner()
     output = StringIO()
     options = parse_options(
         [
@@ -693,21 +718,45 @@ def test_bounded_git_identity_filter_matches_only_in_range_identity(tmp_path: Pa
             "--timezone",
             "Europe/Berlin",
             "--git-identity",
-            "ada@example",
+            "üser",
             "--coverage",
             "--verbose",
             "--no-color",
         ]
     )
 
-    assert run(options, stdout=output, stderr=StringIO(), terminal_width=100) == 0
+    assert (
+        run(
+            options,
+            stdout=output,
+            stderr=StringIO(),
+            terminal_width=100,
+            git_collector=GitCollector(runner),
+        )
+        == 0
+    )
 
     rendered = output.getvalue()
     _assert_summary_count(rendered, "Events", 1)
     assert "Git author selected: 1; examined=1, values read=1, scope matches=1, markers=1" in rendered
+    traversal = next(arguments for arguments in runner.arguments if arguments[0] == "rev-list")
+    assert traversal[3] == "--format=%H%x00%at%x00"
+    assert "%an" not in traversal[3]
+    assert any(arguments[0] == "cat-file" for arguments in runner.arguments)
 
 
-def test_selected_git_hydration_failure_preserves_read_and_scope_counts(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("identity_arguments", "coverage_detail"),
+    [
+        ((), "scope matches=1, materialization errors=1"),
+        (("--git-identity", "fixture author"), "scope errors=1"),
+    ],
+)
+def test_selected_git_hydration_failure_preserves_scope_accounting(
+    tmp_path: Path,
+    identity_arguments: tuple[str, ...],
+    coverage_detail: str,
+) -> None:
     repo = GitRepo.create(tmp_path / "repo")
     instant = datetime(2026, 8, 3, 10, 0, tzinfo=BERLIN)
     repo.commit(
@@ -755,6 +804,7 @@ def test_selected_git_hydration_failure_preserves_read_and_scope_counts(tmp_path
             "--coverage",
             "--verbose",
             "--no-color",
+            *identity_arguments,
         ]
     )
 
@@ -763,7 +813,7 @@ def test_selected_git_hydration_failure_preserves_read_and_scope_counts(tmp_path
             options,
             stdout=output,
             stderr=errors,
-            terminal_width=120,
+            terminal_width=500,
             git_collector=GitCollector(MissingObjectRunner(stream_output=False)),
         )
         == 0
@@ -772,7 +822,9 @@ def test_selected_git_hydration_failure_preserves_read_and_scope_counts(tmp_path
     rendered = output.getvalue()
     _assert_summary_count(rendered, "Events", 0)
     assert "Coverage  partial · 1 collection error" in rendered
-    assert "Git author selected: 0; examined=1, values read=1, scope matches=1, materialization errors=1" in rendered
+    assert f"Git author selected: 0; examined=1, values read=1, {coverage_detail}" in rendered
+    target_timestamps = next(line for line in rendered.splitlines() if "target timestamps [git]" in line)
+    assert f"scope errors={int(bool(identity_arguments))}" in target_timestamps
     assert "Git object is unavailable" in errors.getvalue()
 
 
@@ -843,7 +895,7 @@ def test_file_change_scope_reports_commit_inputs_and_derivation_per_repository(
     assert "Git file changes discovered: 1" in rendered
     assert (
         "Git commit inputs for file-change derivation: reachable=1, examined=1, "
-        "selected=1, hydrated=1, record errors=0" in rendered
+        "candidates=1, hydrated=1, selected=1, scope evaluation errors=0, record errors=0" in rendered
     )
     assert (
         "Git file-change derivation: commits requested=1, successfully parsed=1, "
@@ -851,7 +903,7 @@ def test_file_change_scope_reports_commit_inputs_and_derivation_per_repository(
     )
     assert (
         f"target Git commit inputs [git] {repo.path.resolve()}: reachable=1, "
-        "examined=1, selected=1, hydrated=1" in rendered
+        "examined=1, candidates=1, hydrated=1, selected=1, scope evaluation errors=0" in rendered
     )
     assert f"target Git file-change derivation [git] {repo.path.resolve()}:" in rendered
 
@@ -911,23 +963,26 @@ def test_bounded_file_changes_match_all_time_reference_and_diff_only_selected_co
             super().__init__()
             self.diff_inputs: list[bytes] = []
 
-        def run(
+        @contextmanager
+        def open_stdout(
             self,
             arguments: Sequence[str],
             *,
             cwd: Path,
-            input_data: bytes | None = None,
+            input_stream: BinaryIO | None = None,
             allowed_returncodes: Collection[int] = (0,),
-        ) -> subprocess.CompletedProcess[bytes]:
+        ) -> Generator[BinaryIO, None, None]:
             if arguments[0] == "diff-tree":
-                assert input_data is not None
-                self.diff_inputs.append(input_data)
-            return super().run(
+                assert input_stream is not None
+                self.diff_inputs.append(input_stream.read())
+                input_stream.seek(0)
+            with super().open_stdout(
                 arguments,
                 cwd=cwd,
-                input_data=input_data,
+                input_stream=input_stream,
                 allowed_returncodes=allowed_returncodes,
-            )
+            ) as stdout:
+                yield stdout
 
     def collect_observations(
         selected_scope: ObservationScope,
@@ -1095,20 +1150,22 @@ def test_file_change_failure_accounts_for_commits_without_inventing_change_recor
     )
 
     class FailureRunner(GitRunner):
-        def run(
+        @contextmanager
+        def open_stdout(
             self,
             arguments: Sequence[str],
             *,
             cwd: Path,
-            input_data: bytes | None = None,
+            input_stream: BinaryIO | None = None,
             allowed_returncodes: Collection[int] = (0,),
-        ) -> subprocess.CompletedProcess[bytes]:
+        ) -> Generator[BinaryIO, None, None]:
             raise GitCommandError(
                 code="git_command_failed",
                 message="diff failed",
                 command=tuple(arguments),
                 cwd=cwd,
             )
+            yield BytesIO()
 
     output = StringIO()
     errors = StringIO()

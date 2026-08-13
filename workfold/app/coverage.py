@@ -7,7 +7,7 @@ from collections.abc import Mapping
 
 from workfold.app.collection import Collection
 from workfold.app.resolution import git_timestamp_kinds
-from workfold.collectors.git_objects import GitSignatureRole
+from workfold.collectors.git_core.object_model import GitSignatureRole
 from workfold.config import RawOptions
 from workfold.coverage import (
     CoverageLedger,
@@ -55,6 +55,9 @@ def build_coverage(
                         },
                         unavailable={},
                         scope_matches={kind: accounting.scope_match_count(_git_role(kind)) for kind in timestamp_kinds},
+                        scope_errors={
+                            kind: accounting.scope_evaluation_error_count(_git_role(kind)) for kind in timestamp_kinds
+                        },
                         materialization_errors={
                             kind: accounting.materialization_error_count(_git_role(kind)) for kind in timestamp_kinds
                         },
@@ -224,6 +227,7 @@ def _build_partition_coverage(
     materialization_errors: Mapping[TimestampKind, int],
     observations: Mapping[ObservationCountKey, int],
     plotting: Mapping[PlottingCountKey, int],
+    scope_errors: Mapping[TimestampKind, int] | None = None,
 ) -> CoverageLedger:
     if discovered != eligible + record_errors:
         raise RuntimeError(f"{record_kind.value} record accounting does not reconcile")
@@ -246,6 +250,7 @@ def _build_partition_coverage(
         builder.extraction_outcome(key, ExtractionDisposition.UNAVAILABLE, unavailable_count)
         builder.extraction_outcome(key, ExtractionDisposition.ERROR, extraction_errors)
         builder.match_scope(key, scope_matches.get(kind, 0))
+        builder.scope_error(key, (scope_errors or {}).get(kind, 0))
         builder.materialization_error(key, materialization_errors.get(kind, 0))
         builder.select_observation(key, _pipeline_observation_count(observations, key))
         for disposition in PlottingDisposition:

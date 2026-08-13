@@ -6,7 +6,7 @@ import os
 import stat
 from pathlib import Path
 
-from workfold.collectors.git import GitRepository
+from workfold.collectors.git_core.repository import GitRepository
 from workfold.collectors.reflogs.models import GitReflogReadError
 
 

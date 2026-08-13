@@ -3,13 +3,30 @@
 from __future__ import annotations
 
 import os
+import tempfile
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
-from workfold.collectors.base import CollectorDiagnostic, DiagnosticBuffer
-from workfold.collectors.git import GitCommandError, GitRepository, GitRunner
-from workfold.collectors.git_objects import GitObjectParseError, parse_cat_file_batch
+from workfold.collectors.base import CollectorDiagnostic, DiagnosticBuffer, DiagnosticSeverity
+from workfold.collectors.git_core.cat_file import parse_cat_file_batch
+from workfold.collectors.git_core.command_error import GitCommandError
+from workfold.collectors.git_core.compact_object import read_cat_file_batch_compact_object
+from workfold.collectors.git_core.object_model import (
+    CompactBatchObject,
+    CompactBatchResult,
+    GitObjectParseError,
+    InvalidBatchObject,
+    UnavailableBatchObject,
+    UnexpectedBatchObject,
+)
+from workfold.collectors.git_core.repository import GitRepository
+from workfold.collectors.git_core.runner import GitRunner
 from workfold.collectors.tags.models import CollectedGitTag, DiscoveredGitTag
 from workfold.collectors.tags.parser import GitTagParseError, parse_tag_object
+
+
+class _GitTagObjectReadError(RuntimeError):
+    """Local I/O failure while preparing or consuming a tag object stream."""
 
 
 def command_diagnostic(
@@ -36,7 +53,6 @@ def command_diagnostic(
 class TagBatchOutcome:
     """Records and accounting extracted from one bounded ref batch."""
 
-    collected: tuple[CollectedGitTag, ...]
     captured_tags: int
     captured_timestamps: int
     unavailable_timestamps: int
@@ -50,14 +66,14 @@ def collect_tag_batch(
     refs: tuple[DiscoveredGitTag, ...],
     runner: GitRunner,
     diagnostics: DiagnosticBuffer,
+    record_consumer: Callable[[CollectedGitTag], None],
 ) -> TagBatchOutcome:
     """Collect lightweight refs and read annotated tag objects in one batch."""
 
     lightweight_refs = tuple(item for item in refs if not item.annotated)
     annotated_refs = tuple(item for item in refs if item.annotated)
-    collected: list[CollectedGitTag] = [
-        CollectedGitTag(repository, item, item.object_id, None) for item in lightweight_refs
-    ]
+    for item in lightweight_refs:
+        record_consumer(CollectedGitTag(repository, item, item.object_id, None))
     captured_tags = len(lightweight_refs)
     captured_timestamps = 0
     unavailable_timestamps = len(lightweight_refs)
@@ -65,7 +81,6 @@ def collect_tag_batch(
     parse_errors = 0
     if not annotated_refs:
         return TagBatchOutcome(
-            tuple(collected),
             captured_tags,
             captured_timestamps,
             unavailable_timestamps,
@@ -74,24 +89,102 @@ def collect_tag_batch(
         )
 
     object_ids = tuple(dict.fromkeys(item.object_id for item in annotated_refs))
+    refs_by_object: dict[str, list[DiscoveredGitTag]] = {}
+    for ref in annotated_refs:
+        refs_by_object.setdefault(ref.object_id, []).append(ref)
+    processed_object_ids: set[str] = set()
+    failed = False
     try:
-        batch_output = runner.run(
-            ("cat-file", "--batch"),
-            cwd=repository.root,
-            input_data=b"".join(value.encode("ascii") + b"\n" for value in object_ids),
-        ).stdout
-        batch = parse_cat_file_batch(batch_output, object_ids)
+        for result in _iter_tag_objects(repository, object_ids, runner):
+            object_id = result.requested_id if isinstance(result, UnavailableBatchObject) else result.object_id
+            processed_object_ids.add(object_id)
+            affected = refs_by_object[object_id]
+            if isinstance(result, UnavailableBatchObject):
+                unavailable_objects += 1
+                parse_errors += len(affected)
+                diagnostics.append(
+                    CollectorDiagnostic(
+                        code="git_tag_object_unavailable",
+                        stage="git_tag_object_read",
+                        target=os.fspath(repository.root),
+                        provenance_id=result.requested_id,
+                        message=f"Git tag object is unavailable ({result.reason})",
+                        hint="Workfold will not fetch missing objects.",
+                    )
+                )
+                continue
+            if isinstance(result, UnexpectedBatchObject):
+                parse_errors += len(affected)
+                diagnostics.append(
+                    CollectorDiagnostic(
+                        code="git_object_not_tag",
+                        stage="git_tag_object_parse",
+                        target=os.fspath(repository.root),
+                        provenance_id=result.object_id,
+                        message=f"tag ref object has unexpected type {result.object_type!r}",
+                    )
+                )
+                continue
+            if isinstance(result, InvalidBatchObject):
+                parse_errors += len(affected)
+                diagnostics.append(
+                    CollectorDiagnostic(
+                        code=result.code,
+                        stage="git_tag_object_parse",
+                        target=os.fspath(repository.root),
+                        provenance_id=result.object_id,
+                        message=result.message,
+                    )
+                )
+                continue
+            try:
+                parsed = parse_tag_object(result.object_id, result.data)
+            except GitTagParseError as error:
+                parse_errors += len(affected)
+                diagnostics.append(
+                    CollectorDiagnostic(
+                        code=error.code,
+                        stage="git_tag_object_parse",
+                        target=os.fspath(repository.root),
+                        provenance_id=error.object_id,
+                        message=str(error),
+                    )
+                )
+                continue
+            subject = parsed.subject
+            if result.subject_truncated:
+                subject = f"{subject}…"
+                diagnostics.append(
+                    CollectorDiagnostic(
+                        code="git_tag_subject_truncated",
+                        stage="git_tag_object_parse",
+                        target=os.fspath(repository.root),
+                        provenance_id=result.object_id,
+                        message=(
+                            "tag subject exceeds the retained metadata limit; "
+                            "the tagger timestamp and identity were preserved"
+                        ),
+                        severity=DiagnosticSeverity.WARNING,
+                    )
+                )
+            captured_tags += len(affected)
+            if parsed.tagger is None:
+                unavailable_timestamps += len(affected)
+            else:
+                captured_timestamps += len(affected)
+            for ref in affected:
+                record_consumer(
+                    CollectedGitTag(
+                        repository=repository,
+                        ref=ref,
+                        target_id=parsed.target_id,
+                        tagger=parsed.tagger,
+                        subject=subject,
+                    )
+                )
     except GitCommandError as error:
         diagnostics.append(command_diagnostic(error, repository=repository, stage="git_tag_object_read"))
-        return TagBatchOutcome(
-            tuple(collected),
-            captured_tags,
-            captured_timestamps,
-            unavailable_timestamps,
-            unavailable_objects,
-            len(annotated_refs),
-            True,
-        )
+        failed = True
     except GitObjectParseError as error:
         diagnostics.append(
             CollectorDiagnostic(
@@ -102,81 +195,76 @@ def collect_tag_batch(
                 message=str(error),
             )
         )
-        return TagBatchOutcome(
-            tuple(collected),
-            captured_tags,
-            captured_timestamps,
-            unavailable_timestamps,
-            unavailable_objects,
-            len(annotated_refs),
-            True,
-        )
-
-    refs_by_object: dict[str, list[DiscoveredGitTag]] = {}
-    for ref in annotated_refs:
-        refs_by_object.setdefault(ref.object_id, []).append(ref)
-    for missing in batch.unavailable:
-        affected = refs_by_object[missing.requested_id]
-        unavailable_objects += 1
-        parse_errors += len(affected)
+        failed = True
+    except _GitTagObjectReadError as error:
         diagnostics.append(
             CollectorDiagnostic(
-                code="git_tag_object_unavailable",
+                code="git_tag_object_io_error",
                 stage="git_tag_object_read",
                 target=os.fspath(repository.root),
-                provenance_id=missing.requested_id,
-                message=f"Git tag object is unavailable ({missing.reason})",
-                hint="Workfold will not fetch missing objects.",
+                message=str(error),
             )
         )
-    for batch_object in batch.objects:
-        affected = refs_by_object[batch_object.object_id]
-        if batch_object.object_type != "tag":
-            parse_errors += len(affected)
-            diagnostics.append(
-                CollectorDiagnostic(
-                    code="git_object_not_tag",
-                    stage="git_tag_object_parse",
-                    target=os.fspath(repository.root),
-                    provenance_id=batch_object.object_id,
-                    message=f"tag ref object has unexpected type {batch_object.object_type!r}",
-                )
-            )
-            continue
-        try:
-            parsed = parse_tag_object(batch_object.object_id, batch_object.data)
-        except GitTagParseError as error:
-            parse_errors += len(affected)
-            diagnostics.append(
-                CollectorDiagnostic(
-                    code=error.code,
-                    stage="git_tag_object_parse",
-                    target=os.fspath(repository.root),
-                    provenance_id=error.object_id,
-                    message=str(error),
-                )
-            )
-            continue
-        captured_tags += len(affected)
-        if parsed.tagger is None:
-            unavailable_timestamps += len(affected)
-        else:
-            captured_timestamps += len(affected)
-        collected.extend(
-            CollectedGitTag(
-                repository=repository,
-                ref=ref,
-                target_id=parsed.target_id,
-                tagger=parsed.tagger,
-                subject=parsed.subject,
-            )
-            for ref in affected
+        failed = True
+    if failed:
+        parse_errors += sum(
+            len(refs_by_object[object_id]) for object_id in object_ids if object_id not in processed_object_ids
         )
     return TagBatchOutcome(
-        tuple(collected),
         captured_tags,
         captured_timestamps,
         unavailable_timestamps,
         unavailable_objects,
         parse_errors,
+        failed,
     )
+
+
+def _iter_tag_objects(
+    repository: GitRepository,
+    object_ids: tuple[str, ...],
+    runner: GitRunner,
+) -> Iterator[CompactBatchResult]:
+    try:
+        if not runner.streams_subprocess_output:
+            # Test/custom runner adapters cannot expose a live pipe. Keep their
+            # compatibility path bounded by the configured tag-ref batch.
+            batch_output = runner.run(
+                ("cat-file", "--batch"),
+                cwd=repository.root,
+                input_data=b"".join(value.encode("ascii") + b"\n" for value in object_ids),
+            ).stdout
+            batch = parse_cat_file_batch(batch_output, object_ids)
+            for missing in batch.unavailable:
+                yield missing
+            for item in batch.objects:
+                if item.object_type != "tag":
+                    yield UnexpectedBatchObject(item.object_id, item.object_type)
+                else:
+                    yield CompactBatchObject(item.object_id, item.object_type, item.data)
+            return
+
+        with tempfile.TemporaryFile() as requests:
+            for object_id in object_ids:
+                requests.write(object_id.encode("ascii") + b"\n")
+            requests.seek(0)
+            with runner.open_stdout(
+                ("cat-file", "--batch=%(objectname) %(objecttype) %(objectsize)"),
+                cwd=repository.root,
+                input_stream=requests,
+            ) as stdout:
+                for object_id in object_ids:
+                    yield read_cat_file_batch_compact_object(
+                        stdout,
+                        expected_object_id=object_id,
+                        expected_object_type="tag",
+                        retained_header_names=(b"object", b"type", b"tag", b"tagger"),
+                        object_label="tag",
+                    )
+                if stdout.read(1):
+                    raise GitObjectParseError(
+                        "unexpected_cat_file_output",
+                        "cat-file batch returned trailing unrequested output",
+                    )
+    except OSError as error:
+        raise _GitTagObjectReadError(f"could not prepare or read the Git tag object stream: {error}") from error

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from workfold.app.git_commit_selection import GitCommitSelection, should_preselect_commits
+from workfold.app.git_commit_selection import GitCommitSelection
 from workfold.app.resolution import filesystem_timestamp_kinds, git_timestamp_kinds
 from workfold.collectors.base import CollectorDiagnostic
 from workfold.collectors.filesystem import FilesystemCollectionResult, FilesystemCollector
@@ -92,9 +92,7 @@ def collect(
             file_results: list[GitFileChangeCollectionResult] = []
             resolved_file_change_collector = file_change_collector or GitFileChangeCollector()
             commit_selection = (
-                GitCommitSelection(observation_scope, timestamp_kinds)
-                if observation_scope is not None and should_preselect_commits(observation_scope)
-                else None
+                GitCommitSelection(observation_scope, timestamp_kinds) if observation_scope is not None else None
             )
 
             def consume_file_changes(changes: tuple[CollectedGitFileChange, ...]) -> None:
@@ -121,7 +119,12 @@ def collect(
                 ref_scope=options.ref_scope,
                 commit_consumer=consume_commits,
                 scan_spec=commit_selection.scan_spec if commit_selection is not None else None,
-                commit_filter=commit_selection.select if commit_selection is not None else None,
+                commit_filter=commit_selection.select_candidates if commit_selection is not None else None,
+                materialized_filter=(
+                    commit_selection.select_materialized
+                    if commit_selection is not None and commit_selection.requires_materialized_selection
+                    else None
+                ),
                 retain_commits=False,
             )
             repositories = commit_result.repositories
