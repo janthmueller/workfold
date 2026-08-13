@@ -82,6 +82,7 @@ venv = ".venv"
 
 [tool.pytest.ini_options]
 addopts = ["-ra", "--strict-config", "--strict-markers"]
+pythonpath = ["tests"]
 testpaths = ["tests"]
 
 [tool.coverage.run]

@@ -170,4 +170,7 @@ uv run pyright
 ```
 
 Use `nix run .#docs-dev` for the documentation site and
-`nix run .#docs-check` to validate it.
+`nix run .#docs-check` to validate it. The
+[architecture guide](https://janthmueller.github.io/workfold/reference/architecture/)
+documents the package boundaries, dependency rules, data pipeline, and test
+layout.

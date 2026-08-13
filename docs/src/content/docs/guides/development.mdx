@@ -14,17 +14,23 @@ The project deliberately uses a flat package layout:
 
 ```text
 workfold/
-├── workfold/       # Python package and CLI implementation
-│   ├── collectors/
-│   └── renderers/
-├── tests/
-├── docs/           # Astro Starlight product documentation
-├── README.md       # installation and quick-start overview
+├── workfold/            # Python import package
+│   ├── domain/          # technology-neutral facts and invariants
+│   ├── collection/      # Git and filesystem adapters
+│   ├── folding/         # classification, clustering, and aggregation
+│   ├── application/     # use-case orchestration and neutral reports
+│   ├── reporting/       # terminal output adapter
+│   ├── configuration/   # option and TOML resolution
+│   └── cli/             # entrypoint and composition boundary
+├── tests/               # architecture, unit, integration, and end-to-end
+├── docs/                # Astro Starlight product documentation
+├── README.md            # installation and quick-start overview
 └── pyproject.toml
 ```
 
 There is no `src/` wrapper. Packaging discovers `workfold*` directly from the
-repository root.
+repository root. The [architecture reference](/reference/architecture/)
+documents the complete dependency graph and placement rules.
 
 ## Set up the environment
 
@@ -134,30 +140,26 @@ for a known out-of-range timestamp. Production runs do not retain the full
 record or observation inventory after its counters have been updated. Batch
 sizes are memory controls, never collection, query, or chart semantics.
 
-The public `collectors.git`, `collectors.git_objects`,
-`collectors.git_changes`, and `git_core.commits` modules are thin import
-façades for the current collector API. Alpha releases do not retain obsolete
-parser signatures solely through these façades. Implementation modules in
-`collectors/git_core/` separate immutable models and accounting, lightweight
-revision scans, raw commit parsing, `cat-file` envelope handling, bounded
-object extraction, per-repository commit hydration, provisional change
-spooling, subprocess-stream lifecycle, and multi-repository collector
-orchestration. Collector internals import those focused modules directly. Keep
-protocol state machines independent from domain conversion and coverage; do
-not grow the façades back into multi-purpose implementation modules.
+Git implementation lives under `collection/git/`. Its `commits`, `changes`,
+`objects`, `tags`, and `reflogs` subpackages own independently named protocol
+and accounting decisions while sharing repository and process machinery. Do
+not recreate parallel top-level Git façades or a catch-all `git_core` tree.
+Keep protocol state machines independent from normalized domain conversion and
+coverage accounting.
 
 Configuration resolves time, mode, and the evidence preset as three separate
 axes. The preset defaults to `standard` and never rewrites time or mode;
 `portable` is intentionally valid only with Git mode.
 
-`config_types` owns immutable option values and built-in defaults,
-`config_parsing` owns individual value grammars, and the public `config` module
-owns cross-option resolution and re-exports the supported configuration API.
-Likewise, `settings.cli_parser` declares argparse presentation while `cli`
-handles configuration layering and runtime dispatch. Keep argparse details out
-of domain validation.
+Within `configuration/`, `options` owns immutable option values and built-in
+defaults, `parsing` owns individual value grammars, `files` and `layers` own
+TOML discovery and precedence, and `resolution` owns cross-option validation.
+`cli/parser` declares argparse presentation while `cli/main` performs runtime
+dispatch. `RunOptions` groups collection and folding choices while its nested
+terminal preferences remain presentation input. Keep argparse details out of
+configuration and domain validation.
 
-TOML defaults are resolved before `RawOptions` validation as built-ins, the
+TOML defaults are resolved before `RunOptions` validation as built-ins, the
 platform global file, the nearest selected-path project file, and explicit CLI
 values. Each setting retains its origin for `--show-config`; configuration is
 merged as typed data and is never converted into synthetic command-line
@@ -166,12 +168,13 @@ schema. Keep discovery, parsing, precedence, CLI materialization, and final
 domain validation separate so unknown keys and invalid cross-option states
 cannot be silently ignored.
 
-Coverage data and coverage prose are also separate. `coverage_models` defines
-immutable partitions and reconciliation invariants; `coverage_builder` owns
-mutable collection-time accumulation; `coverage` is their public façade. In
-the application layer, `coverage_scope` names requested evidence,
-`coverage_status` produces the compact completeness statement, and
-`coverage_text` composes the verbose ledger.
+Coverage data and coverage prose are also separate. `domain/coverage/models`
+defines immutable partitions and reconciliation invariants, while
+`domain/coverage/builder` owns mutable collection-time accumulation and ledger
+merging. `application/coverage/reconciliation` combines collector and pipeline
+accounting without choosing words for it. The terminal adapter owns requested
+scope descriptions, the compact completeness statement, and verbose coverage
+text.
 
 Filesystem path inventory and filesystem metadata extraction are distinct
 boundaries. For a file/symlink scan that respects ignore rules inside a Git
@@ -189,7 +192,7 @@ entries traverse them instead. Scans outside Git and scans that include ignored
 entries use the native walker alone. Keep the fast inventory and native
 reference behavior equivalent for requested regular files, and never
 reintroduce per-entry path resolution for repository/admin containment.
-`FilesystemCollector` resolves and schedules roots; `filesystem.root_collector`
+`FilesystemCollector` resolves and schedules roots; `collection/filesystem/root`
 applies entry, ignore, and extraction policy to one prepared root.
 
 Filesystem record discovery is defined by requested metadata-bearing entry

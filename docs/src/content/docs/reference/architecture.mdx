@@ -1,0 +1,213 @@
+---
+title: Architecture
+description: Understand Workfold's module boundaries, dependency rules, and event pipeline.
+---
+
+Workfold is a **layered modular monolith with capability-oriented adapters**. It
+is one Python package, one process, and one distributable CLI. Top-level
+packages express dependency direction, while Git and filesystem internals are
+grouped by the capabilities they implement.
+
+The design combines three ideas:
+
+- modules hide decisions that can change independently, following
+  [information hiding](https://doi.org/10.1145/361598.361623);
+- Git, filesystem, operating-system, and terminal behavior remain at the edges
+  of a technology-neutral domain and folding core, borrowing from
+  [ports and adapters](https://alistair.cockburn.us/hexagonal-architecture);
+- timestamp processing remains a sequence of explicit stages, following the
+  [pipes and filters](https://www.enterpriseintegrationpatterns.com/patterns/messaging/PipesAndFilters.html)
+  style.
+
+Workfold does not reproduce every layer or abstraction from those patterns.
+The boundaries exist to protect observable behavior and make the code easier
+to navigate, not to add ceremony.
+
+## Source tree
+
+The repository uses Python's supported flat package layout: the import package
+lives directly in `workfold/`, with no additional `src/` directory.
+
+```text
+workfold/
+├── __init__.py
+├── __main__.py
+├── cli/                    # argparse, invocation, composition, process output
+├── configuration/          # typed options, TOML layers, parsing, resolution
+├── domain/                 # observations, provenance, time, schedule, coverage
+├── collection/
+│   ├── filesystem/         # current metadata, discovery, ignore rules, statx
+│   └── git/                # commits, changes, objects, tags, reflogs, processes
+├── folding/                # classify, cluster, aggregate, and lay out markers
+├── application/            # execute a request and build a neutral report
+│   └── coverage/           # reconcile collector and pipeline accounting
+└── reporting/
+    └── terminal/           # Rich chart, prose, summary, and event list
+```
+
+The extra `workfold/workfold` visible from the repository parent is expected:
+the outer directory is the Git project and the inner directory is the Python
+import package. PyPA calls this a
+[flat layout](https://packaging.python.org/en/latest/discussions/src-layout-vs-flat-layout/).
+
+## Dependency direction
+
+Dependencies point toward stable data and policy. The permitted relationships
+are:
+
+| Package | May depend on |
+| --- | --- |
+| `domain` | `domain` and the Python standard library |
+| `folding` | `domain`, `folding` |
+| `configuration` | `domain`, `folding`, `configuration` |
+| `collection` | `domain`, `collection` |
+| `application` | `domain`, `folding`, `configuration`, `collection`, `application` |
+| `reporting` | `domain`, `folding`, `configuration`, `application`, `reporting` |
+| `cli` | every package; it is the composition boundary |
+
+Two consequences are especially important:
+
+1. Domain and folding code cannot import Git, filesystem, subprocess, Rich,
+   argparse, or configuration-file implementations.
+2. Collectors emit normalized observations and accounting; they cannot decide
+   terminal layout or render output.
+
+`tests/architecture/test_dependencies.py` parses imports and fails when a
+change violates this graph. It also rejects module cycles, cross-imports
+between the Git and filesystem adapters, third-party dependencies in the core,
+and argparse imports outside `cli`. Directory names alone therefore do not
+carry the architecture—the dependency test makes it executable.
+
+## Processing pipeline
+
+One invocation flows through these stages:
+
+```text
+CLI and layered configuration
+            │
+            ▼
+resolve paths, timezone, time scope, schedule, and evidence scope
+            │
+            ▼
+Git/filesystem record discovery and timestamp extraction
+            │
+            ▼
+normalized, provenance-preserving timestamp observations
+            │
+            ▼
+scope selection → role coalescing → schedule classification
+            │
+            ▼
+weekday projection → time clustering → bounded aggregation
+            │
+            ▼
+renderer-neutral report and reconciled coverage ledger
+            │
+            ▼
+terminal renderer
+```
+
+The shared normalized observation is the central port between collection and
+the rest of the program. Collection-specific records may contain additional
+implementation state, but that state cannot leak into folding or terminal
+formatting.
+
+The report is also renderer-neutral. A future renderer may consume it, but the
+MVP exposes only terminal output and does not contain a web server or browser
+application.
+
+## Package responsibilities
+
+### Domain
+
+`domain` owns facts and invariant-preserving value objects: timestamp kinds,
+record provenance, exact UTC instants, observation scope, schedules, Git ref
+scope, identities, and the coverage ledger. It performs no source discovery
+and produces no terminal text.
+
+### Collection
+
+`collection.git` owns local Git subprocess protocols and Git-derived records.
+Its subpackages separate commits, file changes, raw objects, tags, and reflogs.
+They share repository and process machinery without exposing a second
+parallel `git_core` hierarchy.
+
+`collection.filesystem` owns current-snapshot discovery and metadata. Ignore
+integration is nested under this adapter because ignore rules affect only
+filesystem discovery; they never filter historical Git records. Native Linux
+birth-time access is an implementation detail of filesystem metadata.
+
+### Folding
+
+`folding` accepts classified markers and turns them into the sparse weekly
+layout. Band assignment, clustering, exact count compaction, projection, and
+temporary spill storage live here. It does not know how timestamps were
+collected or how Rich will display the result.
+
+### Application
+
+`application` coordinates one use case: resolve the request, run enabled
+collectors, classify observations, aggregate markers, reconcile coverage, and
+construct the neutral report. A `CollectorServices` bundle supplies its
+collector ports. Application code neither constructs production adapters nor
+uses optional collaborators with hidden defaults.
+
+The report retains structured options, resolved time selection, timezone,
+schedule, collection accounting, coverage, and provenance. It does not flatten
+those facts into terminal labels. `ReportRequirements` makes the bounded detail
+needed by a renderer explicit without importing terminal choices into the
+application layer.
+
+### Reporting and CLI
+
+`reporting.terminal` is the output adapter. Only this package creates Rich
+objects, assigns terminal styles, or turns report facts into scope and coverage
+prose. Generic terminal-safe text handling is in `reporting.sanitization` and
+is shared with configuration display.
+
+`cli` is the outer composition boundary. It owns argparse, standard-stream
+handling, effective configuration display, diagnostic output, process exit
+codes, and production adapter construction. It translates the argparse
+namespace into plain configuration values, builds `CollectorServices`, and
+maps terminal preferences to `ReportRequirements` and `TerminalOptions`.
+`__main__.py` remains a tiny delegation to this package.
+
+## Tests
+
+Tests mirror the architecture:
+
+```text
+tests/
+├── architecture/           # import and package-shape contracts
+├── unit/                   # isolated domain, folding, config, and rendering
+├── integration/            # real Git/filesystem and application boundaries
+├── end_to_end/             # complete user-visible invocations
+└── support/                # deterministic repository fixtures
+```
+
+The distinction describes the scope of a test, not whether it is fast. Git
+integration tests intentionally create local fixture repositories with exact
+author and committer timestamps.
+
+## Placement rules
+
+When adding code, choose the package by the decision it owns:
+
+- a new timestamp fact or invariant belongs in `domain`;
+- a new Git or filesystem mechanism belongs below its collection adapter;
+- a transformation of normalized events belongs in `folding`;
+- orchestration across capabilities belongs in `application`;
+- terminal layout or styling belongs in `reporting.terminal`;
+- parsing a flag or printing a process diagnostic belongs in `cli`;
+- loading, merging, or validating configurable values belongs in
+  `configuration`.
+
+Prefer specific names such as `revisions.py`, `metadata.py`, or `reconciliation.py`.
+Do not introduce catch-all `utils.py`, `helpers.py`, `types.py`, `base.py`, or
+`core/` modules. A large cohesive state machine is preferable to several files
+with unclear ownership; split it only when the resulting responsibilities can
+be named independently.
+
+Workfold remains a modular monolith. Introducing a service, plugin system,
+persistent database, or framework layer requires an actual product need rather
+than anticipated reuse.

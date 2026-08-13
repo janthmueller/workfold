@@ -25,6 +25,7 @@ export default defineConfig({
             { label: 'Overview', link: '/' },
             { label: 'Using Workfold', link: '/guides/usage/' },
             { label: 'Development', link: '/guides/development/' },
+            { label: 'Architecture', link: '/reference/architecture/' },
           ],
         },
         {
