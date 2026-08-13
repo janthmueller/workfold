@@ -74,8 +74,8 @@ def git_file_change_id(
     commit_oid: str,
     diff_basis: str,
     status: str,
-    old_path: str | None,
-    new_path: str | None,
+    old_path: str | bytes | None,
+    new_path: str | bytes | None,
 ) -> str:
     """Identify one file change relative to its exact diff basis."""
 

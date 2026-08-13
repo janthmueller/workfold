@@ -4,6 +4,7 @@ import os
 import stat
 from collections.abc import Generator, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn, cast
 
@@ -124,6 +125,79 @@ class NativeOnlyIgnoreService(GitIgnoreService):
             inventory_visitor=None,
             transactional_inventory=False,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class IdentitylessSnapshot:
+    """Model the identity-free stat result returned by DirEntry on Windows."""
+
+    st_mode: int
+    st_dev: int
+    st_ino: int
+    st_atime_ns: int
+    st_mtime_ns: int
+    st_ctime_ns: int
+
+    @classmethod
+    def from_snapshot(cls, snapshot: StatSnapshot) -> IdentitylessSnapshot:
+        return cls(
+            st_mode=snapshot.st_mode,
+            st_dev=0,
+            st_ino=0,
+            st_atime_ns=snapshot.st_atime_ns,
+            st_mtime_ns=snapshot.st_mtime_ns,
+            st_ctime_ns=snapshot.st_ctime_ns,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class IdentitylessDirectoryEntry:
+    entry: DirectoryEntry
+
+    @property
+    def name(self) -> str:
+        return self.entry.name
+
+    def stat(self, *, follow_symlinks: bool = True) -> StatSnapshot:
+        snapshot = self.entry.stat(follow_symlinks=follow_symlinks)
+        if not follow_symlinks and stat.S_ISDIR(snapshot.st_mode):
+            return IdentitylessSnapshot.from_snapshot(snapshot)
+        return snapshot
+
+
+def test_identityless_directory_entry_is_refreshed_before_queueing(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    child = root / "child"
+    child.mkdir(parents=True)
+    nested_file = child / "work.txt"
+    nested_file.write_text("work", encoding="utf-8")
+    lstat_calls: list[Path] = []
+
+    def recording_lstat(path: Path) -> os.stat_result:
+        lstat_calls.append(path)
+        return os.lstat(path)
+
+    @contextmanager
+    def identityless_scandir(
+        path: Path,
+        expected_snapshot: StatSnapshot,
+    ) -> Generator[Iterator[DirectoryEntry], None, None]:
+        with scandir_no_follow(path, expected_snapshot) as iterator:
+            yield (IdentitylessDirectoryEntry(entry) for entry in iterator)
+
+    result = FilesystemCollector(
+        lstat_reader=recording_lstat,
+        scandir_reader=identityless_scandir,
+    ).collect(
+        (root,),
+        timestamp_kinds=FS_MODIFIED,
+        respect_gitignore=False,
+        include_ignored=True,
+    )
+
+    assert nested_file in {item.path for item in result.eligible_origins}
+    assert child in lstat_calls
+    assert not result.diagnostics
 
 
 def test_quick_scan_accounts_for_regular_ignored_excluded_and_admin_entries(tmp_path: Path) -> None:

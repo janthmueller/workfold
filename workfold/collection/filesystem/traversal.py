@@ -32,6 +32,7 @@ from workfold.collection.filesystem.models import CollectedFilesystemEntry
 from workfold.collection.filesystem.scan import (
     DirectoryEntry,
     DirectorySafetyError,
+    LstatReader,
     PendingEntry,
     RootSnapshot,
     ScandirReader,
@@ -67,13 +68,14 @@ def scandir_no_follow(
                 ) from error
             raise
         try:
-            _validate_directory_identity(path, os.fstat(descriptor), expected_snapshot)
+            opened_snapshot = os.fstat(descriptor)
+            _validate_directory_identity(path, opened_snapshot, expected_snapshot)
             with os.scandir(descriptor) as iterator:
                 if statx_reader is None:
                     yield iterator
                 else:
                     yield (_StatxDirectoryEntry(entry, descriptor, path, statx_reader) for entry in iterator)
-            _validate_directory_identity(path, _revalidated_directory(path), expected_snapshot)
+            _validate_directory_identity(path, _revalidated_directory(path), opened_snapshot)
         finally:
             os.close(descriptor)
         return
@@ -82,10 +84,10 @@ def scandir_no_follow(
     _validate_directory_identity(path, before, expected_snapshot)
     iterator = os.scandir(path)
     try:
-        _validate_directory_identity(path, _revalidated_directory(path), expected_snapshot)
+        _validate_directory_identity(path, _revalidated_directory(path), before)
         with iterator:
             yield iterator
-        _validate_directory_identity(path, _revalidated_directory(path), expected_snapshot)
+        _validate_directory_identity(path, _revalidated_directory(path), before)
     finally:
         iterator.close()
 
@@ -102,13 +104,26 @@ def _revalidated_directory(path: Path) -> os.stat_result:
 
 
 def _validate_directory_identity(path: Path, actual: StatSnapshot, expected: StatSnapshot) -> None:
-    if stat.S_ISDIR(actual.st_mode) and (actual.st_dev, actual.st_ino) == (expected.st_dev, expected.st_ino):
+    actual_identity = _directory_identity(actual)
+    expected_identity = _directory_identity(expected)
+    if (
+        stat.S_ISDIR(actual.st_mode)
+        and stat.S_ISDIR(expected.st_mode)
+        and (actual_identity is None or expected_identity is None or actual_identity == expected_identity)
+    ):
         return
     raise DirectorySafetyError(
         getattr(errno, "ESTALE", errno.EIO),
         "queued directory identity changed before or during traversal",
         os.fspath(path),
     )
+
+
+def _directory_identity(snapshot: StatSnapshot) -> tuple[int, int] | None:
+    """Return a comparable identity when the metadata source exposes one."""
+
+    identity = (snapshot.st_dev, snapshot.st_ino)
+    return None if identity == (0, 0) else identity
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +157,7 @@ class _StatxDirectoryEntry:
 def discover_entries(
     root_snapshot: RootSnapshot,
     *,
+    lstat_reader: LstatReader,
     scandir_reader: ScandirReader,
     excluder: ExplicitExcluder,
     accounting: AccountingBuilder,
@@ -203,6 +219,20 @@ def discover_entries(
                             continue
 
                         candidate_type = entry_type(snapshot.st_mode)
+                        if candidate_type is EntryType.DIRECTORY and _directory_identity(snapshot) is None:
+                            # Windows DirEntry.stat() deliberately leaves device
+                            # and inode identity at zero. Refresh directories
+                            # through the same path-based API used to revalidate
+                            # them before traversal, while retaining the cheap
+                            # DirEntry snapshot for files and capable platforms.
+                            try:
+                                snapshot = lstat_reader(path)
+                            except OSError as error:
+                                accounting.discover(root)
+                                accounting.record(root, RecordDisposition.RECORD_ERROR)
+                                diagnostics.append(stat_diagnostic(root, path, error, is_root=False))
+                                continue
+                            candidate_type = entry_type(snapshot.st_mode)
                         candidate_origin = origin(root, path, candidate_type) if entries is not None else None
                         relative = (
                             PurePosixPath(name) if directory_relative == root_relative else directory_relative / name

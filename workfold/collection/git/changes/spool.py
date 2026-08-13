@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import struct
 import tempfile
 from collections.abc import Iterator
-from pathlib import Path
 from types import TracebackType
 from typing import BinaryIO, Final, cast
 
-from workfold.collection.git.changes.diff import ParsedGitChange
+from workfold.collection.git.changes.diff import ParsedGitChange, decode_git_tree_path
 from workfold.domain.observations import GitChangeKind
 
 _RECORD_HEADER: Final[struct.Struct] = struct.Struct("!HBqII")
@@ -138,9 +136,9 @@ class GitChangeSpool:
             commit_id=commit_id,
             raw_status=raw_status,
             change_kind=change_kind,
-            path=Path(os.fsdecode(raw_path)),
+            path=decode_git_tree_path(raw_path),
             raw_path=raw_path,
-            old_path=Path(os.fsdecode(raw_old_path)) if raw_old_path is not None else None,
+            old_path=decode_git_tree_path(raw_old_path) if raw_old_path is not None else None,
             raw_old_path=raw_old_path,
             similarity=None if similarity < 0 else similarity,
         )

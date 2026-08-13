@@ -61,7 +61,9 @@ def test_file_change_scope_reports_commit_inputs_and_derivation_per_repository(
         ]
     )
 
-    assert run(options, stdout=output, stderr=StringIO(), terminal_width=240) == 0
+    # Keep the per-target detail on one line even under macOS's longer
+    # temporary-directory prefix. Narrow wrapping has dedicated renderer tests.
+    assert run(options, stdout=output, stderr=StringIO(), terminal_width=500) == 0
 
     rendered = output.getvalue()
     assert "Git file changes discovered: 1" in rendered

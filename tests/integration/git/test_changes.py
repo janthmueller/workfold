@@ -371,6 +371,10 @@ def test_parser_validates_commit_boundaries_statuses_and_similarity() -> None:
     assert parsed[0].raw_old_path == b"old\nname"
     assert parsed[0].raw_path == b"new\tname"
 
+    raw_path = b"invalid-\xff-name"
+    undecodable = parse_diff_tree_name_status(first.encode() + b"\0\0\nA\0" + raw_path + b"\0", (first,))
+    assert os.fspath(undecodable[0].path).encode("utf-8", errors="surrogateescape") == raw_path
+
     with pytest.raises(GitChangeParseError) as wrong_commit:
         parse_diff_tree_name_status(b"c" * 40 + b"\0\0", (first,))
     assert wrong_commit.value.code == "unexpected_git_change_commit"

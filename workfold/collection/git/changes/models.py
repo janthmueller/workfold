@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,22 +27,22 @@ class CollectedGitFileChange:
         """Convert the change to the renderer-neutral domain model."""
 
         commit = self.commit_record.commit
-        old_path = os.fsdecode(self.change.raw_old_path) if self.change.raw_old_path is not None else None
-        path = os.fsdecode(self.change.raw_path)
+        old_path = self.change.old_path
+        path = self.change.path
         return RecordOrigin(
             record_id=git_file_change_id(
                 self.repository.root,
                 commit.object_id,
                 self.diff_basis,
                 self.change.raw_status,
-                old_path,
-                path,
+                self.change.raw_old_path,
+                self.change.raw_path,
             ),
             source=Source.GIT,
             record_kind=RecordKind.GIT_FILE_CHANGE,
             repository_or_root=self.repository.root,
-            path=Path(path),
-            old_path=Path(old_path) if old_path is not None else None,
+            path=path,
+            old_path=old_path,
             commit_id=commit.object_id,
             diff_basis=self.diff_basis,
             change_kind=self.change.change_kind,

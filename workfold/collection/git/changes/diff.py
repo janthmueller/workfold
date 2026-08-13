@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -218,6 +217,12 @@ def _change_kind(status: bytes) -> GitChangeKind:
     }.get(status, GitChangeKind.OTHER)
 
 
+def decode_git_tree_path(raw_path: bytes) -> Path:
+    """Decode Git's opaque path bytes with a reversible, host-independent codec."""
+
+    return Path(raw_path.decode("utf-8", errors="surrogateescape"))
+
+
 def _decode_path(raw_path: bytes, *, commit_id: str) -> Path:
     if not raw_path:
         raise GitChangeParseError(
@@ -225,7 +230,7 @@ def _decode_path(raw_path: bytes, *, commit_id: str) -> Path:
             "git diff-tree returned an empty path",
             commit_id=commit_id,
         )
-    return Path(os.fsdecode(raw_path))
+    return decode_git_tree_path(raw_path)
 
 
 __all__ = [
@@ -233,6 +238,7 @@ __all__ = [
     "DiffTreeRecord",
     "GitChangeParseError",
     "ParsedGitChange",
+    "decode_git_tree_path",
     "iter_diff_tree_name_status",
     "parse_diff_tree_name_status",
 ]

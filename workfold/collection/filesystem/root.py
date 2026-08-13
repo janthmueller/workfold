@@ -156,6 +156,7 @@ def collect_root(
             def traverse_with_inventory(inventory: GitFilesystemInventoryView) -> None:
                 pending = discover_entries(
                     root_snapshot,
+                    lstat_reader=lstat_reader,
                     scandir_reader=scandir_reader,
                     excluder=excluder,
                     accounting=accounting,
@@ -202,6 +203,7 @@ def collect_root(
     defer_ignore_evaluation = respect_gitignore and probe.repository is not None
     pending = discover_entries(
         root_snapshot,
+        lstat_reader=lstat_reader,
         scandir_reader=scandir_reader,
         excluder=excluder,
         accounting=accounting,
