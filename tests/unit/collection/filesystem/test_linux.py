@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import ctypes
 import os
 import sys
-from errno import EPERM
+from errno import ENOSYS, EPERM
 from pathlib import Path
 
 import pytest
@@ -227,7 +228,7 @@ def test_statx_snapshot_failure_falls_back_without_losing_portable_timestamps(tm
     assert reader.birth_reads == 0
 
 
-def test_statx_call_failure_is_not_retried_for_each_directory_entry(tmp_path: Path) -> None:
+def test_failed_combined_statx_is_not_followed_by_separate_birthtime_reads(tmp_path: Path) -> None:
     class DeniedReader(LinuxStatxReader):
         def __init__(self) -> None:
             self.snapshot_reads = 0
@@ -277,3 +278,39 @@ def test_statx_call_failure_is_not_retried_for_each_directory_entry(tmp_path: Pa
     assert reader.birth_reads == 0
     assert coverage[TimestampKind.FS_CREATED].errors == 3
     assert coverage[TimestampKind.FS_MODIFIED].captured == 3
+
+
+def test_statx_enosys_disables_future_calls_and_reports_unsupported_birth_time(tmp_path: Path) -> None:
+    calls = 0
+
+    def missing_statx(*_arguments: object) -> int:
+        nonlocal calls
+        calls += 1
+        ctypes.set_errno(ENOSYS)
+        return -1
+
+    root = tmp_path / "root"
+    root.mkdir()
+    for name in ("one.txt", "two.txt", "three.txt"):
+        (root / name).write_text(name, encoding="utf-8")
+    reader = LinuxStatxReader()
+    setattr(reader, "_function", missing_statx)
+    adapter = FilesystemTimestampAdapter(platform_name="linux", linux_birthtime_reader=reader)
+
+    result = FilesystemCollector(timestamp_adapter=adapter).collect(
+        (root,),
+        timestamp_kinds=(TimestampKind.FS_CREATED, TimestampKind.FS_MODIFIED),
+        respect_gitignore=False,
+        include_ignored=True,
+        retain_entries=False,
+        retain_observations=False,
+    )
+
+    coverage = {item.key.timestamp_kind: item for item in result.accounting.timestamps}
+    creation_capability = next(item for item in result.capabilities if item.timestamp_kind is TimestampKind.FS_CREATED)
+    assert calls == 1
+    assert not reader.available
+    assert creation_capability.status is CapabilityStatus.UNSUPPORTED
+    assert coverage[TimestampKind.FS_CREATED].unsupported == 3
+    assert coverage[TimestampKind.FS_MODIFIED].captured == 3
+    assert not result.diagnostics

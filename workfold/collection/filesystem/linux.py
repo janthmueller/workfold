@@ -115,7 +115,7 @@ class LinuxStatxFallbackSnapshot:
 
 
 class LinuxStatxReader:
-    """Read Linux birth time through libc without invoking an external command."""
+    """Read no-follow Linux metadata, including birth time, through libc."""
 
     __slots__ = ("_function", "_library")
 
