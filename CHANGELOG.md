@@ -2,6 +2,43 @@
 
 <!-- version list -->
 
+## v0.1.0-alpha.4 (2026-08-13)
+
+### Bug Fixes
+
+- Restore cross-platform collection
+  ([`0d664df`](https://github.com/janthmueller/workfold/commit/0d664df3578ba143429ac53df33dc96ba49bb77c))
+
+### Features
+
+- Clarify collection controls
+  ([`d70ab18`](https://github.com/janthmueller/workfold/commit/d70ab18a36043bf30f2303c29e95db80b6661cb0))
+
+- Expand time views and optimize collection
+  ([`3eb44f4`](https://github.com/janthmueller/workfold/commit/3eb44f4fd329b0840b55eae5950c7295ad21667d))
+
+### Performance Improvements
+
+- Streamline filesystem collection and aggregation
+  ([`4e0d21c`](https://github.com/janthmueller/workfold/commit/4e0d21c5b2e47e403dde74327e02ea6e9c1465e6))
+
+### Refactoring
+
+- Enforce package architecture
+  ([`8ac266d`](https://github.com/janthmueller/workfold/commit/8ac266d7e853322f0ff6fd22acb2ece9c10d2f29))
+
+- Harden collection pipeline
+  ([`cd688c2`](https://github.com/janthmueller/workfold/commit/cd688c2fa54892534f23f93cb962be486713ac99))
+
+### Testing
+
+- Add performance benchmark suite
+  ([`964868f`](https://github.com/janthmueller/workfold/commit/964868fdf4ec4ac3e0051d8df583896861490a51))
+
+- Cover statx runtime fallback
+  ([`26eab58`](https://github.com/janthmueller/workfold/commit/26eab580f31a0136470989bc8118c9db8d8747d1))
+
+
 ## v0.1.0-alpha.3 (2026-08-11)
 
 ### Bug Fixes
