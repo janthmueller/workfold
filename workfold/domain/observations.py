@@ -239,18 +239,23 @@ class ActivityMarker:
     def __post_init__(self) -> None:
         if not self.marker_id:
             raise ValueError("marker_id must not be empty")
-        if not self.observations:
+        observation_count = len(self.observations)
+        if observation_count == 0:
             raise ValueError("an activity marker needs at least one observation")
-        if len(self.observations) > 2:
+        if observation_count > 2:
             raise ValueError("an activity marker may contain at most two observations")
-        if len({item.observation_id for item in self.observations}) != len(self.observations):
-            raise ValueError("an activity marker cannot contain duplicate observations")
-        if any(item.instant_utc_ns != self.occurred_at_utc_ns for item in self.observations):
+        first_observation = self.observations[0]
+        if first_observation.instant_utc_ns != self.occurred_at_utc_ns:
             raise ValueError("all marker observations must have the marker instant")
-        first_observation = next(iter(self.observations))
-        if any(item.origin.record_id != first_observation.origin.record_id for item in self.observations):
+        if observation_count == 1:
+            return
+        if self.observations[1].observation_id == first_observation.observation_id:
+            raise ValueError("an activity marker cannot contain duplicate observations")
+        if self.observations[1].instant_utc_ns != self.occurred_at_utc_ns:
+            raise ValueError("all marker observations must have the marker instant")
+        if self.observations[1].origin.record_id != first_observation.origin.record_id:
             raise ValueError("coalesced observations must belong to the same record")
-        if len(self.observations) == 2 and {item.kind for item in self.observations} != {
+        if {item.kind for item in self.observations} != {
             TimestampKind.GIT_AUTHOR,
             TimestampKind.GIT_COMMITTER,
         }:
@@ -260,9 +265,14 @@ class ActivityMarker:
     def create(cls, observations: Iterable[TimestampObservation]) -> ActivityMarker:
         """Create and validate a marker with deterministic observation ordering."""
 
-        ordered = tuple(sorted(observations, key=lambda item: (item.kind.value, item.observation_id)))
-        if not ordered:
+        values = tuple(observations)
+        if not values:
             raise ValueError("an activity marker needs at least one observation")
+        ordered = (
+            values
+            if len(values) == 1
+            else tuple(sorted(values, key=lambda item: (item.kind.value, item.observation_id)))
+        )
         return cls(
             activity_marker_id(tuple(item.observation_id for item in ordered)),
             ordered[0].instant_utc_ns,

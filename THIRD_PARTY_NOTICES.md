@@ -9,7 +9,6 @@ files are copied into the archive's `licenses/` directory at build time.
 - Rich: MIT License.
 - markdown-it-py and mdurl: MIT License.
 - Pygments: BSD 2-Clause License.
-- tomli, when running on Python 3.10: MIT License.
 - tzlocal: MIT License.
 - tzdata, when bundled on Windows: licenses shipped by the Python tzdata
   distribution and the underlying IANA time-zone database.

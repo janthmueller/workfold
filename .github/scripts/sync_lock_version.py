@@ -6,14 +6,10 @@ import os
 import re
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 from packaging.version import InvalidVersion, Version
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover - exercised by the Python 3.10 CI jobs
-    import tomli as tomllib
 
 _VERSION_LINE = re.compile(r'version = "[^"]+"(?P<newline>\r?\n)?\Z')
 

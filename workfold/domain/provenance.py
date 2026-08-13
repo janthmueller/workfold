@@ -11,12 +11,22 @@ from __future__ import annotations
 
 import hashlib
 import os
+from functools import lru_cache
 from pathlib import Path, PurePath
-from typing import TypeAlias
+from typing import Protocol, TypeAlias
 
 CanonicalPart: TypeAlias = str | bytes | int | PurePath | None
 
 _DIGEST_SIZE = 32
+_IDENTITY_PREFIX = b"workfold-id-v1\x00"
+
+
+class _DigestState(Protocol):
+    def update(self, data: bytes, /) -> None: ...
+
+    def copy(self) -> _DigestState: ...
+
+    def hexdigest(self) -> str: ...
 
 
 def lexical_absolute(path: str | os.PathLike[str], *, base: str | os.PathLike[str] | None = None) -> Path:
@@ -31,7 +41,7 @@ def lexical_absolute(path: str | os.PathLike[str], *, base: str | os.PathLike[st
 def canonical_bytes(namespace: str, *parts: CanonicalPart) -> bytes:
     """Encode a domain namespace and values into unambiguous canonical bytes."""
 
-    encoded = bytearray(b"workfold-id-v1\x00")
+    encoded = bytearray(_IDENTITY_PREFIX)
     for part in (namespace, *parts):
         tag, payload = _encode_part(part)
         encoded.extend(tag)
@@ -147,7 +157,10 @@ def absolute_filesystem_entry_id(
 
     if not absolute_root.is_absolute() or not absolute_path.is_absolute():
         raise ValueError("absolute filesystem provenance requires absolute paths")
-    return canonical_id("filesystem-entry", absolute_root, absolute_path, entry_type)
+    digest = _filesystem_entry_digest_prefix(absolute_root).copy()
+    _update_digest(digest, absolute_path)
+    _update_digest(digest, entry_type)
+    return digest.hexdigest()
 
 
 def timestamp_slot_id(record_id: str, timestamp_kind: str) -> str:
@@ -173,12 +186,12 @@ def activity_marker_id(observation_ids: tuple[str, ...]) -> str:
 
     if not observation_ids:
         raise ValueError("an activity marker needs at least one observation")
-    if len(set(observation_ids)) != len(observation_ids):
-        raise ValueError("an activity marker cannot contain duplicate observations")
     if len(observation_ids) == 1:
         # A singleton marker has exactly the identity of its one observation;
         # the prefix keeps the marker namespace explicit without another hash.
         return "m" + observation_ids[0]
+    if len(set(observation_ids)) != len(observation_ids):
+        raise ValueError("an activity marker cannot contain duplicate observations")
     return canonical_id("activity-marker", *sorted(observation_ids))
 
 
@@ -208,6 +221,24 @@ def _encode_part(part: object) -> tuple[bytes, bytes]:
     if isinstance(part, int):
         return b"i", str(part).encode("ascii")
     raise TypeError(f"unsupported canonical identity part: {type(part).__name__}")
+
+
+@lru_cache(maxsize=128)
+def _filesystem_entry_digest_prefix(absolute_root: PurePath) -> _DigestState:
+    """Cache the immutable namespace/root hash prefix shared by one scan."""
+
+    digest = hashlib.blake2b(digest_size=_DIGEST_SIZE)
+    digest.update(_IDENTITY_PREFIX)
+    _update_digest(digest, "filesystem-entry")
+    _update_digest(digest, absolute_root)
+    return digest
+
+
+def _update_digest(digest: _DigestState, part: CanonicalPart) -> None:
+    tag, payload = _encode_part(part)
+    digest.update(tag)
+    digest.update(len(payload).to_bytes(8, byteorder="big", signed=False))
+    digest.update(payload)
 
 
 __all__ = [

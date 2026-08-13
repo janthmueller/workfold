@@ -18,6 +18,11 @@ _AT_FDCWD: Final[int] = -100
 _AT_SYMLINK_NOFOLLOW: Final[int] = 0x100
 _AT_NO_AUTOMOUNT: Final[int] = 0x800
 _STATX_BASIC_STATS: Final[int] = 0x07FF
+_STATX_TYPE: Final[int] = 0x0001
+_STATX_MODE: Final[int] = 0x0002
+_STATX_ATIME: Final[int] = 0x0020
+_STATX_MTIME: Final[int] = 0x0040
+_STATX_CTIME: Final[int] = 0x0080
 _STATX_INO: Final[int] = 0x0100
 _STATX_BTIME: Final[int] = 0x0800
 _NANOSECONDS_PER_SECOND: Final[int] = 1_000_000_000
@@ -69,6 +74,10 @@ if ctypes.sizeof(_Statx) != _STATX_BUFFER_SIZE:  # pragma: no cover - fixed Linu
     raise RuntimeError("Workfold's Linux statx structure does not match the 256-byte UAPI layout")
 
 
+class LinuxStatxCallError(OSError):
+    """The ``statx`` syscall failed before returning usable metadata."""
+
+
 @dataclass(frozen=True, slots=True)
 class LinuxStatxBirthTime:
     """Birth-time value and identity returned by one no-follow ``statx`` call."""
@@ -76,6 +85,33 @@ class LinuxStatxBirthTime:
     instant_utc_ns: int | None
     device_id: int
     inode: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class LinuxStatxSnapshot:
+    """No-follow metadata snapshot returned by one Linux ``statx`` call."""
+
+    st_mode: int
+    st_dev: int
+    st_ino: int
+    st_atime_ns: int
+    st_mtime_ns: int
+    st_ctime_ns: int
+    birth_time_utc_ns: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class LinuxStatxFallbackSnapshot:
+    """Portable metadata paired with the failed combined ``statx`` call."""
+
+    st_mode: int
+    st_dev: int
+    st_ino: int
+    st_atime_ns: int
+    st_mtime_ns: int
+    st_ctime_ns: int
+    statx_error_number: int | None
+    statx_error_message: str
 
 
 class LinuxStatxReader:
@@ -111,6 +147,43 @@ class LinuxStatxReader:
     def read(self, path: Path) -> LinuxStatxBirthTime:
         """Read the directory entry itself and return birth time when supplied."""
 
+        buffer = self._read_buffer(path)
+        instant_utc_ns = _birth_time_ns(buffer, path)
+        inode = int(buffer.stx_ino) if buffer.stx_mask & _STATX_INO else None
+        device_id = os.makedev(int(buffer.stx_dev_major), int(buffer.stx_dev_minor))
+        return LinuxStatxBirthTime(instant_utc_ns, device_id, inode)
+
+    def read_snapshot(self, path: Path) -> LinuxStatxSnapshot:
+        """Read all metadata Workfold needs without a companion ``lstat`` call."""
+
+        buffer = self._read_buffer(path)
+        return _snapshot(buffer, path)
+
+    def read_snapshot_at(
+        self,
+        directory_fd: int,
+        name: str | bytes,
+        *,
+        display_path: Path,
+    ) -> LinuxStatxSnapshot:
+        """Read one entry relative to an already-open directory descriptor."""
+
+        buffer = self._read_buffer(
+            display_path,
+            directory_fd=directory_fd,
+            encoded_path=os.fsencode(name),
+        )
+        return _snapshot(buffer, display_path)
+
+    def _read_buffer(
+        self,
+        path: Path,
+        *,
+        directory_fd: int = _AT_FDCWD,
+        encoded_path: bytes | None = None,
+    ) -> _Statx:
+        """Invoke ``statx`` once and return its result buffer."""
+
         function = self._function
         if function is None:
             raise OSError(errno.ENOSYS, "libc does not expose statx", os.fspath(path))
@@ -118,30 +191,67 @@ class LinuxStatxReader:
         buffer = _Statx()
         ctypes.set_errno(0)
         result = function(
-            _AT_FDCWD,
-            os.fsencode(path),
+            directory_fd,
+            os.fsencode(path) if encoded_path is None else encoded_path,
             _AT_SYMLINK_NOFOLLOW | _AT_NO_AUTOMOUNT,
             _STATX_BASIC_STATS | _STATX_BTIME,
             ctypes.byref(buffer),
         )
         if result != 0:
             error_number = ctypes.get_errno() or errno.EIO
-            raise OSError(error_number, os.strerror(error_number), os.fspath(path))
+            if error_number == errno.ENOSYS:
+                # The libc symbol can exist while an older kernel or sandbox
+                # rejects the syscall. Remember that process-wide capability
+                # result so later entries fall back without repeating it.
+                self._function = None
+            raise LinuxStatxCallError(error_number, os.strerror(error_number), os.fspath(path))
 
-        instant_utc_ns: int | None = None
-        if buffer.stx_mask & _STATX_BTIME:
-            nanoseconds = int(buffer.stx_btime.tv_nsec)
-            if not 0 <= nanoseconds < _NANOSECONDS_PER_SECOND:
-                raise OSError(
-                    errno.EIO,
-                    f"statx returned an invalid birth-time nanosecond field: {nanoseconds}",
-                    os.fspath(path),
-                )
-            instant_utc_ns = int(buffer.stx_btime.tv_sec) * _NANOSECONDS_PER_SECOND + nanoseconds
-
-        inode = int(buffer.stx_ino) if buffer.stx_mask & _STATX_INO else None
-        device_id = os.makedev(int(buffer.stx_dev_major), int(buffer.stx_dev_minor))
-        return LinuxStatxBirthTime(instant_utc_ns, device_id, inode)
+        return buffer
 
 
-__all__ = ["LinuxStatxBirthTime", "LinuxStatxReader"]
+def _snapshot(buffer: _Statx, path: Path) -> LinuxStatxSnapshot:
+    """Normalize one validated ``statx`` buffer into collector metadata."""
+
+    required = _STATX_TYPE | _STATX_MODE | _STATX_INO | _STATX_ATIME | _STATX_MTIME | _STATX_CTIME
+    missing = required & ~int(buffer.stx_mask)
+    if missing:
+        raise OSError(
+            errno.EOPNOTSUPP,
+            f"statx omitted required basic metadata (mask 0x{missing:x})",
+            os.fspath(path),
+        )
+    return LinuxStatxSnapshot(
+        st_mode=int(buffer.stx_mode),
+        st_dev=os.makedev(int(buffer.stx_dev_major), int(buffer.stx_dev_minor)),
+        st_ino=int(buffer.stx_ino),
+        st_atime_ns=_timestamp_ns(buffer.stx_atime, "access time", path),
+        st_mtime_ns=_timestamp_ns(buffer.stx_mtime, "modification time", path),
+        st_ctime_ns=_timestamp_ns(buffer.stx_ctime, "metadata-change time", path),
+        birth_time_utc_ns=_birth_time_ns(buffer, path),
+    )
+
+
+def _birth_time_ns(buffer: _Statx, path: Path) -> int | None:
+    if not buffer.stx_mask & _STATX_BTIME:
+        return None
+    return _timestamp_ns(buffer.stx_btime, "birth time", path)
+
+
+def _timestamp_ns(timestamp: _StatxTimestamp, label: str, path: Path) -> int:
+    nanoseconds = int(timestamp.tv_nsec)
+    if not 0 <= nanoseconds < _NANOSECONDS_PER_SECOND:
+        raise OSError(
+            errno.EIO,
+            f"statx returned an invalid {label} nanosecond field: {nanoseconds}",
+            os.fspath(path),
+        )
+    return int(timestamp.tv_sec) * _NANOSECONDS_PER_SECOND + nanoseconds
+
+
+__all__ = [
+    "LinuxStatxBirthTime",
+    "LinuxStatxCallError",
+    "LinuxStatxFallbackSnapshot",
+    "LinuxStatxReader",
+    "LinuxStatxSnapshot",
+]

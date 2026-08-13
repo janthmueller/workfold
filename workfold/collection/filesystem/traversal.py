@@ -7,6 +7,7 @@ import os
 import stat
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from workfold.collection.diagnostics import CollectorDiagnostic
@@ -26,15 +27,29 @@ from workfold.collection.filesystem.ignore import (
     GitIgnoreRepository,
     is_nested_repository_boundary,
 )
+from workfold.collection.filesystem.linux import LinuxStatxReader
 from workfold.collection.filesystem.models import CollectedFilesystemEntry
-from workfold.collection.filesystem.scan import DirectorySafetyError, PendingEntry, RootSnapshot, ScandirReader
+from workfold.collection.filesystem.scan import (
+    DirectoryEntry,
+    DirectorySafetyError,
+    PendingEntry,
+    RootSnapshot,
+    ScandirReader,
+    StatSnapshot,
+    statx_fallback_snapshot,
+)
 from workfold.domain.coverage import RecordDisposition
 from workfold.domain.observations import EntryType
 
 
 @contextmanager
-def scandir_no_follow(path: Path) -> Generator[Iterator[os.DirEntry[str]], None, None]:
-    """Open a directory without following a replacement final symlink."""
+def scandir_no_follow(
+    path: Path,
+    expected_snapshot: StatSnapshot,
+    *,
+    statx_reader: LinuxStatxReader | None = None,
+) -> Generator[Iterator[DirectoryEntry], None, None]:
+    """Open exactly the queued directory without following replacements."""
 
     supports_descriptor_scan = os.scandir in os.supports_fd
     no_follow = getattr(os, "O_NOFOLLOW", 0)
@@ -52,39 +67,76 @@ def scandir_no_follow(path: Path) -> Generator[Iterator[os.DirEntry[str]], None,
                 ) from error
             raise
         try:
+            _validate_directory_identity(path, os.fstat(descriptor), expected_snapshot)
             with os.scandir(descriptor) as iterator:
-                yield iterator
+                if statx_reader is None:
+                    yield iterator
+                else:
+                    yield (_StatxDirectoryEntry(entry, descriptor, path, statx_reader) for entry in iterator)
+            _validate_directory_identity(path, _revalidated_directory(path), expected_snapshot)
         finally:
             os.close(descriptor)
         return
 
-    try:
-        before = os.lstat(path)
-    except OSError as error:
-        raise DirectorySafetyError(
-            error.errno,
-            "queued directory could not be revalidated before traversal",
-            os.fspath(path),
-        ) from error
-    if not stat.S_ISDIR(before.st_mode):
-        raise DirectorySafetyError(
-            errno.ENOTDIR,
-            "queued directory became a non-directory or symlink before traversal",
-            os.fspath(path),
-        )
+    before = _revalidated_directory(path)
+    _validate_directory_identity(path, before, expected_snapshot)
     iterator = os.scandir(path)
     try:
-        after = os.lstat(path)
-        if not stat.S_ISDIR(after.st_mode) or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
-            raise DirectorySafetyError(
-                errno.ENOTDIR,
-                "queued directory changed while traversal was opening it",
-                os.fspath(path),
-            )
+        _validate_directory_identity(path, _revalidated_directory(path), expected_snapshot)
         with iterator:
             yield iterator
+        _validate_directory_identity(path, _revalidated_directory(path), expected_snapshot)
     finally:
         iterator.close()
+
+
+def _revalidated_directory(path: Path) -> os.stat_result:
+    try:
+        return os.lstat(path)
+    except OSError as error:
+        raise DirectorySafetyError(
+            error.errno or errno.EIO,
+            "queued directory could not be revalidated during traversal",
+            os.fspath(path),
+        ) from error
+
+
+def _validate_directory_identity(path: Path, actual: StatSnapshot, expected: StatSnapshot) -> None:
+    if stat.S_ISDIR(actual.st_mode) and (actual.st_dev, actual.st_ino) == (expected.st_dev, expected.st_ino):
+        return
+    raise DirectorySafetyError(
+        getattr(errno, "ESTALE", errno.EIO),
+        "queued directory identity changed before or during traversal",
+        os.fspath(path),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _StatxDirectoryEntry:
+    """Read child metadata relative to the same safely opened directory."""
+
+    entry: os.DirEntry[str]
+    directory_fd: int
+    parent: Path
+    reader: LinuxStatxReader
+
+    @property
+    def name(self) -> str:
+        return self.entry.name
+
+    def stat(self, *, follow_symlinks: bool = True) -> StatSnapshot:
+        if follow_symlinks:
+            return self.entry.stat(follow_symlinks=True)
+        if self.reader.available:
+            try:
+                return self.reader.read_snapshot_at(
+                    self.directory_fd,
+                    self.name,
+                    display_path=self.parent / self.name,
+                )
+            except OSError as error:
+                return statx_fallback_snapshot(self.entry.stat(follow_symlinks=False), error)
+        return self.entry.stat(follow_symlinks=False)
 
 
 def discover_entries(
@@ -106,7 +158,7 @@ def discover_entries(
     root = root_snapshot.path
     pending: list[PendingEntry] = []
     root_type = entry_type(root_snapshot.snapshot.st_mode)
-    root_origin = origin(root, root, root_type)
+    root_origin = origin(root, root, root_type) if entries is not None else None
     root_explicit = root_type is not EntryType.DIRECTORY and excluder.matches(
         PurePosixPath(root.name),
         is_directory=False,
@@ -114,12 +166,14 @@ def discover_entries(
     if is_semantic_git_admin(root, repository):
         accounting.discover(root)
         accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
-        retain_entry(entries, root_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
+        if root_origin is not None:
+            retain_entry(entries, root_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
         return pending
     if root_explicit:
         accounting.discover(root)
         accounting.record(root, RecordDisposition.EXPLICITLY_EXCLUDED)
-        retain_entry(entries, root_origin, RecordDisposition.EXPLICITLY_EXCLUDED)
+        if root_origin is not None:
+            retain_entry(entries, root_origin, RecordDisposition.EXPLICITLY_EXCLUDED)
         return pending
     _queue_or_consume(
         PendingEntry(root, root, root_snapshot.snapshot, root_origin, root_type),
@@ -131,11 +185,11 @@ def discover_entries(
 
     admin_relative_parts = repository_admin_relative_parts(root, repository)
     root_relative = PurePosixPath(".")
-    directories = [(root, root_relative)]
+    directories = [(root, root_relative, root_snapshot.snapshot)]
     while directories:
-        directory, directory_relative = directories.pop()
+        directory, directory_relative, expected_snapshot = directories.pop()
         try:
-            with scandir_reader(directory) as iterator:
+            with scandir_reader(directory, expected_snapshot) as iterator:
                 try:
                     for directory_entry in iterator:
                         name = directory_entry.name
@@ -149,7 +203,7 @@ def discover_entries(
                             continue
 
                         candidate_type = entry_type(snapshot.st_mode)
-                        candidate_origin = origin(root, path, candidate_type)
+                        candidate_origin = origin(root, path, candidate_type) if entries is not None else None
                         relative = (
                             PurePosixPath(name) if directory_relative == root_relative else directory_relative / name
                         )
@@ -165,12 +219,14 @@ def discover_entries(
                         ):
                             accounting.discover(root)
                             accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
-                            retain_entry(entries, candidate_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
+                            if candidate_origin is not None:
+                                retain_entry(entries, candidate_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
                             continue
                         if excluder.matches(relative, is_directory=candidate_type is EntryType.DIRECTORY):
                             accounting.discover(root)
                             accounting.record(root, RecordDisposition.EXPLICITLY_EXCLUDED)
-                            retain_entry(entries, candidate_origin, RecordDisposition.EXPLICITLY_EXCLUDED)
+                            if candidate_origin is not None:
+                                retain_entry(entries, candidate_origin, RecordDisposition.EXPLICITLY_EXCLUDED)
                             continue
                         if candidate_type is EntryType.DIRECTORY and is_nested_repository_boundary(
                             path,
@@ -188,7 +244,8 @@ def discover_entries(
                                     accounting.prune_ignored_subtree()
                                 accounting.discover(root)
                                 accounting.record(root, RecordDisposition.IGNORED)
-                                retain_entry(entries, candidate_origin, RecordDisposition.IGNORED)
+                                if candidate_origin is not None:
+                                    retain_entry(entries, candidate_origin, RecordDisposition.IGNORED)
                             continue
                         _queue_or_consume(
                             PendingEntry(root, path, snapshot, candidate_origin, candidate_type),
@@ -196,7 +253,7 @@ def discover_entries(
                             pending_consumer,
                         )
                         if candidate_type is EntryType.DIRECTORY:
-                            directories.append((path, relative))
+                            directories.append((path, relative, snapshot))
                 except OSError as error:
                     diagnostics.append(traversal_diagnostic(root, directory, error))
         except OSError as error:

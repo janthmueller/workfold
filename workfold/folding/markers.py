@@ -28,8 +28,11 @@ class ChartMarker:
     source: Source
     within_schedule: bool
     identity_id: int | None = None
+    count: int = 1
 
     def __post_init__(self) -> None:
+        if self.count < 1:
+            raise ValueError("a chart marker must represent at least one event")
         if self.identity_id is not None and self.identity_id < 0:
             raise ValueError("a chart marker identity ID must not be negative")
         if self.identity_id is not None and self.source is not Source.GIT:
@@ -45,18 +48,18 @@ class CellRunBuilder:
 
     def add(self, marker: ChartMarker) -> None:
         if self.counts is not None:
-            self.counts[(marker.source, marker.within_schedule, marker.identity_id)] += 1
+            self.counts[(marker.source, marker.within_schedule, marker.identity_id)] += marker.count
             return
         if self.runs and same_visual(self.runs[-1], marker):
             previous = self.runs[-1]
             self.runs[-1] = MarkerRun(
                 previous.source,
                 previous.within_schedule,
-                previous.count + 1,
+                previous.count + marker.count,
                 previous.identity_id,
             )
         else:
-            self.runs.append(MarkerRun(marker.source, marker.within_schedule, 1, marker.identity_id))
+            self.runs.append(MarkerRun(marker.source, marker.within_schedule, marker.count, marker.identity_id))
         if len(self.runs) > RUN_COMPACTION_THRESHOLD:
             self.counts = Counter()
             for run in self.runs:
@@ -88,7 +91,7 @@ def same_visual(run: MarkerRun, marker: ChartMarker) -> bool:
     )
 
 
-def chart_marker_row(marker: ChartMarker) -> tuple[int, int, int, int, str, int, int, int | None]:
+def chart_marker_row(marker: ChartMarker) -> tuple[int, int, int, int, str, int, int, int, int]:
     seconds, remainder_ns = divmod(marker.occurred_at_utc_ns, NANOSECONDS_PER_SECOND)
     return (
         marker.time_of_day_ns,
@@ -98,12 +101,23 @@ def chart_marker_row(marker: ChartMarker) -> tuple[int, int, int, int, str, int,
         marker.marker_id,
         int(marker.weekday),
         int(marker.within_schedule),
-        marker.identity_id,
+        -1 if marker.identity_id is None else marker.identity_id,
+        marker.count,
     )
 
 
-def chart_marker_from_row(row: tuple[int, int, int, int, str, int, int, int | None]) -> ChartMarker:
-    time_of_day_ns, seconds, remainder_ns, source_rank, marker_id, weekday, within_schedule, identity_id = row
+def chart_marker_from_row(row: tuple[int, int, int, int, str, int, int, int, int]) -> ChartMarker:
+    (
+        time_of_day_ns,
+        seconds,
+        remainder_ns,
+        source_rank,
+        marker_id,
+        weekday,
+        within_schedule,
+        identity_id,
+        count,
+    ) = row
     return ChartMarker(
         marker_id=marker_id,
         occurred_at_utc_ns=seconds * NANOSECONDS_PER_SECOND + remainder_ns,
@@ -111,7 +125,8 @@ def chart_marker_from_row(row: tuple[int, int, int, int, str, int, int, int | No
         weekday=Weekday(weekday),
         source=Source.GIT if source_rank == 0 else Source.FILESYSTEM,
         within_schedule=bool(within_schedule),
-        identity_id=identity_id,
+        identity_id=None if identity_id == -1 else identity_id,
+        count=count,
     )
 
 

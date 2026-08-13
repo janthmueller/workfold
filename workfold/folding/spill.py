@@ -10,16 +10,30 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 from collections.abc import Iterable
+from contextlib import suppress
+from dataclasses import replace
+from typing import TypeAlias, cast
 
+from workfold.domain.observations import Source
 from workfold.folding.markers import (
     ChartMarker,
     chart_marker_from_row,
     chart_marker_order_key,
     chart_marker_row,
 )
+from workfold.folding.models import NANOSECONDS_PER_SECOND
 
+# Unique markers are cheaper in a list; repeated visual markers are much
+# cheaper in a counted mapping. Sample small windows so the store can choose
+# without imposing mapping overhead on ordinary high-cardinality runs.
 DEFAULT_SPILL_THRESHOLD = 100_000
+DEFAULT_GROUPED_SPILL_THRESHOLD = 32_768
 SPILL_INSERT_BATCH = 4_096
+GROUPING_SAMPLE_SIZE = 256
+GROUPING_SAMPLE_INTERVAL = 8_192
+GROUPING_REQUIRED_SAMPLES = 2
+
+MarkerGroupKey: TypeAlias = tuple[int, int, int, int, int, bool, int, str]
 
 
 class ChartMarkerStore:
@@ -29,7 +43,16 @@ class ChartMarkerStore:
         if spill_threshold < 1:
             raise ValueError("spill_threshold must be positive")
         self._spill_threshold = spill_threshold
-        self._buffer: list[ChartMarker] = []
+        self._grouped_spill_threshold = min(spill_threshold, DEFAULT_GROUPED_SPILL_THRESHOLD)
+        self._grouping_sample_target = min(GROUPING_SAMPLE_SIZE, spill_threshold + 1)
+        self._buffer: list[ChartMarker] | dict[MarkerGroupKey, tuple[ChartMarker, int]] = []
+        self._grouped = False
+        self._markers_seen = 0
+        self._next_sample_at = 0
+        self._sample_keys: set[MarkerGroupKey] = set()
+        self._sample_count = 0
+        self._sample_duplicates = 0
+        self._qualifying_samples = 0
         self._directory: tempfile.TemporaryDirectory[str] | None = None
         self._connection: sqlite3.Connection | None = None
         self._did_spill = False
@@ -39,44 +62,90 @@ class ChartMarkerStore:
         return self._did_spill
 
     def add(self, marker: ChartMarker) -> None:
-        self._buffer.append(marker)
-        if self._connection is None and len(self._buffer) > self._spill_threshold:
-            self._start_spill()
-        elif self._connection is not None and len(self._buffer) >= SPILL_INSERT_BATCH:
+        if self._grouped:
+            self._merge_group(marker)
+        else:
+            buffer = cast(list[ChartMarker], self._buffer)
+            buffer.append(marker)
+            if self._connection is None and self._markers_seen >= self._next_sample_at:
+                self._sample(marker)
+
+        if self._connection is None:
+            rows_seen = self._markers_seen + 1
+            if (
+                self._grouped
+                and len(self._buffer) > self._grouped_spill_threshold
+                and not self._grouping_is_worthwhile(rows_seen)
+            ):
+                self._demote_to_list()
+            threshold = self._grouped_spill_threshold if self._grouped else self._spill_threshold
+            if len(self._buffer) > threshold:
+                # A short custom spill threshold may be reached before a second
+                # separated sample. Use the positive evidence already collected
+                # before paying the cost of SQLite.
+                if not self._grouped and self._qualifying_samples:
+                    self._promote_to_grouped()
+                    threshold = self._grouped_spill_threshold if self._grouped else self._spill_threshold
+                if len(self._buffer) > threshold:
+                    self._start_spill()
+        elif len(self._buffer) >= SPILL_INSERT_BATCH:
             self._flush()
+        self._markers_seen += 1
 
     def ordered(self) -> Iterable[ChartMarker]:
         connection = self._connection
         if connection is None:
-            self._buffer.sort(key=chart_marker_order_key)
-            return iter(self._buffer)
+            if self._grouped:
+                grouped = cast(dict[MarkerGroupKey, tuple[ChartMarker, int]], self._buffer)
+                markers = [replace(marker, count=count) for marker, count in grouped.values()]
+                # Retain the compact projections, not both them and the wider
+                # grouping index, while sorting and clustering consume them.
+                self._buffer = markers
+                self._grouped = False
+            else:
+                markers = cast(list[ChartMarker], self._buffer)
+            markers.sort(key=chart_marker_order_key)
+            return iter(markers)
         self._flush()
         connection.commit()
         connection.execute(
             """
-            CREATE INDEX chart_marker_order ON chart_markers (
+            CREATE INDEX IF NOT EXISTS chart_marker_grouping ON chart_markers (
                 time_of_day_ns,
                 occurred_at_seconds,
                 occurred_at_remainder_ns,
                 source_rank,
+                weekday,
+                within_schedule,
+                identity_id,
+                group_id,
                 marker_id
             )
             """
         )
+        # Aggregate append-only rows at read time. Unlike SQLite UPSERT, these
+        # primitives are available in every SQLite supported by Python 3.11.
         cursor = connection.execute(
             """
             SELECT time_of_day_ns, occurred_at_seconds,
-                   occurred_at_remainder_ns, source_rank, marker_id,
-                   weekday, within_schedule, identity_id
+                   occurred_at_remainder_ns, source_rank, min(marker_id),
+                   weekday, within_schedule, identity_id, sum(event_count)
               FROM chart_markers
+             GROUP BY time_of_day_ns, occurred_at_seconds,
+                      occurred_at_remainder_ns, source_rank, weekday,
+                      within_schedule, identity_id, group_id
              ORDER BY time_of_day_ns, occurred_at_seconds,
-                      occurred_at_remainder_ns, source_rank, marker_id
+                      occurred_at_remainder_ns, source_rank, min(marker_id)
             """
         )
         return (chart_marker_from_row(row) for row in cursor)
 
     def clear(self) -> None:
         self._buffer.clear()
+        self._sample_keys.clear()
+        self._sample_count = 0
+        self._sample_duplicates = 0
+        self._qualifying_samples = 0
 
     def close(self) -> None:
         connection = getattr(self, "_connection", None)
@@ -90,6 +159,7 @@ class ChartMarkerStore:
 
     def _start_spill(self) -> None:
         directory = tempfile.TemporaryDirectory(prefix="workfold-aggregation-")
+        connection: sqlite3.Connection | None = None
         try:
             connection = sqlite3.connect(f"{directory.name}/markers.sqlite3")
             connection.execute("PRAGMA journal_mode=OFF")
@@ -106,16 +176,26 @@ class ChartMarkerStore:
                     marker_id TEXT NOT NULL,
                     weekday INTEGER NOT NULL,
                     within_schedule INTEGER NOT NULL,
-                    identity_id INTEGER
+                    identity_id INTEGER NOT NULL,
+                    group_id TEXT NOT NULL,
+                    event_count INTEGER NOT NULL CHECK (event_count > 0)
                 )
                 """
             )
-        except Exception:
-            directory.cleanup()
+        except BaseException:
+            if connection is not None:
+                with suppress(Exception):
+                    connection.close()
+            with suppress(Exception):
+                directory.cleanup()
             raise
         self._directory = directory
         self._connection = connection
         self._did_spill = True
+        self._sample_keys.clear()
+        self._sample_count = 0
+        self._sample_duplicates = 0
+        self._qualifying_samples = 0
         self._flush()
 
     def _flush(self) -> None:
@@ -123,10 +203,100 @@ class ChartMarkerStore:
         if connection is None or not self._buffer:
             return
         connection.executemany(
-            "INSERT INTO chart_markers VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (chart_marker_row(marker) for marker in self._buffer),
+            "INSERT INTO chart_markers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            self._buffer_rows(),
         )
         self._buffer.clear()
 
+    def _buffer_rows(self) -> Iterable[tuple[int, int, int, int, str, int, int, int, str, int]]:
+        if self._grouped:
+            grouped = cast(dict[MarkerGroupKey, tuple[ChartMarker, int]], self._buffer)
+            return (
+                (*chart_marker_row(marker)[:-1], _marker_group_id(marker), count) for marker, count in grouped.values()
+            )
+        return (
+            (*chart_marker_row(marker)[:-1], _marker_group_id(marker), marker.count)
+            for marker in cast(list[ChartMarker], self._buffer)
+        )
+
+    def _sample(self, marker: ChartMarker) -> None:
+        if self._markers_seen < self._next_sample_at:
+            return
+        key = _marker_group_key(marker)
+        self._sample_count += 1
+        if key in self._sample_keys:
+            self._sample_duplicates += 1
+        else:
+            self._sample_keys.add(key)
+        if self._sample_count >= self._grouping_sample_target:
+            qualifies = self._sample_duplicates * 4 >= self._sample_count
+            self._qualifying_samples = self._qualifying_samples + 1 if qualifies else 0
+            self._sample_keys.clear()
+            self._sample_count = 0
+            self._sample_duplicates = 0
+            if self._qualifying_samples >= GROUPING_REQUIRED_SAMPLES:
+                self._promote_to_grouped()
+                return
+            self._next_sample_at = self._markers_seen + GROUPING_SAMPLE_INTERVAL
+
+    def _promote_to_grouped(self) -> None:
+        markers = cast(list[ChartMarker], self._buffer)
+        self._buffer = {}
+        self._grouped = True
+        self._sample_keys.clear()
+        self._sample_count = 0
+        self._sample_duplicates = 0
+        self._qualifying_samples = 0
+        for marker in markers:
+            self._merge_group(marker)
+        if not self._grouping_is_worthwhile(self._markers_seen + 1):
+            self._demote_to_list()
+
+    def _grouping_is_worthwhile(self, rows_seen: int) -> bool:
+        grouped = cast(dict[MarkerGroupKey, tuple[ChartMarker, int]], self._buffer)
+        return len(grouped) * 4 <= rows_seen * 3
+
+    def _demote_to_list(self) -> None:
+        grouped = cast(dict[MarkerGroupKey, tuple[ChartMarker, int]], self._buffer)
+        self._buffer = [replace(marker, count=count) for marker, count in grouped.values()]
+        self._grouped = False
+        self._sample_keys.clear()
+        self._sample_count = 0
+        self._sample_duplicates = 0
+        self._qualifying_samples = 0
+        self._next_sample_at = self._markers_seen + GROUPING_SAMPLE_INTERVAL
+
+    def _merge_group(self, marker: ChartMarker) -> None:
+        grouped = cast(dict[MarkerGroupKey, tuple[ChartMarker, int]], self._buffer)
+        key = _marker_group_key(marker)
+        existing = grouped.get(key)
+        if existing is None:
+            grouped[key] = (marker, marker.count)
+            return
+        representative, count = existing
+        if marker.marker_id < representative.marker_id:
+            representative = marker
+        grouped[key] = (representative, count + marker.count)
+
     def __del__(self) -> None:
         self.close()
+
+
+def _marker_group_id(marker: ChartMarker) -> str:
+    """Keep identity markers ordered individually; compact equivalent visuals."""
+
+    return marker.marker_id if marker.identity_id is not None else ""
+
+
+def _marker_group_key(marker: ChartMarker) -> MarkerGroupKey:
+    seconds, remainder_ns = divmod(marker.occurred_at_utc_ns, NANOSECONDS_PER_SECOND)
+    return (
+        marker.time_of_day_ns,
+        seconds,
+        remainder_ns,
+        0 if marker.source is Source.GIT else 1,
+        int(marker.weekday),
+        marker.within_schedule,
+        -1 if marker.identity_id is None else marker.identity_id,
+        _marker_group_id(marker),
+    )

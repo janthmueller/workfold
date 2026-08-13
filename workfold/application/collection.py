@@ -90,7 +90,14 @@ def collect(
     filesystem_result: FilesystemCollectionResult | None = None
     repository_resolution: GitRepositoryResolutionResult | None = None
 
+    def deliver(observations: Sequence[TimestampObservation]) -> None:
+        if not observations:
+            return
+        observation_consumer(ObservationBatch.create(observations))
+
     def emit(observations: Sequence[TimestampObservation]) -> None:
+        """Select observations from collectors that deliver complete records."""
+
         if not observations:
             return
         source = observations[0].origin.source
@@ -99,8 +106,7 @@ def collect(
             if observation_scope is None or not observation_scope.is_restrictive_for(source)
             else observation_scope.select(observations)
         )
-        if selected:
-            observation_consumer(ObservationBatch.create(selected))
+        deliver(selected)
 
     if options.source.includes_git:
         if options.git_records.includes_commits:
@@ -194,7 +200,10 @@ def collect(
                 respect_gitignore=options.respect_gitignore,
                 include_ignored=options.include_ignored,
                 exclusions=options.exclusions,
-                observation_consumer=emit,
+                # The filesystem collector applies this exact scope before it
+                # materializes and emits observations. Deliver its batches
+                # directly instead of evaluating every timestamp twice.
+                observation_consumer=deliver,
                 observation_scope=(
                     observation_scope
                     if observation_scope is not None and observation_scope.is_restrictive_for(Source.FILESYSTEM)

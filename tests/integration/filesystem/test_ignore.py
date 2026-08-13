@@ -64,6 +64,13 @@ def test_explicit_exclusions_use_non_negating_gitwildmatch() -> None:
     assert not excluder.matches("/", is_directory=True)
 
 
+def test_empty_explicit_exclusions_match_nothing() -> None:
+    excluder = ExplicitExcluder.compile(())
+
+    assert not excluder.matches(PurePosixPath("nested/file.log"), is_directory=False)
+    assert not excluder.matches("nested/", is_directory=True)
+
+
 @pytest.mark.parametrize("pattern", ["", "!keep.log", "bad\0pattern"])
 def test_explicit_exclusions_reject_ambiguous_patterns(pattern: str) -> None:
     with pytest.raises(ExclusionPatternError):

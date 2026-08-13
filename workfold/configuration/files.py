@@ -4,15 +4,10 @@ from __future__ import annotations
 
 import os
 import re
-import sys
+import tomllib
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import cast
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover - exercised by the Python 3.10 CI job
-    import tomli as tomllib
 
 from workfold.configuration.layers import (
     BUILTIN_ORIGIN,

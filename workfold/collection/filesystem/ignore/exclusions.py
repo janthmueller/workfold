@@ -45,6 +45,10 @@ class ExplicitExcluder:
     def matches(self, relative_path: PurePosixPath | str, *, is_directory: bool) -> bool:
         """Return whether a root-relative path is explicitly excluded."""
 
+        # Avoid path normalization and the third-party matcher for the common
+        # case where the user supplied no explicit exclusions.
+        if not self.patterns:
+            return False
         value = relative_path.as_posix() if isinstance(relative_path, PurePosixPath) else relative_path
         value = value.lstrip("/")
         if not value or value == ".":

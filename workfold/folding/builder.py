@@ -335,6 +335,7 @@ def _remap_marker_identity(marker: ChartMarker, remap: dict[int, int]) -> ChartM
         source=marker.source,
         within_schedule=marker.within_schedule,
         identity_id=remap[identity_id],
+        count=marker.count,
     )
 
 

@@ -1,9 +1,11 @@
 """Platform-honest filesystem timestamp extraction.
 
-Portable fields come from one already captured no-follow stat snapshot. Linux
-birth time uses a companion no-follow ``statx`` read because Python's ordinary
-``os.stat_result`` omits ``STATX_BTIME``; identity is checked before combining
-the two results. POSIX ``ctime`` is never labeled as creation time.
+Portable fields come from one already captured no-follow metadata snapshot.
+On Linux, production collection prefers one ``statx`` snapshot containing the
+portable fields and optional ``STATX_BTIME``. If that combined read fails,
+collection falls back to ``lstat`` for portable fields and retains the original
+birth-time failure without immediately retrying it. POSIX ``ctime`` is never
+labeled as creation time.
 """
 
 from __future__ import annotations
@@ -16,7 +18,12 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Final, Protocol
 
-from workfold.collection.filesystem.linux import LinuxStatxBirthTime, LinuxStatxReader
+from workfold.collection.filesystem.linux import (
+    LinuxStatxBirthTime,
+    LinuxStatxFallbackSnapshot,
+    LinuxStatxReader,
+    LinuxStatxSnapshot,
+)
 from workfold.domain.coverage import Capability, CapabilityStatus, ExtractionDisposition
 from workfold.domain.observations import Source, TimestampKind
 
@@ -118,9 +125,19 @@ class FilesystemTimestampAdapter:
             return _stat_result_has("st_mtime_ns")
         return _stat_result_has("st_atime_ns")
 
-    def capability(self, kind: TimestampKind, *, target: str) -> Capability:
-        """Build the typed capability statement for one requested kind."""
+    def capability(
+        self,
+        kind: TimestampKind,
+        *,
+        target: str,
+        snapshot: object | None = None,
+    ) -> Capability:
+        """Build a capability statement, reusing captured root metadata."""
 
+        if kind is TimestampKind.FS_CREATED and self.is_linux and self.created_supported is not False:
+            snapshot_capability = self._linux_snapshot_capability(snapshot, target=target)
+            if snapshot_capability is not None:
+                return snapshot_capability
         if kind is TimestampKind.FS_CREATED and self._uses_linux_statx() and self.created_supported is not False:
             return self._linux_birthtime_capability(Path(target))
         supported = self.supports(kind)
@@ -145,10 +162,70 @@ class FilesystemTimestampAdapter:
             note=note,
         )
 
+    def _linux_snapshot_capability(self, snapshot: object | None, *, target: str) -> Capability | None:
+        if isinstance(snapshot, LinuxStatxSnapshot):
+            note = (
+                "Linux statx exposes STATX_BTIME"
+                if snapshot.birth_time_utc_ns is not None
+                else "Linux statx is available, but this root does not expose STATX_BTIME"
+            )
+            return Capability(
+                source=Source.FILESYSTEM,
+                target=target,
+                name=_capability_name(TimestampKind.FS_CREATED),
+                status=CapabilityStatus.SUPPORTED,
+                timestamp_kind=TimestampKind.FS_CREATED,
+                note=note,
+            )
+        if isinstance(snapshot, LinuxStatxFallbackSnapshot):
+            unsupported = snapshot.statx_error_number == errno.ENOSYS
+            return Capability(
+                source=Source.FILESYSTEM,
+                target=target,
+                name=_capability_name(TimestampKind.FS_CREATED),
+                status=CapabilityStatus.UNSUPPORTED if unsupported else CapabilityStatus.UNAVAILABLE,
+                timestamp_kind=TimestampKind.FS_CREATED,
+                note=(
+                    "the Linux runtime does not provide statx"
+                    if unsupported
+                    else f"the Linux statx root metadata read failed: {snapshot.statx_error_message}"
+                ),
+            )
+        return None
+
     def extract(self, snapshot: object, kind: TimestampKind, *, path: Path | None = None) -> TimestampExtraction:
         """Extract one kind, using ``path`` only for Linux birth time."""
 
         _require_filesystem_kind(kind)
+        if (
+            kind is TimestampKind.FS_CREATED
+            and self.is_linux
+            and self.created_supported is not False
+            and isinstance(snapshot, LinuxStatxFallbackSnapshot)
+        ):
+            if snapshot.statx_error_number == errno.ENOSYS:
+                return TimestampExtraction(
+                    kind,
+                    ExtractionDisposition.UNSUPPORTED,
+                    note="the Linux runtime does not provide statx",
+                )
+            return TimestampExtraction(
+                kind,
+                ExtractionDisposition.ERROR,
+                note=f"Linux statx birth-time read failed: {snapshot.statx_error_message}",
+            )
+        if (
+            kind is TimestampKind.FS_CREATED
+            and self.is_linux
+            and self.created_supported is not False
+            and isinstance(snapshot, LinuxStatxSnapshot)
+        ):
+            return _finish_extraction(
+                kind,
+                "statx.stx_btime_ns",
+                snapshot.birth_time_utc_ns,
+                unavailable_note="the filesystem did not return STATX_BTIME for this entry",
+            )
         if not self.supports(kind):
             return TimestampExtraction(
                 kind,

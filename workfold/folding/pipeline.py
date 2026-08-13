@@ -6,6 +6,7 @@ import os
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TypeAlias
 from zoneinfo import ZoneInfo
 
@@ -66,7 +67,7 @@ class ActivityClassifier:
         self._marker_consumer = marker_consumer
         self._observation_counts: Counter[ObservationCountKey] = Counter()
         self._plotting_counts: Counter[PlottingCountKey] = Counter()
-        self._coverage_keys: dict[tuple[Source, str, RecordKind, TimestampKind], TimestampCoverageKey] = {}
+        self._coverage_keys: dict[tuple[Source, Path, RecordKind, TimestampKind], TimestampCoverageKey] = {}
 
     @property
     def observation_counts(self) -> Mapping[ObservationCountKey, int]:
@@ -82,18 +83,22 @@ class ActivityClassifier:
         """Process one selected source record and release its provenance."""
 
         observations = batch.observations
+        if observations[0].origin.source is Source.FILESYSTEM:
+            for observation in observations:
+                coverage_key = self._coverage_key(observation)
+                self._observation_counts[coverage_key] += 1
+                self._plotting_counts[(coverage_key, PlottingDisposition.MARKER)] += 1
+                marker = ActivityMarker.create((observation,))
+                self._marker_consumer(classify_marker(marker, self._timezone, self._schedule))
+            return
+
         coverage_keys: dict[str, TimestampCoverageKey] = {}
         for observation in observations:
             coverage_key = self._coverage_key(observation)
             coverage_keys[observation.observation_id] = coverage_key
             self._observation_counts[coverage_key] += 1
 
-        markers = (
-            tuple(ActivityMarker.create((observation,)) for observation in observations)
-            if observations[0].origin.source is Source.FILESYSTEM
-            else coalesce_observations(observations)
-        )
-        for marker in markers:
+        for marker in coalesce_observations(observations):
             for index, observation in enumerate(marker.observations):
                 plotting = PlottingDisposition.MARKER if index == 0 else PlottingDisposition.COALESCED_INTO_MARKER
                 self._plotting_counts[(coverage_keys[observation.observation_id], plotting)] += 1
@@ -101,24 +106,14 @@ class ActivityClassifier:
 
     def _coverage_key(self, observation: TimestampObservation) -> TimestampCoverageKey:
         origin = observation.origin
-        target = os.fspath(origin.repository_or_root)
-        return self._coverage_key_for(origin.source, target, origin.record_kind, observation.kind)
-
-    def _coverage_key_for(
-        self,
-        source: Source,
-        target: str,
-        record_kind: RecordKind,
-        timestamp_kind: TimestampKind,
-    ) -> TimestampCoverageKey:
-        partition = (source, target, record_kind, timestamp_kind)
+        partition = (origin.source, origin.repository_or_root, origin.record_kind, observation.kind)
         key = self._coverage_keys.get(partition)
         if key is None:
             key = TimestampCoverageKey(
-                source,
-                target,
-                record_kind,
-                timestamp_kind,
+                origin.source,
+                os.fspath(origin.repository_or_root),
+                origin.record_kind,
+                observation.kind,
             )
             self._coverage_keys[partition] = key
         return key

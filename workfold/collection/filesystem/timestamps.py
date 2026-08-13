@@ -6,10 +6,11 @@ import os
 
 from workfold.collection.diagnostics import CollectorDiagnostic
 from workfold.collection.filesystem.accounting import AccountingBuilder
+from workfold.collection.filesystem.entries import pending_origin
 from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter
 from workfold.collection.filesystem.scan import FilesystemObservationConsumer, PendingEntry
 from workfold.domain.coverage import ExtractionDisposition
-from workfold.domain.observations import TimestampKind, TimestampObservation
+from workfold.domain.observations import RecordOrigin, TimestampKind, TimestampObservation
 from workfold.domain.provenance import observation_id
 from workfold.domain.scope import ObservationScope
 
@@ -28,6 +29,14 @@ def extract_entry(
     """Extract every requested timestamp slot from one stat-successful entry."""
 
     captured: list[TimestampObservation] = []
+    resolved_origin = item.origin
+
+    def resolve_origin() -> RecordOrigin:
+        nonlocal resolved_origin
+        if resolved_origin is None:
+            resolved_origin = pending_origin(item)
+        return resolved_origin
+
     for kind in kinds:
         accounting.request(item.root, kind)
         extraction = adapter.extract(item.snapshot, kind, path=item.path)
@@ -40,10 +49,11 @@ def extract_entry(
                 source=kind.source,
             ):
                 continue
-            retained_id = observation_id(item.origin.record_id, kind.value) if observations is not None else None
+            entry_origin = resolve_origin()
+            retained_id = observation_id(entry_origin.record_id, kind.value) if observations is not None else None
             accounting.match_scope(item.root, kind, retained_id)
             observation = TimestampObservation.create(
-                item.origin,
+                entry_origin,
                 kind,
                 extraction.instant_utc_ns,
                 extraction.raw_timestamp,
@@ -54,6 +64,7 @@ def extract_entry(
         else:
             accounting.extraction(item.root, kind, extraction.disposition)
             if extraction.disposition is ExtractionDisposition.ERROR:
+                entry_origin = resolve_origin()
                 diagnostics.append(
                     CollectorDiagnostic(
                         code="filesystem_timestamp_error",
@@ -61,7 +72,7 @@ def extract_entry(
                         target=os.fspath(item.root),
                         message=extraction.note or "filesystem timestamp extraction failed",
                         path=os.fspath(item.path),
-                        provenance_id=item.origin.record_id,
+                        provenance_id=entry_origin.record_id,
                     )
                 )
     if captured and observation_consumer is not None:

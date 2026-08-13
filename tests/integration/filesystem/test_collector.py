@@ -5,9 +5,10 @@ import stat
 from collections.abc import Generator, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
-from typing import cast
+from typing import NoReturn, cast
 
 import pytest
+import workfold.collection.filesystem.entries as filesystem_entries
 from workfold.collection.diagnostics import DiagnosticSeverity
 from workfold.collection.filesystem import (
     CollectedFilesystemEntry,
@@ -28,6 +29,7 @@ from workfold.collection.filesystem.ignore import (
     IgnoreCandidate,
 )
 from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter
+from workfold.collection.filesystem.scan import DirectoryEntry, StatSnapshot
 from workfold.domain.coverage import (
     CapabilityStatus,
     ExtractionDisposition,
@@ -269,7 +271,10 @@ def test_git_inventory_prunes_ignored_directories_but_keeps_visible_empty_direct
 
     opened: list[Path] = []
 
-    def guarded_scandir(path: Path) -> AbstractContextManager[Iterator[os.DirEntry[str]]]:
+    def guarded_scandir(
+        path: Path,
+        _expected_snapshot: StatSnapshot,
+    ) -> AbstractContextManager[Iterator[os.DirEntry[str]]]:
         if path == ignored:
             raise AssertionError("Git-ignored directory must be pruned before traversal")
         opened.append(path)
@@ -377,7 +382,10 @@ def test_explicitly_excluded_directory_is_recorded_once_and_never_opened(tmp_pat
     (excluded / "unreadable.txt").write_text("private", encoding="utf-8")
     (root / "visible.txt").write_text("visible", encoding="utf-8")
 
-    def guarded_scandir(path: Path) -> AbstractContextManager[Iterator[os.DirEntry[str]]]:
+    def guarded_scandir(
+        path: Path,
+        _expected_snapshot: StatSnapshot,
+    ) -> AbstractContextManager[Iterator[os.DirEntry[str]]]:
         if path == excluded:
             raise AssertionError("an explicitly excluded directory must be pruned")
         return os.scandir(path)
@@ -539,10 +547,13 @@ def test_explicit_nested_repository_remains_scannable_when_covering_root_fails(t
     nested_file.write_text("nested", encoding="utf-8")
 
     @contextmanager
-    def failing_outer_scandir(path: Path) -> Generator[Iterator[os.DirEntry[str]], None, None]:
+    def failing_outer_scandir(
+        path: Path,
+        expected_snapshot: StatSnapshot,
+    ) -> Generator[Iterator[DirectoryEntry], None, None]:
         if path == outer:
             raise PermissionError("covering root is unreadable")
-        with scandir_no_follow(path) as iterator:
+        with scandir_no_follow(path, expected_snapshot) as iterator:
             yield iterator
 
     result = FilesystemCollector(scandir_reader=failing_outer_scandir).collect(
@@ -685,7 +696,10 @@ def test_missing_roots_and_traversal_failures_are_structured_partial_results(tmp
     root.mkdir()
 
     @contextmanager
-    def denied_scandir(path: Path) -> Generator[Iterator[os.DirEntry[str]], None, None]:
+    def denied_scandir(
+        path: Path,
+        _expected_snapshot: StatSnapshot,
+    ) -> Generator[Iterator[os.DirEntry[str]], None, None]:
         raise PermissionError(f"denied: {path}")
         yield iter(())
 
@@ -712,7 +726,10 @@ def test_descendant_stat_failures_receive_record_error_accounting(tmp_path: Path
             raise PermissionError("cannot stat")
 
     @contextmanager
-    def broken_scandir(path: Path) -> Generator[Iterator[os.DirEntry[str]], None, None]:
+    def broken_scandir(
+        path: Path,
+        _expected_snapshot: StatSnapshot,
+    ) -> Generator[Iterator[os.DirEntry[str]], None, None]:
         assert path == root
         entries = cast(Iterator[os.DirEntry[str]], iter((BrokenEntry(),)))
         yield entries
@@ -1101,13 +1118,16 @@ def test_queued_directory_replaced_by_symlink_cannot_escape_scan_root(tmp_path: 
     swapped = False
 
     @contextmanager
-    def swapping_scandir(path: Path) -> Generator[Iterator[os.DirEntry[str]], None, None]:
+    def swapping_scandir(
+        path: Path,
+        expected_snapshot: StatSnapshot,
+    ) -> Generator[Iterator[DirectoryEntry], None, None]:
         nonlocal swapped
         if path == trigger and not swapped:
             escape.rename(displaced)
             escape.symlink_to(outside, target_is_directory=True)
             swapped = True
-        with scandir_no_follow(path) as iterator:
+        with scandir_no_follow(path, expected_snapshot) as iterator:
             if path == root:
                 # Traversal uses a LIFO directory stack. Fix the root order so
                 # the trigger is visited before the queued escape directory on
@@ -1126,6 +1146,45 @@ def test_queued_directory_replaced_by_symlink_cannot_escape_scan_root(tmp_path: 
     assert swapped
     assert secret not in {item.origin.path for item in result.entries}
     assert all(item.origin.path != escape / secret.name for item in result.entries)
+    assert result.is_partial
+    assert any(item.code == "filesystem_concurrent_mutation" for item in result.diagnostics)
+
+
+def test_queued_directory_replaced_by_another_directory_is_reported(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    queued = root / "queued"
+    queued.mkdir(parents=True)
+    (queued / "original.txt").write_text("original", encoding="utf-8")
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    injected = replacement / "injected.txt"
+    injected.write_text("replacement", encoding="utf-8")
+    displaced = tmp_path / "displaced"
+    swapped = False
+
+    @contextmanager
+    def swapping_scandir(
+        path: Path,
+        expected_snapshot: StatSnapshot,
+    ) -> Generator[Iterator[DirectoryEntry], None, None]:
+        nonlocal swapped
+        if path == queued and not swapped:
+            queued.rename(displaced)
+            replacement.rename(queued)
+            swapped = True
+        with scandir_no_follow(path, expected_snapshot) as iterator:
+            yield iterator
+
+    result = FilesystemCollector(scandir_reader=swapping_scandir).collect(
+        (root,),
+        timestamp_kinds=FS_MODIFIED,
+        respect_gitignore=False,
+        include_ignored=True,
+    )
+
+    assert swapped
+    assert injected not in {item.origin.path for item in result.entries}
+    assert all(item.origin.path != queued / injected.name for item in result.entries)
     assert result.is_partial
     assert any(item.code == "filesystem_concurrent_mutation" for item in result.diagnostics)
 
@@ -1192,3 +1251,36 @@ def test_bounded_collection_accounts_for_all_files_but_emits_only_matching_times
     timestamp = ledger.timestamps[0]
     assert timestamp.examined == timestamp.values_read == 2
     assert timestamp.selected == timestamp.markers == 1
+
+
+def test_native_bounded_non_retaining_scan_does_not_materialize_out_of_scope_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    for name in ("one.txt", "two.txt", "three.txt"):
+        path = root / name
+        path.write_text(name, encoding="utf-8")
+        os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+    scope = ObservationScope(InstantRangeUnion((InstantRange(2_000_000_000, 3_000_000_000),)))
+
+    def fail_if_materialized(_root: Path, _path: Path, _entry_type: str) -> NoReturn:
+        raise AssertionError("out-of-scope filesystem provenance was materialized")
+
+    monkeypatch.setattr(filesystem_entries, "absolute_filesystem_entry_id", fail_if_materialized)
+
+    result = FilesystemCollector().collect(
+        (root,),
+        timestamp_kinds=FS_MODIFIED,
+        respect_gitignore=False,
+        include_ignored=True,
+        observation_scope=scope,
+        retain_entries=False,
+        retain_observations=False,
+    )
+
+    assert result.entries == result.observations == ()
+    extraction = result.accounting.timestamps[0]
+    assert extraction.requested == extraction.captured == 3
+    assert extraction.scope_matches == 0

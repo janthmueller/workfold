@@ -140,9 +140,9 @@ birth-time access is an implementation detail of filesystem metadata.
 ### Folding
 
 `folding` accepts classified markers and turns them into the sparse weekly
-layout. Band assignment, clustering, exact count compaction, projection, and
-temporary spill storage live here. It does not know how timestamps were
-collected or how Rich will display the result.
+layout. Band assignment, clustering, adaptive exact-count compaction,
+projection, and portable temporary SQLite spill storage live here. It does not
+know how timestamps were collected or how Rich will display the result.
 
 ### Application
 

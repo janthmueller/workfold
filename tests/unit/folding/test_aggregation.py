@@ -6,6 +6,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+import workfold.folding.spill as spill_module
 from workfold.configuration import ClusterAnchor
 from workfold.domain.observations import (
     ActivityMarker,
@@ -20,12 +21,14 @@ from workfold.domain.observations import (
 from workfold.domain.time import datetime_to_utc_ns
 from workfold.folding import (
     NANOSECONDS_PER_MINUTE,
+    NANOSECONDS_PER_SECOND,
     AggregationBuilder,
     ClusterCell,
     MarkerRun,
     TimeCluster,
     aggregate_markers,
 )
+from workfold.folding.markers import ChartMarker
 from workfold.folding.spill import ChartMarkerStore
 
 
@@ -580,6 +583,278 @@ def test_empty_aggregation_has_no_rows_and_uses_full_day_without_schedule_bounds
     assert result.clusters == ()
     assert result.retained_outside_markers == ()
     assert (result.display_start_minute, result.display_end_minute) == (0, 24 * 60)
+
+
+def test_marker_store_compacts_visually_equivalent_simultaneous_markers() -> None:
+    instant = datetime_to_utc_ns(datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc))
+    store = ChartMarkerStore(spill_threshold=1)
+    try:
+        for marker_id in ("second", "first"):
+            store.add(
+                ChartMarker(
+                    marker_id=marker_id,
+                    occurred_at_utc_ns=instant,
+                    time_of_day_ns=9 * 60 * NANOSECONDS_PER_MINUTE,
+                    weekday=Weekday.MONDAY,
+                    source=Source.FILESYSTEM,
+                    within_schedule=True,
+                )
+            )
+
+        markers = tuple(store.ordered())
+
+        assert not store.did_spill
+        assert len(markers) == 1
+        assert markers[0].marker_id == "first"
+        assert markers[0].count == 2
+    finally:
+        store.close()
+
+
+def test_marker_store_cleans_up_when_sqlite_initialization_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingConnection:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def execute(self, _statement: str) -> None:
+            raise RuntimeError("SQLite setup failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = FailingConnection()
+    database_paths: list[Path] = []
+
+    def failing_connect(database: str) -> FailingConnection:
+        database_paths.append(Path(database))
+        return connection
+
+    monkeypatch.setattr(spill_module.sqlite3, "connect", failing_connect)
+    instant = datetime_to_utc_ns(datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc))
+    store = ChartMarkerStore(spill_threshold=1)
+    try:
+        store.add(
+            ChartMarker(
+                marker_id="first",
+                occurred_at_utc_ns=instant,
+                time_of_day_ns=9 * 60 * NANOSECONDS_PER_MINUTE,
+                weekday=Weekday.MONDAY,
+                source=Source.FILESYSTEM,
+                within_schedule=True,
+            )
+        )
+        with pytest.raises(RuntimeError, match="SQLite setup failed"):
+            store.add(
+                ChartMarker(
+                    marker_id="second",
+                    occurred_at_utc_ns=instant + NANOSECONDS_PER_SECOND,
+                    time_of_day_ns=9 * 60 * NANOSECONDS_PER_MINUTE + NANOSECONDS_PER_SECOND,
+                    weekday=Weekday.MONDAY,
+                    source=Source.FILESYSTEM,
+                    within_schedule=True,
+                )
+            )
+    finally:
+        store.close()
+
+    assert connection.closed
+    assert len(database_paths) == 1
+    assert not database_paths[0].parent.exists()
+
+
+def test_marker_store_compaction_reconciles_duplicates_across_spill_batches() -> None:
+    instant = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
+    markers = (
+        _classified("second", instant, source=Source.FILESYSTEM),
+        _classified("later", instant + timedelta(minutes=1), source=Source.FILESYSTEM),
+        _classified("first", instant, source=Source.FILESYSTEM),
+    )
+    expected = aggregate_markers(markers, cluster_window=timedelta(minutes=5))
+    builder = AggregationBuilder(cluster_window=timedelta(minutes=5), spill_threshold=1)
+    for marker in markers:
+        builder.add(marker)
+
+    actual = builder.build()
+
+    assert builder.did_spill
+    assert actual == expected
+    assert actual.displayed_event_count == 3
+    assert actual.clusters[0].cell(Weekday.MONDAY) == ClusterCell(
+        Weekday.MONDAY,
+        (MarkerRun(Source.FILESYSTEM, True, 3),),
+    )
+
+
+def test_marker_store_preserves_individual_identity_marker_order() -> None:
+    instant = datetime_to_utc_ns(datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc))
+    store = ChartMarkerStore(spill_threshold=10)
+    try:
+        for marker_id, identity_id in (("second", 1), ("first", 0)):
+            store.add(
+                ChartMarker(
+                    marker_id=marker_id,
+                    occurred_at_utc_ns=instant,
+                    time_of_day_ns=9 * 60 * NANOSECONDS_PER_MINUTE,
+                    weekday=Weekday.MONDAY,
+                    source=Source.GIT,
+                    within_schedule=True,
+                    identity_id=identity_id,
+                )
+            )
+
+        markers = tuple(store.ordered())
+
+        assert [(marker.marker_id, marker.identity_id, marker.count) for marker in markers] == [
+            ("first", 0, 1),
+            ("second", 1, 1),
+        ]
+    finally:
+        store.close()
+
+
+def test_marker_store_keeps_an_early_collision_in_a_unique_workload_on_the_fast_list_path() -> None:
+    store = ChartMarkerStore()
+    try:
+        monday_midnight = datetime_to_utc_ns(datetime(2026, 8, 3, tzinfo=timezone.utc))
+        for index in range(33_000):
+            timestamp_index = 0 if index == 1 else index
+            store.add(
+                ChartMarker(
+                    marker_id=f"marker-{index:05}",
+                    occurred_at_utc_ns=monday_midnight + timestamp_index * NANOSECONDS_PER_SECOND,
+                    time_of_day_ns=timestamp_index * NANOSECONDS_PER_SECOND,
+                    weekday=Weekday.MONDAY,
+                    source=Source.FILESYSTEM,
+                    within_schedule=True,
+                )
+            )
+
+        markers = tuple(store.ordered())
+
+        assert not store.did_spill
+        assert len(markers) == 33_000
+        assert sum(marker.count for marker in markers) == 33_000
+    finally:
+        store.close()
+
+
+def test_marker_store_does_not_group_after_one_duplicate_heavy_prefix() -> None:
+    store = ChartMarkerStore()
+    try:
+        monday_midnight = datetime_to_utc_ns(datetime(2026, 8, 3, tzinfo=timezone.utc))
+        for index in range(33_000):
+            timestamp_index = 0 if index < 65 else index
+            store.add(
+                ChartMarker(
+                    marker_id=f"marker-{index:05}",
+                    occurred_at_utc_ns=monday_midnight + timestamp_index * NANOSECONDS_PER_SECOND,
+                    time_of_day_ns=timestamp_index * NANOSECONDS_PER_SECOND,
+                    weekday=Weekday.MONDAY,
+                    source=Source.FILESYSTEM,
+                    within_schedule=True,
+                )
+            )
+
+        markers = tuple(store.ordered())
+
+        assert not store.did_spill
+        assert len(markers) == 33_000
+        assert sum(marker.count for marker in markers) == 33_000
+    finally:
+        store.close()
+
+
+def test_marker_store_groups_after_repeated_duplicate_heavy_samples() -> None:
+    store = ChartMarkerStore()
+    try:
+        instant = datetime_to_utc_ns(datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc))
+        for index in range(9_000):
+            store.add(
+                ChartMarker(
+                    marker_id=f"marker-{index:05}",
+                    occurred_at_utc_ns=instant,
+                    time_of_day_ns=9 * 60 * NANOSECONDS_PER_MINUTE,
+                    weekday=Weekday.MONDAY,
+                    source=Source.FILESYSTEM,
+                    within_schedule=True,
+                )
+            )
+
+        markers = tuple(store.ordered())
+
+        assert not store.did_spill
+        assert len(markers) == 1
+        assert markers[0].count == 9_000
+    finally:
+        store.close()
+
+
+def test_marker_store_rejects_two_local_duplicate_bursts_in_a_unique_workload() -> None:
+    store = ChartMarkerStore()
+    try:
+        monday_midnight = datetime_to_utc_ns(datetime(2026, 8, 3, tzinfo=timezone.utc))
+        for index in range(33_000):
+            timestamp_index = index
+            if index < 65:
+                timestamp_index = 0
+            elif 8_447 <= index < 8_512:
+                timestamp_index = 8_447
+            store.add(
+                ChartMarker(
+                    marker_id=f"marker-{index:05}",
+                    occurred_at_utc_ns=monday_midnight + timestamp_index * NANOSECONDS_PER_SECOND,
+                    time_of_day_ns=timestamp_index * NANOSECONDS_PER_SECOND,
+                    weekday=Weekday.MONDAY,
+                    source=Source.FILESYSTEM,
+                    within_schedule=True,
+                )
+            )
+
+        markers = tuple(store.ordered())
+
+        assert not store.did_spill
+        assert len(markers) == 33_000 - 128
+        assert sum(marker.count for marker in markers) == 33_000
+    finally:
+        store.close()
+
+
+def test_marker_store_demotes_when_global_compression_degrades_before_spill() -> None:
+    store = ChartMarkerStore()
+    try:
+        monday_midnight = datetime_to_utc_ns(datetime(2026, 8, 3, tzinfo=timezone.utc))
+        for index in range(9_000):
+            store.add(
+                ChartMarker(
+                    marker_id=f"duplicate-{index:05}",
+                    occurred_at_utc_ns=monday_midnight,
+                    time_of_day_ns=0,
+                    weekday=Weekday.MONDAY,
+                    source=Source.FILESYSTEM,
+                    within_schedule=True,
+                )
+            )
+        for index in range(1, 33_001):
+            store.add(
+                ChartMarker(
+                    marker_id=f"unique-{index:05}",
+                    occurred_at_utc_ns=monday_midnight + index * NANOSECONDS_PER_SECOND,
+                    time_of_day_ns=index * NANOSECONDS_PER_SECOND,
+                    weekday=Weekday.MONDAY,
+                    source=Source.FILESYSTEM,
+                    within_schedule=True,
+                )
+            )
+
+        markers = tuple(store.ordered())
+
+        assert not store.did_spill
+        assert len(markers) == 33_001
+        assert sum(marker.count for marker in markers) == 42_000
+    finally:
+        store.close()
 
 
 @pytest.mark.parametrize("cluster_anchor", tuple(ClusterAnchor))

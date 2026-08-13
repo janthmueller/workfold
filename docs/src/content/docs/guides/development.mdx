@@ -3,7 +3,7 @@ title: Development
 description: Set up, test, package, and document a Workfold checkout.
 ---
 
-Workfold is a Python 3.10+ project managed with uv. Nix provides a reproducible
+Workfold is a Python 3.11+ project managed with uv. Nix provides a reproducible
 development shell with Python, uv, Ruff, Node.js, pnpm, and release tooling.
 Rich is confined to the terminal presentation layer; it is not a CLI framework
 or TUI architecture.
@@ -216,10 +216,17 @@ boundaries. For a file/symlink scan that respects ignore rules inside a Git
 worktree, local NUL-delimited `git ls-files` plumbing supplies tracked,
 untracked, and ignored path candidates using Git's standard ignore semantics.
 Git never supplies filesystem types or timestamps: every included candidate
-must still pass a current no-follow `lstat`, followed by the same timestamp
-adapter used by native traversal. An index-only path absent from the current
-worktree is therefore not filesystem evidence. Directory scans combine the
-same inventory's ignored-directory boundaries with the native no-follow walker,
+must still pass a current no-follow filesystem metadata read through the same
+adapter used by native traversal. On Linux, a combined `statx` snapshot may
+supply both portable fields and birth time in one call. A failed combined read
+falls back to `lstat` for portable fields while retaining the original
+birth-time failure without an immediate retry, so it cannot hide otherwise
+readable metadata. Native traversal resolves that combined read relative to the
+safely opened directory descriptor, preserving its no-follow replacement
+protection without adding a second path-based metadata lookup. An index-only
+path absent from the current worktree is therefore not filesystem evidence.
+Directory scans combine the same inventory's ignored-directory boundaries with
+the native no-follow walker,
 so current and empty directories remain discoverable without entering ignored
 subtrees. Coverage counts each pruned subtree boundary and explicitly states
 that its descendant directories were not enumerated; scans that include ignored
@@ -254,11 +261,14 @@ change membership or gap accounting. The terminal renderer marks a compressed
 gap only when its mode-specific duration reaches one cluster window: observed
 extent to observed extent for event anchoring, or omitted assignment bounds for
 midnight anchoring. Ordered visual runs form ordinary cells.
-Pathologically busy cells retain exact
-counts per visual kind instead of an unbounded alternating sequence. Chart
-sorting stays in memory for normal runs and transparently spills to an
-ephemeral local disk-backed sorter above its fixed threshold; the temporary
-data is removed when aggregation finishes. Only the renderer creates Rich
+Pathologically busy cells retain exact counts per visual kind instead of an
+unbounded alternating sequence. Chart sorting uses a list for mostly unique
+markers and automatically switches to counted groups for duplicate-heavy
+streams. Either representation transparently spills to an ephemeral local
+SQLite sorter above its bounded threshold. Spill rows are append-only and
+grouped at read time, keeping the implementation compatible with the SQLite
+versions supported by Workfold's Python baseline. Temporary data is removed
+when aggregation finishes. Only the renderer creates Rich
 objects or assigns green/blue/red styles. Optional grid lines are likewise
 terminal-only presentation state and never enter the normalized event,
 classification, aggregation, or report model.

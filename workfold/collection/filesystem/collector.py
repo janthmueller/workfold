@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 import stat
 from collections.abc import Sequence
+from functools import partial
 from pathlib import Path
 
 from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticBuffer
 from workfold.collection.filesystem.accounting import AccountingBuilder
 from workfold.collection.filesystem.entries import crosses_nested_repository, is_lexical_descendant, stat_diagnostic
 from workfold.collection.filesystem.ignore import ExplicitExcluder, GitIgnoreService
+from workfold.collection.filesystem.linux import LinuxStatxReader
 from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter
 from workfold.collection.filesystem.models import (
     CollectedFilesystemEntry,
@@ -26,6 +28,7 @@ from workfold.collection.filesystem.scan import (
     RootSnapshot,
     ScandirReader,
     lstat,
+    lstat_with_birthtime,
 )
 from workfold.collection.filesystem.traversal import scandir_no_follow
 from workfold.domain.coverage import Capability
@@ -81,9 +84,25 @@ class FilesystemCollector:
         excluder = ExplicitExcluder.compile(exclusions)
         base = lexical_absolute(cwd or Path.cwd())
         requested = tuple(lexical_absolute(path.expanduser(), base=base) for path in paths)
+        native_birthtime_reader = self._timestamp_adapter.linux_birthtime_reader
+        lstat_reader: LstatReader = self._lstat
+        combined_statx_reader = (
+            native_birthtime_reader
+            if self._lstat is lstat
+            and TimestampKind.FS_CREATED in kinds
+            and self._timestamp_adapter.is_linux
+            and self._timestamp_adapter.created_supported is not False
+            and isinstance(native_birthtime_reader, LinuxStatxReader)
+            else None
+        )
+        if combined_statx_reader is not None:
+            lstat_reader = partial(lstat_with_birthtime, reader=combined_statx_reader)
+        scandir_reader: ScandirReader = self._scandir
+        if combined_statx_reader is not None and self._scandir is scandir_no_follow:
+            scandir_reader = partial(scandir_no_follow, statx_reader=combined_statx_reader)
 
         diagnostics = DiagnosticBuffer()
-        roots, scan_roots, overlap_count = self._prepare_roots(requested, diagnostics)
+        roots, scan_roots, overlap_count = self._prepare_roots(requested, diagnostics, lstat_reader)
         entries: list[CollectedFilesystemEntry] | None = [] if retain_entries else None
         observations: list[TimestampObservation] | None = [] if retain_observations else None
         capabilities: list[Capability] = []
@@ -106,7 +125,14 @@ class FilesystemCollector:
             root = root_snapshot.path
             successful_roots.append(root)
             accounting.ensure_root(root, kinds)
-            capabilities.extend(self._timestamp_adapter.capability(kind, target=os.fspath(root)) for kind in kinds)
+            capabilities.extend(
+                self._timestamp_adapter.capability(
+                    kind,
+                    target=os.fspath(root),
+                    snapshot=root_snapshot.snapshot,
+                )
+                for kind in kinds
+            )
             collect_root(
                 root_snapshot,
                 kinds=kinds,
@@ -125,8 +151,8 @@ class FilesystemCollector:
                 nested_repository_consumer=queue_nested_repository,
                 timestamp_adapter=self._timestamp_adapter,
                 ignore_service=self._ignore_service,
-                lstat_reader=self._lstat,
-                scandir_reader=self._scandir,
+                lstat_reader=lstat_reader,
+                scandir_reader=scandir_reader,
             )
 
         return FilesystemCollectionResult(
@@ -145,6 +171,7 @@ class FilesystemCollector:
         self,
         requested: Sequence[Path],
         diagnostics: list[CollectorDiagnostic],
+        lstat_reader: LstatReader,
     ) -> tuple[list[RootSnapshot], tuple[Path, ...], int]:
         indexed: list[tuple[int, Path]] = []
         seen: set[str] = set()
@@ -171,7 +198,7 @@ class FilesystemCollector:
                 continue
             scan_roots.append(path)
             try:
-                snapshot = self._lstat(path)
+                snapshot = lstat_reader(path)
             except OSError as error:
                 diagnostics.append(stat_diagnostic(path, path, error, is_root=True))
                 continue

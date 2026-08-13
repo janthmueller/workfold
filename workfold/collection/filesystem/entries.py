@@ -16,7 +16,7 @@ from workfold.collection.filesystem.ignore import (
     is_within_git_admin,
 )
 from workfold.collection.filesystem.models import CollectedFilesystemEntry
-from workfold.collection.filesystem.scan import DirectorySafetyError
+from workfold.collection.filesystem.scan import DirectorySafetyError, PendingEntry
 from workfold.domain.coverage import Capability, CapabilityStatus, RecordDisposition
 from workfold.domain.observations import EntryType, RecordKind, RecordOrigin, Source
 from workfold.domain.provenance import absolute_filesystem_entry_id
@@ -93,6 +93,12 @@ def origin(root: Path, path: Path, candidate_type: EntryType | None) -> RecordOr
         path=path,
         entry_type=candidate_type,
     )
+
+
+def pending_origin(item: PendingEntry) -> RecordOrigin:
+    """Return a retained origin or materialize it after scope selection."""
+
+    return item.origin if item.origin is not None else origin(item.root, item.path, item.entry_type)
 
 
 def is_lexical_descendant(path: Path, parent: Path) -> bool:

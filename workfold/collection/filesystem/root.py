@@ -12,6 +12,7 @@ from workfold.collection.filesystem.entries import (
     entry_type,
     ignore_capability,
     ignore_diagnostic,
+    pending_origin,
     retain_entry,
 )
 from workfold.collection.filesystem.entries import origin as build_origin
@@ -84,9 +85,9 @@ def collect_root(
 
     if has_git_admin_ancestor(root) or (root_type is EntryType.DIRECTORY and looks_like_bare_repository(root)):
         accounting.discover(root)
-        origin = build_origin(root, root, root_type)
         accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
-        retain_entry(entries, origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
+        if entries is not None:
+            retain_entry(entries, build_origin(root, root, root_type), RecordDisposition.SEMANTIC_GIT_ADMIN)
         capabilities.append(
             ignore_capability(
                 root,
@@ -99,9 +100,9 @@ def collect_root(
     probe = ignore_service.probe(root, is_directory=root_type is EntryType.DIRECTORY)
     if probe.repository is not None and (probe.repository.is_bare or is_within_git_admin(root, probe.repository)):
         accounting.discover(root)
-        origin = build_origin(root, root, root_type)
         accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
-        retain_entry(entries, origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
+        if entries is not None:
+            retain_entry(entries, build_origin(root, root, root_type), RecordDisposition.SEMANTIC_GIT_ADMIN)
         capabilities.append(ignore_capability(root, respect_gitignore, probe, error=None))
         return
 
@@ -120,7 +121,8 @@ def collect_root(
         )
         accounting.discover(root)
         accounting.record(root, disposition)
-        retain_entry(entries, item.origin, disposition)
+        if entries is not None:
+            retain_entry(entries, pending_origin(item), disposition)
         if disposition is RecordDisposition.ELIGIBLE:
             consume_eligible(item)
 
@@ -243,7 +245,8 @@ def collect_root(
             continue
         accounting.discover(root)
         accounting.record(root, RecordDisposition.IGNORED)
-        retain_entry(entries, item.origin, RecordDisposition.IGNORED)
+        if entries is not None:
+            retain_entry(entries, pending_origin(item), RecordDisposition.IGNORED)
 
 
 __all__ = ["collect_root"]

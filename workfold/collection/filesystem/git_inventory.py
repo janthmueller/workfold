@@ -61,7 +61,7 @@ def collect_git_inventory_stream(
             return
 
         candidate_type = entry_type(snapshot.st_mode)
-        candidate_origin = origin(root, path, candidate_type)
+        candidate_origin = origin(root, path, candidate_type) if entries is not None else None
         relative = PurePosixPath(relative_path)
         if is_semantic_git_admin(path, repository):
             disposition = RecordDisposition.SEMANTIC_GIT_ADMIN
@@ -83,7 +83,8 @@ def collect_git_inventory_stream(
         # remain in the parent partition are discovered by that partition.
         accounting.discover(root)
         accounting.record(root, disposition)
-        retain_entry(entries, candidate_origin, disposition)
+        if candidate_origin is not None:
+            retain_entry(entries, candidate_origin, disposition)
         if disposition is RecordDisposition.ELIGIBLE:
             eligible_consumer(PendingEntry(root, path, snapshot, candidate_origin, candidate_type))
 
@@ -145,9 +146,10 @@ def collect_git_inventory_stream(
             diagnostics.append(stat_diagnostic(root, admin_path, error, is_root=False))
         else:
             accounting.discover(root)
-            admin_origin = origin(root, admin_path, entry_type(admin_snapshot.st_mode))
             accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
-            retain_entry(entries, admin_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
+            if entries is not None:
+                admin_origin = origin(root, admin_path, entry_type(admin_snapshot.st_mode))
+                retain_entry(entries, admin_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
 
     if visit.warning is not None:
         accounting.discover(root)

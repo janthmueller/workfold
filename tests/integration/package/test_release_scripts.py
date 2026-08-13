@@ -23,7 +23,7 @@ def _write_release_files(repository: Path, *, project_version: str, locked_versi
     (repository / "uv.lock").write_text(
         """version = 1
 revision = 3
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 [[package]]
 name = "dependency"
