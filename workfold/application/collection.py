@@ -1,4 +1,4 @@
-"""Coordinate enabled collectors and merge their bounded batches."""
+"""Coordinate enabled evidence sources and merge their bounded batches."""
 
 from __future__ import annotations
 
@@ -6,31 +6,20 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from workfold.application.collection_plan import CollectionPlan
-from workfold.application.git_selection import GitCommitSelection
 from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticSeverity
 from workfold.collection.filesystem import FilesystemCollectionResult, FilesystemCollector
-from workfold.collection.git import (
-    CollectedGitCommit,
-    GitCollectionResult,
-    GitCollector,
-    GitRepositoryResolutionResult,
-    GitRepositoryResolver,
+from workfold.collection.git import GitCollectionResult, GitRepositoryResolutionResult
+from workfold.collection.git.changes import GitFileChangeCollectionResult
+from workfold.collection.git.evidence import (
+    GitEvidenceCollectionResult,
+    GitEvidenceCollector,
+    GitEvidenceRequest,
 )
-from workfold.collection.git.changes import (
-    CollectedGitFileChange,
-    GitFileChangeCollectionResult,
-    GitFileChangeCollector,
-    GitFileChangeRepositoryAccounting,
-)
-from workfold.collection.git.reflogs import (
-    CollectedGitReflog,
-    GitReflogCollectionResult,
-    GitReflogCollector,
-)
-from workfold.collection.git.tags import CollectedGitTag, GitTagCollectionResult, GitTagCollector
+from workfold.collection.git.reflogs import GitReflogCollectionResult
+from workfold.collection.git.tags import GitTagCollectionResult
 from workfold.configuration.options import RunOptions, UsageError
-from workfold.domain.coverage import Capability
-from workfold.domain.observations import Source, TimestampKind, TimestampObservation
+from workfold.domain.coverage import Capability, CoverageFragment
+from workfold.domain.observations import Source, TimestampObservation
 from workfold.domain.scope import ObservationScope
 from workfold.folding.pipeline import ObservationBatch, ObservationConsumer
 
@@ -42,12 +31,39 @@ class Collection:
     diagnostics: tuple[CollectorDiagnostic, ...]
     capabilities: tuple[Capability, ...]
     any_collector_succeeded: bool
-    commit_result: GitCollectionResult | None = None
-    file_change_result: GitFileChangeCollectionResult | None = None
-    tag_result: GitTagCollectionResult | None = None
-    reflog_result: GitReflogCollectionResult | None = None
+    git_result: GitEvidenceCollectionResult | None = None
     filesystem_result: FilesystemCollectionResult | None = None
-    repository_resolution: GitRepositoryResolutionResult | None = None
+    coverage_fragments: tuple[CoverageFragment, ...] = ()
+
+    @property
+    def commit_result(self) -> GitCollectionResult | None:
+        """Expose commit details until report scope is detached from collectors."""
+
+        return self.git_result.commit_result if self.git_result is not None else None
+
+    @property
+    def file_change_result(self) -> GitFileChangeCollectionResult | None:
+        """Expose file-change details until report scope is detached from collectors."""
+
+        return self.git_result.file_change_result if self.git_result is not None else None
+
+    @property
+    def tag_result(self) -> GitTagCollectionResult | None:
+        """Expose tag details until report scope is detached from collectors."""
+
+        return self.git_result.tag_result if self.git_result is not None else None
+
+    @property
+    def reflog_result(self) -> GitReflogCollectionResult | None:
+        """Expose reflog details until report scope is detached from collectors."""
+
+        return self.git_result.reflog_result if self.git_result is not None else None
+
+    @property
+    def repository_resolution(self) -> GitRepositoryResolutionResult | None:
+        """Expose resolution details until report scope is detached from collectors."""
+
+        return self.git_result.repository_resolution if self.git_result is not None else None
 
     @property
     def diagnostic_counts(self) -> tuple[int, int, int]:
@@ -61,13 +77,9 @@ class Collection:
 
 @dataclass(frozen=True, slots=True)
 class CollectorServices:
-    """Concrete local collectors supplied by the outer composition boundary."""
+    """Source-level collectors supplied by the outer composition boundary."""
 
-    git: GitCollector
-    repositories: GitRepositoryResolver
-    file_changes: GitFileChangeCollector
-    tags: GitTagCollector
-    reflogs: GitReflogCollector
+    git: GitEvidenceCollector
     filesystem: FilesystemCollector
 
 
@@ -78,125 +90,36 @@ def collect(
     observation_consumer: ObservationConsumer,
     observation_scope: ObservationScope | None,
 ) -> Collection:
-    """Run every enabled collector and retain only aggregate accounting."""
+    """Run every enabled source and retain only aggregate accounting."""
 
     plan = CollectionPlan.from_selection(options.evidence)
     diagnostics: list[CollectorDiagnostic] = []
     capabilities: list[Capability] = []
+    coverage_fragments: list[CoverageFragment] = []
     any_succeeded = False
-    commit_result: GitCollectionResult | None = None
-    file_result: GitFileChangeCollectionResult | None = None
-    tag_result: GitTagCollectionResult | None = None
-    reflog_result: GitReflogCollectionResult | None = None
+    git_result: GitEvidenceCollectionResult | None = None
     filesystem_result: FilesystemCollectionResult | None = None
-    repository_resolution: GitRepositoryResolutionResult | None = None
 
     def deliver(observations: Sequence[TimestampObservation]) -> None:
-        if not observations:
-            return
-        observation_consumer(ObservationBatch.create(observations))
-
-    def emit(observations: Sequence[TimestampObservation]) -> None:
-        """Select observations from collectors that deliver complete records."""
-
-        if not observations:
-            return
-        source = observations[0].origin.source
-        selected = (
-            tuple(observations)
-            if observation_scope is None or not observation_scope.is_restrictive_for(source)
-            else observation_scope.select(observations)
-        )
-        deliver(selected)
+        if observations:
+            observation_consumer(ObservationBatch.create(observations))
 
     if plan.includes_git:
-        if plan.commit_scan_timestamps:
-            file_results: list[GitFileChangeCollectionResult] = []
-            commit_selection = (
-                GitCommitSelection(observation_scope, plan.commit_scan_timestamps)
-                if observation_scope is not None
-                else None
-            )
-
-            def consume_file_changes(changes: tuple[CollectedGitFileChange, ...]) -> None:
-                for item in changes:
-                    emit(tuple(item.to_observation(kind) for kind in plan.file_change_timestamps))
-
-            def consume_commits(commits: tuple[CollectedGitCommit, ...]) -> None:
-                if plan.commit_timestamps:
-                    for item in commits:
-                        emit(tuple(item.to_observation(kind) for kind in plan.commit_timestamps))
-                if plan.file_change_timestamps:
-                    change_commits = tuple(
-                        item
-                        for item in commits
-                        if _commit_matches_scope(item, plan.file_change_timestamps, observation_scope)
-                    )
-                    if not change_commits:
-                        return
-                    file_results.append(
-                        collectors.file_changes.collect(
-                            change_commits,
-                            change_consumer=consume_file_changes,
-                            timestamp_kinds=plan.file_change_timestamps,
-                            observation_scope=observation_scope,
-                            retain_changes=False,
-                        )
-                    )
-
-            commit_result = collectors.git.collect(
-                options.paths,
+        git_result = collectors.git.collect(
+            GitEvidenceRequest(
+                paths=options.paths,
                 ref_scope=options.ref_scope,
-                commit_consumer=consume_commits,
-                scan_spec=commit_selection.scan_spec if commit_selection is not None else None,
-                commit_filter=commit_selection.select_candidates if commit_selection is not None else None,
-                materialized_filter=(
-                    commit_selection.select_materialized
-                    if commit_selection is not None and commit_selection.requires_materialized_selection
-                    else None
-                ),
-                retain_commits=False,
-            )
-            repositories = commit_result.repositories
-            diagnostics.extend(commit_result.diagnostics)
-            any_succeeded |= commit_result.successful_repositories > 0 or commit_result.discovered_commit_ids > 0
-            if plan.file_change_timestamps:
-                file_result = merge_file_change_results(file_results)
-                diagnostics.extend(file_result.diagnostics)
-        else:
-            repository_resolution = collectors.repositories.resolve(options.paths)
-            repositories = repository_resolution.repositories
-            diagnostics.extend(repository_resolution.diagnostics)
-
-        if plan.collect_tags:
-
-            def consume_tags(tags: tuple[CollectedGitTag, ...]) -> None:
-                for item in tags:
-                    if item.tagger is not None:
-                        emit((item.to_observation(),))
-
-            tag_result = collectors.tags.collect(
-                repositories,
-                tag_consumer=consume_tags,
+                commit_timestamps=plan.commit_timestamps,
+                file_change_timestamps=plan.file_change_timestamps,
+                collect_tags=plan.collect_tags,
+                collect_reflogs=plan.collect_reflogs,
                 observation_scope=observation_scope,
-                retain_tags=False,
-            )
-            diagnostics.extend(tag_result.diagnostics)
-            any_succeeded |= tag_result.successful_repositories > 0 or tag_result.discovered_tags > 0
-        if plan.collect_reflogs:
-
-            def consume_reflogs(entries: tuple[CollectedGitReflog, ...]) -> None:
-                for item in entries:
-                    emit((item.to_observation(),))
-
-            reflog_result = collectors.reflogs.collect(
-                repositories,
-                entry_consumer=consume_reflogs,
-                observation_scope=observation_scope,
-                retain_entries=False,
-            )
-            diagnostics.extend(reflog_result.diagnostics)
-            any_succeeded |= reflog_result.successful_repositories > 0 or reflog_result.discovered_refs > 0
+            ),
+            observation_consumer=deliver,
+        )
+        diagnostics.extend(git_result.diagnostics)
+        coverage_fragments.append(git_result.coverage)
+        any_succeeded |= git_result.successful
 
     if plan.includes_filesystem:
         try:
@@ -222,80 +145,17 @@ def collect(
             raise UsageError(str(error)) from error
         diagnostics.extend(filesystem_result.diagnostics)
         capabilities.extend(filesystem_result.capabilities)
+        coverage_fragments.append(filesystem_result.coverage_fragment())
         any_succeeded |= bool(filesystem_result.successful_roots)
 
     return Collection(
         diagnostics=tuple(diagnostics),
         capabilities=tuple(capabilities),
         any_collector_succeeded=any_succeeded,
-        commit_result=commit_result,
-        file_change_result=file_result,
-        tag_result=tag_result,
-        reflog_result=reflog_result,
+        git_result=git_result,
         filesystem_result=filesystem_result,
-        repository_resolution=repository_resolution,
+        coverage_fragments=tuple(coverage_fragments),
     )
 
 
-def _commit_matches_scope(
-    item: CollectedGitCommit,
-    timestamp_kinds: tuple[TimestampKind, ...],
-    scope: ObservationScope | None,
-) -> bool:
-    """Return whether a hydrated commit can produce a requested scoped role."""
-
-    if scope is None:
-        return True
-    for kind in timestamp_kinds:
-        observation = item.to_observation(kind)
-        if scope.includes_timestamp(
-            instant_utc_ns=observation.instant_utc_ns,
-            source=Source.GIT,
-            actor_name=observation.actor_name,
-            actor_email=observation.actor_email,
-        ):
-            return True
-    return False
-
-
-def merge_file_change_results(
-    results: Sequence[GitFileChangeCollectionResult],
-) -> GitFileChangeCollectionResult:
-    """Merge bounded Git derivation batches without reconstructing records."""
-
-    accounting_by_repository: dict[str, GitFileChangeRepositoryAccounting] = {}
-    for result in results:
-        for item in result.repository_accounting:
-            existing = accounting_by_repository.get(item.repository.identity)
-            if existing is None:
-                accounting_by_repository[item.repository.identity] = item
-            else:
-                if existing.timestamp_kinds != item.timestamp_kinds:
-                    raise ValueError("cannot merge file-change accounting with different timestamp kinds")
-                accounting_by_repository[item.repository.identity] = GitFileChangeRepositoryAccounting(
-                    repository=existing.repository,
-                    requested_commits=existing.requested_commits + item.requested_commits,
-                    successful_commits=existing.successful_commits + item.successful_commits,
-                    parse_errors=existing.parse_errors + item.parse_errors,
-                    subprocess_errors=existing.subprocess_errors + item.subprocess_errors,
-                    discovered_changes=existing.discovered_changes + item.discovered_changes,
-                    timestamp_kinds=existing.timestamp_kinds,
-                    scope_matches=tuple(
-                        (
-                            kind,
-                            existing.scope_match_count(kind) + item.scope_match_count(kind),
-                        )
-                        for kind in existing.timestamp_kinds
-                    ),
-                )
-    return GitFileChangeCollectionResult(
-        changes=tuple(change for result in results for change in result.changes),
-        diagnostics=tuple(diagnostic for result in results for diagnostic in result.diagnostics),
-        requested_commits=sum(result.requested_commits for result in results),
-        successful_commits=sum(result.successful_commits for result in results),
-        discovered_changes=sum(result.discovered_changes for result in results),
-        parse_errors=sum(result.parse_errors for result in results),
-        subprocess_errors=sum(result.subprocess_errors for result in results),
-        repository_accounting=tuple(accounting_by_repository.values()),
-        records_retained=all(result.records_retained for result in results),
-    )
+__all__ = ["Collection", "CollectorServices", "collect"]

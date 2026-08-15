@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TypeVar
 
 from workfold.domain.coverage.models import (
+    CoverageFragment,
     CoverageLedger,
     ExtractionDisposition,
     PlottingDisposition,
@@ -187,4 +189,41 @@ def merge_ledgers(*ledgers: CoverageLedger) -> CoverageLedger:
     return builder.build()
 
 
-__all__ = ["CoverageLedgerBuilder", "merge_ledgers"]
+def finalize_coverage_fragments(
+    fragments: Sequence[CoverageFragment],
+    observation_counts: Mapping[TimestampCoverageKey, int],
+    plotting_counts: Mapping[tuple[TimestampCoverageKey, PlottingDisposition], int],
+) -> CoverageLedger:
+    """Combine source accounting with independently measured pipeline outcomes."""
+
+    builder = CoverageLedgerBuilder()
+    timestamp_keys: set[TimestampCoverageKey] = set()
+    for fragment in fragments:
+        for item in fragment.records:
+            builder.discover_record(item.key, item.discovered)
+            for disposition in RecordDisposition:
+                builder.record_outcome(item.key, disposition, item.count(disposition))
+        for item in fragment.timestamps:
+            timestamp_keys.add(item.key)
+            builder.examine_slot(item.key, item.examined)
+            for disposition in ExtractionDisposition:
+                builder.extraction_outcome(item.key, disposition, item.extraction_count(disposition))
+            builder.match_scope(item.key, item.scope_matches)
+            builder.scope_error(item.key, item.scope_errors)
+            builder.materialization_error(item.key, item.materialization_errors)
+
+    unknown_observations = set(observation_counts) - timestamp_keys
+    unknown_plotting = {key for key, _disposition in plotting_counts} - timestamp_keys
+    if unknown_observations or unknown_plotting:
+        raise ValueError(
+            "pipeline coverage contains unknown collector partitions "
+            f"(observations={len(unknown_observations)}, plotting={len(unknown_plotting)})"
+        )
+    for key in timestamp_keys:
+        builder.select_observation(key, observation_counts.get(key, 0))
+        for disposition in PlottingDisposition:
+            builder.plotting_outcome(key, disposition, plotting_counts.get((key, disposition), 0))
+    return builder.build()
+
+
+__all__ = ["CoverageLedgerBuilder", "finalize_coverage_fragments", "merge_ledgers"]

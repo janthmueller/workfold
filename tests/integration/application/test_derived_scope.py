@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import BinaryIO
 from zoneinfo import ZoneInfo
 
+from workfold.application.collection import CollectorServices
 from workfold.application.collection import collect as collect_sources
 from workfold.cli import parse_options
 from workfold.cli.runner import default_collector_services, run
@@ -32,6 +33,11 @@ def _git_date(value: datetime) -> str:
 
 def _assert_summary_count(rendered: str, label: str, count: int) -> None:
     assert re.search(rf"^{re.escape(label)}\s+{count:,}$", rendered, re.MULTILINE)
+
+
+def _with_file_change_collector(collector: GitFileChangeCollector) -> CollectorServices:
+    services = default_collector_services()
+    return replace(services, git=replace(services.git, file_changes=collector))
 
 
 def test_file_change_scope_reports_commit_inputs_and_derivation_per_repository(
@@ -218,7 +224,7 @@ def test_bounded_file_changes_match_all_time_reference_and_diff_only_selected_co
 
         collect_sources(
             options,
-            replace(default_collector_services(), file_changes=file_changes),
+            _with_file_change_collector(file_changes),
             observation_consumer=consume,
             observation_scope=selected_scope,
         )
@@ -403,10 +409,7 @@ def test_file_change_failure_accounts_for_commits_without_inventing_change_recor
             stdout=output,
             stderr=errors,
             terminal_width=240,
-            collectors=replace(
-                default_collector_services(),
-                file_changes=GitFileChangeCollector(FailureRunner()),
-            ),
+            collectors=_with_file_change_collector(GitFileChangeCollector(FailureRunner())),
         )
         == 0
     )

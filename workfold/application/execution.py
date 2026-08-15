@@ -97,7 +97,6 @@ def execute(
         chart = aggregation.build()
         ledger = build_coverage(
             collection,
-            options,
             observations=classifier.observation_counts,
             plotting=classifier.plotting_counts,
         )

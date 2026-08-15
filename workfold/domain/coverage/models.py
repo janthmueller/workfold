@@ -253,6 +253,84 @@ class TimestampCoverage:
 
 
 @dataclass(frozen=True, slots=True)
+class CollectionTimestampCoverage:
+    """Collector-owned accounting before pipeline selection and plotting."""
+
+    key: TimestampCoverageKey
+    examined: int = 0
+    values_read: int = 0
+    unavailable: int = 0
+    unsupported: int = 0
+    extraction_errors: int = 0
+    scope_matches: int = 0
+    materialization_errors: int = 0
+    scope_errors: int = 0
+
+    def __post_init__(self) -> None:
+        _require_non_negative(
+            self.examined,
+            self.values_read,
+            self.unavailable,
+            self.unsupported,
+            self.extraction_errors,
+            self.scope_matches,
+            self.materialization_errors,
+            self.scope_errors,
+        )
+
+    @property
+    def extraction_total(self) -> int:
+        return self.values_read + self.unavailable + self.unsupported + self.extraction_errors
+
+    def extraction_count(self, disposition: ExtractionDisposition) -> int:
+        return {
+            ExtractionDisposition.CAPTURED: self.values_read,
+            ExtractionDisposition.UNAVAILABLE: self.unavailable,
+            ExtractionDisposition.UNSUPPORTED: self.unsupported,
+            ExtractionDisposition.ERROR: self.extraction_errors,
+        }[disposition]
+
+    def validate(self) -> None:
+        problems: list[str] = []
+        if self.examined != self.extraction_total:
+            problems.append(f"examined={self.examined}, extraction dispositions={self.extraction_total}")
+        if self.scope_matches + self.scope_errors > self.values_read:
+            problems.append(f"scope outcomes={self.scope_matches + self.scope_errors}, values read={self.values_read}")
+        if self.materialization_errors > self.scope_matches:
+            problems.append(
+                f"materialization errors={self.materialization_errors}, scope matches={self.scope_matches}"
+            )
+        if problems:
+            raise CoverageInvariantError(
+                f"collection timestamp coverage does not reconcile for {self.key!r}: {'; '.join(problems)}"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class CoverageFragment:
+    """One source's immutable coverage contribution before the shared pipeline."""
+
+    records: tuple[RecordCoverage, ...] = ()
+    timestamps: tuple[CollectionTimestampCoverage, ...] = ()
+
+    def __post_init__(self) -> None:
+        if len({item.key for item in self.records}) != len(self.records):
+            raise ValueError("coverage fragment contains duplicate record partition keys")
+        if len({item.key for item in self.timestamps}) != len(self.timestamps):
+            raise ValueError("coverage fragment contains duplicate timestamp partition keys")
+        records_by_key = {item.key for item in self.records}
+        for item in self.records:
+            item.validate()
+        for item in self.timestamps:
+            item.validate()
+            record_key = RecordCoverageKey(item.key.source, item.key.target, item.key.record_kind)
+            if record_key not in records_by_key:
+                raise CoverageInvariantError(
+                    f"coverage fragment timestamp has no matching record partition for {item.key!r}"
+                )
+
+
+@dataclass(frozen=True, slots=True)
 class CoverageLedger:
     """An immutable, validated snapshot of all coverage partitions."""
 
@@ -335,6 +413,8 @@ def _require_non_negative(*values: int) -> None:
 __all__ = [
     "Capability",
     "CapabilityStatus",
+    "CollectionTimestampCoverage",
+    "CoverageFragment",
     "CoverageInvariantError",
     "CoverageLedger",
     "ExtractionDisposition",

@@ -1,9 +1,11 @@
 """Typed, reconcilable coverage accounting."""
 
-from workfold.domain.coverage.builder import CoverageLedgerBuilder, merge_ledgers
+from workfold.domain.coverage.builder import CoverageLedgerBuilder, finalize_coverage_fragments, merge_ledgers
 from workfold.domain.coverage.models import (
     Capability,
     CapabilityStatus,
+    CollectionTimestampCoverage,
+    CoverageFragment,
     CoverageInvariantError,
     CoverageLedger,
     ExtractionDisposition,
@@ -18,6 +20,8 @@ from workfold.domain.coverage.models import (
 __all__ = [
     "Capability",
     "CapabilityStatus",
+    "CollectionTimestampCoverage",
+    "CoverageFragment",
     "CoverageInvariantError",
     "CoverageLedger",
     "CoverageLedgerBuilder",
@@ -28,5 +32,6 @@ __all__ = [
     "RecordDisposition",
     "TimestampCoverage",
     "TimestampCoverageKey",
+    "finalize_coverage_fragments",
     "merge_ledgers",
 ]

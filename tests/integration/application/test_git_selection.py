@@ -10,6 +10,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from workfold.application.collection import CollectorServices
 from workfold.cli import parse_options
 from workfold.cli.runner import default_collector_services, run
 from workfold.collection.git import GitCollector, GitRunner
@@ -26,6 +27,11 @@ def _git_date(value: datetime) -> str:
 
 def _assert_summary_count(rendered: str, label: str, count: int) -> None:
     assert re.search(rf"^{re.escape(label)}\s+{count:,}$", rendered, re.MULTILINE)
+
+
+def _with_git_collector(collector: GitCollector) -> CollectorServices:
+    services = default_collector_services()
+    return replace(services, git=replace(services.git, commits=collector))
 
 
 def test_known_out_of_scope_git_timestamp_is_not_a_coverage_outcome(tmp_path: Path) -> None:
@@ -160,7 +166,7 @@ def test_bounded_git_identity_filter_matches_only_in_range_identity(tmp_path: Pa
             stdout=output,
             stderr=StringIO(),
             terminal_width=100,
-            collectors=replace(default_collector_services(), git=GitCollector(runner)),
+            collectors=_with_git_collector(GitCollector(runner)),
         )
         == 0
     )
@@ -243,10 +249,7 @@ def test_selected_git_hydration_failure_preserves_scope_accounting(
             stdout=output,
             stderr=errors,
             terminal_width=500,
-            collectors=replace(
-                default_collector_services(),
-                git=GitCollector(MissingObjectRunner(stream_output=False)),
-            ),
+            collectors=_with_git_collector(GitCollector(MissingObjectRunner(stream_output=False))),
         )
         == 0
     )

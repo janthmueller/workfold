@@ -89,7 +89,7 @@ def test_collector_scope_accounting_detects_a_dropped_pipeline_batch(
     )
 
     with pytest.raises(CoverageInvariantError, match="scope matches"):
-        build_coverage(collection, options, observations={}, plotting={})
+        build_coverage(collection, observations={}, plotting={})
 
 
 def test_git_commit_flows_through_selection_schedule_and_terminal_report(tmp_path: Path) -> None:

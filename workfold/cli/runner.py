@@ -14,10 +14,7 @@ from workfold.application.execution import execute
 from workfold.application.report import ReportRequirements
 from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticSeverity
 from workfold.collection.filesystem import FilesystemCollector
-from workfold.collection.git import GitCollector, GitRepositoryResolver
-from workfold.collection.git.changes import GitFileChangeCollector
-from workfold.collection.git.reflogs import GitReflogCollector
-from workfold.collection.git.tags import GitTagCollector
+from workfold.collection.git.evidence import GitEvidenceCollector
 from workfold.configuration.options import MarkerStyle, RunOptions
 from workfold.reporting.sanitization import sanitize_terminal_text
 from workfold.reporting.terminal import TerminalOptions, terminal_color_enabled, write_terminal
@@ -120,11 +117,7 @@ def default_collector_services() -> CollectorServices:
     """Assemble Workfold's production collection adapters."""
 
     return CollectorServices(
-        git=GitCollector(),
-        repositories=GitRepositoryResolver(),
-        file_changes=GitFileChangeCollector(),
-        tags=GitTagCollector(),
-        reflogs=GitReflogCollector(),
+        git=GitEvidenceCollector(),
         filesystem=FilesystemCollector(),
     )
 

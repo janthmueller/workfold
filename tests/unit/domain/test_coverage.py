@@ -4,6 +4,8 @@ import pytest
 from workfold.domain.coverage import (
     Capability,
     CapabilityStatus,
+    CollectionTimestampCoverage,
+    CoverageFragment,
     CoverageInvariantError,
     CoverageLedger,
     CoverageLedgerBuilder,
@@ -14,6 +16,7 @@ from workfold.domain.coverage import (
     RecordDisposition,
     TimestampCoverage,
     TimestampCoverageKey,
+    finalize_coverage_fragments,
     merge_ledgers,
 )
 from workfold.domain.observations import EntryType, RecordKind, Source, TimestampKind
@@ -171,6 +174,55 @@ def test_ledger_merge_adds_matching_partitions() -> None:
     assert merged.records_discovered == 6
     assert merged.slots_examined == 4
     assert merged.markers_plotted == 2
+
+
+def test_source_fragment_is_completed_by_independent_pipeline_counts() -> None:
+    fragment = CoverageFragment(
+        records=(RecordCoverage(RECORD_KEY, discovered=1, eligible=1),),
+        timestamps=(
+            CollectionTimestampCoverage(
+                AUTHOR_KEY,
+                examined=1,
+                values_read=1,
+                scope_matches=1,
+            ),
+        ),
+    )
+
+    ledger = finalize_coverage_fragments(
+        (fragment,),
+        {AUTHOR_KEY: 1},
+        {(AUTHOR_KEY, PlottingDisposition.MARKER): 1},
+    )
+
+    assert ledger.observations_selected == 1
+    assert ledger.markers_plotted == 1
+
+
+def test_source_fragment_detects_dropped_and_unknown_pipeline_observations() -> None:
+    fragment = CoverageFragment(
+        records=(RecordCoverage(RECORD_KEY, discovered=1, eligible=1),),
+        timestamps=(
+            CollectionTimestampCoverage(
+                AUTHOR_KEY,
+                examined=1,
+                values_read=1,
+                scope_matches=1,
+            ),
+        ),
+    )
+
+    with pytest.raises(CoverageInvariantError, match="scope matches"):
+        finalize_coverage_fragments((fragment,), {}, {})
+
+    unknown_key = TimestampCoverageKey(
+        Source.GIT,
+        "/other",
+        RecordKind.COMMIT,
+        TimestampKind.GIT_AUTHOR,
+    )
+    with pytest.raises(ValueError, match="unknown collector partitions"):
+        finalize_coverage_fragments((fragment,), {unknown_key: 1}, {})
 
 
 def test_ledger_rejects_duplicate_partition_keys_and_negative_counts() -> None:

@@ -6,6 +6,11 @@ from workfold.collection.git.commits import (
     GitCollector,
     GitCommitRepositoryAccounting,
 )
+from workfold.collection.git.evidence import (
+    GitEvidenceCollectionResult,
+    GitEvidenceCollector,
+    GitEvidenceRequest,
+)
 from workfold.collection.git.objects.models import RevListScanSpec
 from workfold.collection.git.repository import (
     GitRepository,
@@ -24,6 +29,9 @@ __all__ = [
     "GitCollector",
     "GitCommandError",
     "GitCommitRepositoryAccounting",
+    "GitEvidenceCollectionResult",
+    "GitEvidenceCollector",
+    "GitEvidenceRequest",
     "GitRepository",
     "GitRepositoryResolutionResult",
     "GitRepositoryResolver",

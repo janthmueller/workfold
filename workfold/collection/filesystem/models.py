@@ -9,6 +9,8 @@ from pathlib import Path
 from workfold.collection.diagnostics import CollectorDiagnostic, diagnostics_are_partial
 from workfold.domain.coverage import (
     Capability,
+    CollectionTimestampCoverage,
+    CoverageFragment,
     CoverageLedger,
     CoverageLedgerBuilder,
     ExtractionDisposition,
@@ -17,6 +19,7 @@ from workfold.domain.coverage import (
     RecordCoverageKey,
     RecordDisposition,
     TimestampCoverageKey,
+    finalize_coverage_fragments,
 )
 from workfold.domain.observations import EntryType, RecordOrigin, TimestampObservation
 
@@ -154,20 +157,26 @@ class FilesystemAccounting:
     ) -> CoverageLedger:
         """Complete coverage from partition counts without retaining observation IDs."""
 
-        builder = CoverageLedgerBuilder()
-        for item in self.records:
-            builder.discover_record(item.key, item.discovered)
-            for disposition in RecordDisposition:
-                builder.record_outcome(item.key, disposition, item.count(disposition))
-        for item in self.timestamps:
-            builder.examine_slot(item.key, item.requested)
-            for disposition in ExtractionDisposition:
-                builder.extraction_outcome(item.key, disposition, item.count(disposition))
-            builder.match_scope(item.key, item.scope_matches)
-            builder.select_observation(item.key, observation_counts.get(item.key, 0))
-            for disposition in PlottingDisposition:
-                builder.plotting_outcome(item.key, disposition, plotting_counts.get((item.key, disposition), 0))
-        return builder.build()
+        return finalize_coverage_fragments((self.coverage_fragment(),), observation_counts, plotting_counts)
+
+    def coverage_fragment(self) -> CoverageFragment:
+        """Return source-owned discovery and extraction accounting."""
+
+        return CoverageFragment(
+            records=self.records,
+            timestamps=tuple(
+                CollectionTimestampCoverage(
+                    key=item.key,
+                    examined=item.requested,
+                    values_read=item.captured,
+                    unavailable=item.unavailable,
+                    unsupported=item.unsupported,
+                    extraction_errors=item.errors,
+                    scope_matches=item.scope_matches,
+                )
+                for item in self.timestamps
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,3 +232,6 @@ class FilesystemCollectionResult:
         plotting_counts: Mapping[tuple[TimestampCoverageKey, PlottingDisposition], int],
     ) -> CoverageLedger:
         return self.accounting.build_coverage_counts(observation_counts, plotting_counts)
+
+    def coverage_fragment(self) -> CoverageFragment:
+        return self.accounting.coverage_fragment()

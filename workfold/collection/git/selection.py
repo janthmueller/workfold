@@ -1,14 +1,14 @@
-"""Fuse exact Git observation scope into commit discovery."""
+"""Apply exact shared observation scope during Git commit discovery."""
 
 from __future__ import annotations
 
-from workfold.collection.git import GitRepository
 from workfold.collection.git.objects.models import (
     GitSignatureRole,
     ParsedCommit,
     RevListCommitScan,
     RevListScanSpec,
 )
+from workfold.collection.git.repository import GitRepository
 from workfold.domain.observations import Source, TimestampKind
 from workfold.domain.scope import ObservationScope
 
