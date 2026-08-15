@@ -277,17 +277,12 @@ def parse_event_list(values: tuple[str, ...]) -> EventListSelection | None:
         if normalized != ("none",):
             raise UsageError("--list none cannot be combined with other selectors")
         return None
-    if "all" in normalized:
-        if normalized != ("all",):
-            raise UsageError("--list all cannot be combined with other selectors")
-        return EventListSelection()
-
-    schedule_values = tuple(value for value in normalized if value in {"inside", "outside"})
+    schedule_values = tuple(value for value in normalized if value in {"all", "inside", "outside"})
     if len(set(schedule_values)) > 1:
-        raise UsageError("--list inside and --list outside are mutually exclusive")
+        raise UsageError("--list all, inside, and outside are mutually exclusive")
     if len(schedule_values) != len(set(schedule_values)):
         raise UsageError("--list schedule selectors cannot be repeated")
-    event_values = tuple(value for value in normalized if value not in {"inside", "outside"})
+    event_values = tuple(value for value in normalized if value not in {"all", "inside", "outside"})
     schedule = ListSchedule(schedule_values[0]) if schedule_values else ListSchedule.ALL
     if not event_values:
         return EventListSelection(schedule=schedule)

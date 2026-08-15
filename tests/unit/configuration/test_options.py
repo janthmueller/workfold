@@ -582,6 +582,14 @@ def test_general_event_list_supports_schedule_and_event_intersection() -> None:
     assert parse_event_list(("all",)) == EventListSelection()
     assert parse_event_list(("none",)) is None
 
+    explicit_all = parse_options(
+        ["--events", "git:tag:tagger", "--list", "all", "git:tag:tagger"],
+    )
+    assert explicit_all.terminal.event_list == EventListSelection(
+        schedule=ListSchedule.ALL,
+        evidence_kinds=(EvidenceKind.GIT_TAG_TAGGER,),
+    )
+
 
 def test_event_list_selection_rejects_non_enum_evidence_values() -> None:
     raw = cast(tuple[EvidenceKind, ...], ("git:tag:tagger",))

@@ -262,7 +262,7 @@ def _resolve_list_selection(
     enabled_kinds = frozenset(enabled.kinds)
     selected: set[EvidenceKind] = set()
     event_selectors = tuple(
-        value.strip().lower() for value in raw_values if value.strip().lower() not in {"inside", "outside"}
+        value.strip().lower() for value in raw_values if value.strip().lower() not in {"all", "inside", "outside"}
     )
     for selector in event_selectors:
         expanded = parse_event_selectors((selector,), option="--list")
