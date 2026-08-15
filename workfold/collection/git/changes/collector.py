@@ -310,6 +310,7 @@ def _command_diagnostic(error: GitCommandError, *, repository: GitRepository) ->
         path=os.fspath(repository.root),
         message=message,
         hint=error.hint,
+        category=error.category,
     )
 
 

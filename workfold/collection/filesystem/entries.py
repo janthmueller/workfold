@@ -6,7 +6,12 @@ import os
 import stat
 from pathlib import Path, PurePosixPath
 
-from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticSeverity
+from workfold.collection.diagnostics import (
+    CollectorDiagnostic,
+    DiagnosticCategory,
+    DiagnosticKind,
+    DiagnosticSeverity,
+)
 from workfold.collection.filesystem.ignore import (
     GitIgnoreProbe,
     GitIgnoreRepository,
@@ -17,7 +22,7 @@ from workfold.collection.filesystem.ignore import (
 )
 from workfold.collection.filesystem.models import CollectedFilesystemEntry
 from workfold.collection.filesystem.scan import DirectorySafetyError, PendingEntry
-from workfold.domain.coverage import Capability, CapabilityStatus, RecordDisposition
+from workfold.domain.coverage import Capability, CapabilityKind, CapabilityStatus, RecordDisposition
 from workfold.domain.observations import EntryType, RecordKind, RecordOrigin, Source
 from workfold.domain.provenance import absolute_filesystem_entry_id
 
@@ -130,6 +135,7 @@ def stat_diagnostic(root: Path, path: Path, error: OSError, *, is_root: bool) ->
         target=os.fspath(root),
         message=f"filesystem metadata could not be read: {error}",
         path=os.fspath(path),
+        category=(DiagnosticCategory.INVOCATION if code == "path_not_found" else DiagnosticCategory.COLLECTION),
     )
 
 
@@ -160,6 +166,7 @@ def ignore_diagnostic(root: Path, error: Exception, *, warning: bool) -> Collect
         path=os.fspath(root),
         hint=hint,
         affects_completeness=incomplete_inventory,
+        kind=DiagnosticKind.FILESYSTEM_INVENTORY if incomplete_inventory else DiagnosticKind.GENERAL,
     )
 
 
@@ -185,6 +192,7 @@ def ignore_capability(
     return Capability(
         source=Source.FILESYSTEM,
         target=os.fspath(root),
+        kind=CapabilityKind.GIT_IGNORE_SEMANTICS,
         name="standard Git ignore semantics",
         status=status,
         note=note,

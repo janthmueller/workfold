@@ -19,6 +19,7 @@ from workfold.application.report import (
     ReportScope,
 )
 from workfold.application.resolution import ResolvedTimeSelection
+from workfold.collection.diagnostics import DiagnosticKind
 from workfold.collection.git.evidence import GitCommitInputSummary, GitFileChangeSummary
 from workfold.configuration.options import RunOptions
 from workfold.domain.coverage import CoverageLedger
@@ -62,12 +63,12 @@ def _collection_facts(collection: Collection) -> CollectionFacts:
         filesystem_inventory_failures=sum(
             item.completeness_failure_count
             for item in collection.diagnostics
-            if item.code == "git_filesystem_inventory_incomplete"
+            if item.kind is DiagnosticKind.FILESYSTEM_INVENTORY
         ),
         other_completeness_failures=sum(
             item.completeness_failure_count
             for item in collection.diagnostics
-            if item.code != "git_filesystem_inventory_incomplete"
+            if item.kind is not DiagnosticKind.FILESYSTEM_INVENTORY
         ),
     )
     git = collection.git_summary

@@ -45,16 +45,42 @@ class CapabilityStatus(str, Enum):
     POTENTIALLY_UNRELIABLE = "potentially_unreliable"
 
 
+class CapabilityKind(str, Enum):
+    """Stable semantic identity for a collector/platform capability."""
+
+    FS_CREATED_TIME = "fs_created_time"
+    FS_MODIFIED_TIME = "fs_modified_time"
+    FS_METADATA_CHANGED_TIME = "fs_metadata_changed_time"
+    FS_ACCESSED_TIME = "fs_accessed_time"
+    GIT_IGNORE_SEMANTICS = "git_ignore_semantics"
+
+
 @dataclass(frozen=True, slots=True)
 class Capability:
     """A collector/platform capability statement."""
 
     source: Source
     target: str
+    kind: CapabilityKind
     name: str
     status: CapabilityStatus
     timestamp_kind: TimestampKind | None = None
     note: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.source is not Source.FILESYSTEM:
+            raise ValueError("defined capability kinds currently belong to the filesystem source")
+        timestamp_capabilities = {
+            CapabilityKind.FS_CREATED_TIME: TimestampKind.FS_CREATED,
+            CapabilityKind.FS_MODIFIED_TIME: TimestampKind.FS_MODIFIED,
+            CapabilityKind.FS_METADATA_CHANGED_TIME: TimestampKind.FS_METADATA_CHANGED,
+            CapabilityKind.FS_ACCESSED_TIME: TimestampKind.FS_ACCESSED,
+        }
+        expected_timestamp = timestamp_capabilities.get(self.kind)
+        if expected_timestamp is not None and self.timestamp_kind is not expected_timestamp:
+            raise ValueError("timestamp capability kind does not match its timestamp kind")
+        if self.kind is CapabilityKind.GIT_IGNORE_SEMANTICS and self.timestamp_kind is not None:
+            raise ValueError("Git ignore capability cannot describe a timestamp kind")
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,6 +438,7 @@ def _require_non_negative(*values: int) -> None:
 
 __all__ = [
     "Capability",
+    "CapabilityKind",
     "CapabilityStatus",
     "CollectionTimestampCoverage",
     "CoverageFragment",

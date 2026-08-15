@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticBuffer
+from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticBuffer, DiagnosticCategory
 from workfold.collection.git.runner import GitCommandError, GitRunner, command_diagnostic
 
 
@@ -61,6 +61,7 @@ def resolve_repository(path: Path, runner: GitRunner) -> GitRepository:
             command=(),
             cwd=expanded.parent,
             hint="Pass an existing file or directory.",
+            category=DiagnosticCategory.INVOCATION,
         ) from error
     probe = selected if selected.is_dir() else selected.parent
 
@@ -77,6 +78,7 @@ def resolve_repository(path: Path, runner: GitRunner) -> GitRepository:
                 stderr=error.stderr,
                 stderr_truncated=error.stderr_truncated,
                 hint="Use --mode fs or pass a path inside a Git repository.",
+                category=DiagnosticCategory.INVOCATION,
             ) from error
         raise
     if bare_output not in {b"true", b"false"}:

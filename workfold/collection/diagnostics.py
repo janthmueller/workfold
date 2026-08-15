@@ -10,6 +10,20 @@ from typing import Final
 _DEFAULT_DIAGNOSTIC_LIMIT: Final[int] = 256
 
 
+class DiagnosticCategory(str, Enum):
+    """Stable policy category independent of source-specific diagnostic codes."""
+
+    INVOCATION = "invocation"
+    COLLECTION = "collection"
+
+
+class DiagnosticKind(str, Enum):
+    """Typed semantic identity for diagnostics with dedicated handling."""
+
+    GENERAL = "general"
+    FILESYSTEM_INVENTORY = "filesystem_inventory"
+
+
 class DiagnosticSeverity(str, Enum):
     """Machine-readable operational severity independent of rendered text."""
 
@@ -70,6 +84,8 @@ class CollectorDiagnostic:
     hint: str | None = None
     affects_completeness: bool = False
     represented_occurrences: DiagnosticOccurrences | None = None
+    category: DiagnosticCategory = DiagnosticCategory.COLLECTION
+    kind: DiagnosticKind = DiagnosticKind.GENERAL
 
     def __post_init__(self) -> None:
         if self.represented_occurrences is not None and self.represented_occurrences.total < 1:
@@ -175,6 +191,8 @@ def diagnostics_are_partial(diagnostics: Iterable[CollectorDiagnostic]) -> bool:
 
 __all__ = [
     "CollectorDiagnostic",
+    "DiagnosticCategory",
+    "DiagnosticKind",
     "DiagnosticBuffer",
     "DiagnosticOccurrences",
     "DiagnosticSeverity",

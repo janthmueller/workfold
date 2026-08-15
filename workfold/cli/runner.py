@@ -12,14 +12,12 @@ from typing import TextIO
 from workfold.application.collection import CollectorServices
 from workfold.application.execution import execute
 from workfold.application.report import ReportRequirements
-from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticSeverity
+from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticCategory, DiagnosticSeverity
 from workfold.collection.filesystem import FilesystemCollector
 from workfold.collection.git.evidence import GitEvidenceCollector
 from workfold.configuration.options import MarkerStyle, RunOptions
 from workfold.reporting.sanitization import sanitize_terminal_text
 from workfold.reporting.terminal import TerminalOptions, terminal_color_enabled, write_terminal
-
-_USAGE_COLLECTION_FAILURE_CODES = frozenset({"git_not_found", "not_git_repository", "path_not_found"})
 
 
 def run(
@@ -102,8 +100,8 @@ def _write_diagnostics(
 def _failed_collection_exit_status(diagnostics: Sequence[CollectorDiagnostic]) -> int:
     """Map a wholly unusable target/dependency selection to its CLI status."""
 
-    error_codes = {item.code for item in diagnostics if item.severity is DiagnosticSeverity.ERROR}
-    if error_codes and error_codes <= _USAGE_COLLECTION_FAILURE_CODES:
+    error_categories = {item.category for item in diagnostics if item.severity is DiagnosticSeverity.ERROR}
+    if error_categories == {DiagnosticCategory.INVOCATION}:
         return 2
     return 1
 

@@ -69,6 +69,7 @@ def _command_diagnostic(
         path=os.fspath(repository.root),
         message=message,
         hint=error.hint,
+        category=error.category,
     )
 
 

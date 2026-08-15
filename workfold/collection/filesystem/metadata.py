@@ -24,7 +24,7 @@ from workfold.collection.filesystem.linux import (
     LinuxStatxReader,
     LinuxStatxSnapshot,
 )
-from workfold.domain.coverage import Capability, CapabilityStatus, ExtractionDisposition
+from workfold.domain.coverage import Capability, CapabilityKind, CapabilityStatus, ExtractionDisposition
 from workfold.domain.observations import Source, TimestampKind
 
 _NANOSECONDS_PER_SECOND: Final[int] = 1_000_000_000
@@ -145,6 +145,7 @@ class FilesystemTimestampAdapter:
             return Capability(
                 source=Source.FILESYSTEM,
                 target=target,
+                kind=_capability_kind(kind),
                 name="filesystem accessed time",
                 status=CapabilityStatus.POTENTIALLY_UNRELIABLE,
                 timestamp_kind=kind,
@@ -156,6 +157,7 @@ class FilesystemTimestampAdapter:
         return Capability(
             source=Source.FILESYSTEM,
             target=target,
+            kind=_capability_kind(kind),
             name=_capability_name(kind),
             status=CapabilityStatus.SUPPORTED if supported else CapabilityStatus.UNSUPPORTED,
             timestamp_kind=kind,
@@ -172,6 +174,7 @@ class FilesystemTimestampAdapter:
             return Capability(
                 source=Source.FILESYSTEM,
                 target=target,
+                kind=_capability_kind(TimestampKind.FS_CREATED),
                 name=_capability_name(TimestampKind.FS_CREATED),
                 status=CapabilityStatus.SUPPORTED,
                 timestamp_kind=TimestampKind.FS_CREATED,
@@ -182,6 +185,7 @@ class FilesystemTimestampAdapter:
             return Capability(
                 source=Source.FILESYSTEM,
                 target=target,
+                kind=_capability_kind(TimestampKind.FS_CREATED),
                 name=_capability_name(TimestampKind.FS_CREATED),
                 status=CapabilityStatus.UNSUPPORTED if unsupported else CapabilityStatus.UNAVAILABLE,
                 timestamp_kind=TimestampKind.FS_CREATED,
@@ -265,6 +269,7 @@ class FilesystemTimestampAdapter:
             return Capability(
                 source=Source.FILESYSTEM,
                 target=os.fspath(target),
+                kind=_capability_kind(TimestampKind.FS_CREATED),
                 name=_capability_name(TimestampKind.FS_CREATED),
                 status=CapabilityStatus.UNSUPPORTED,
                 timestamp_kind=TimestampKind.FS_CREATED,
@@ -277,6 +282,7 @@ class FilesystemTimestampAdapter:
             return Capability(
                 source=Source.FILESYSTEM,
                 target=os.fspath(target),
+                kind=_capability_kind(TimestampKind.FS_CREATED),
                 name=_capability_name(TimestampKind.FS_CREATED),
                 status=CapabilityStatus.UNSUPPORTED if unsupported else CapabilityStatus.UNAVAILABLE,
                 timestamp_kind=TimestampKind.FS_CREATED,
@@ -292,6 +298,7 @@ class FilesystemTimestampAdapter:
         return Capability(
             source=Source.FILESYSTEM,
             target=os.fspath(target),
+            kind=_capability_kind(TimestampKind.FS_CREATED),
             name=_capability_name(TimestampKind.FS_CREATED),
             status=CapabilityStatus.SUPPORTED,
             timestamp_kind=TimestampKind.FS_CREATED,
@@ -409,6 +416,15 @@ def _capability_name(kind: TimestampKind) -> str:
         TimestampKind.FS_MODIFIED: "filesystem modification time",
         TimestampKind.FS_METADATA_CHANGED: "filesystem metadata-change time",
         TimestampKind.FS_ACCESSED: "filesystem accessed time",
+    }[kind]
+
+
+def _capability_kind(kind: TimestampKind) -> CapabilityKind:
+    return {
+        TimestampKind.FS_CREATED: CapabilityKind.FS_CREATED_TIME,
+        TimestampKind.FS_MODIFIED: CapabilityKind.FS_MODIFIED_TIME,
+        TimestampKind.FS_METADATA_CHANGED: CapabilityKind.FS_METADATA_CHANGED_TIME,
+        TimestampKind.FS_ACCESSED: CapabilityKind.FS_ACCESSED_TIME,
     }[kind]
 
 

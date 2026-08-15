@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, cast
 
+from workfold.collection.diagnostics import DiagnosticCategory
 from workfold.collection.git.command_error import GitCommandError
 from workfold.collection.process import streaming_deadline
 
@@ -88,6 +89,7 @@ def open_git_stdout(
                 command=command,
                 cwd=cwd,
                 hint="Install Git or use --mode fs.",
+                category=DiagnosticCategory.INVOCATION,
             ) from error
         except OSError as error:
             raise GitCommandError(

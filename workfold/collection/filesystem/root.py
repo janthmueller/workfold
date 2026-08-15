@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from workfold.collection.diagnostics import CollectorDiagnostic
@@ -48,31 +49,71 @@ from workfold.domain.observations import EntryType, TimestampKind, TimestampObse
 from workfold.domain.scope import ObservationScope
 
 
+@dataclass(frozen=True, slots=True)
+class RootScanRequest:
+    """Resolved policy for one prepared filesystem root."""
+
+    entry_timestamps: Mapping[EntryType, tuple[TimestampKind, ...]]
+    respect_gitignore: bool
+    excluder: ExplicitExcluder
+    observation_scope: ObservationScope | None
+    ownership: RootOwnershipScope
+
+
+@dataclass(frozen=True, slots=True)
+class RootScanSinks:
+    """Mutable accounting and bounded-delivery sinks for one root scan."""
+
+    accounting: AccountingBuilder
+    entries: list[CollectedFilesystemEntry] | None
+    observations: list[TimestampObservation] | None
+    capabilities: list[Capability]
+    diagnostics: list[CollectorDiagnostic]
+    observation_consumer: FilesystemObservationConsumer | None
+    nested_repository_consumer: Callable[[RootSnapshot, ExplicitExcluder], None]
+
+
+@dataclass(frozen=True, slots=True)
+class RootScanServices:
+    """Filesystem mechanisms shared by every root in one collection pass."""
+
+    timestamp_adapter: FilesystemTimestampAdapter
+    ignore_service: GitIgnoreService
+    lstat_reader: LstatReader
+    root_identity_reader: LstatReader
+    scandir_reader: ScandirReader
+    fast_inventory_supported: bool
+    inventory_statx_reader: LinuxStatxReader | None
+
+
 def collect_root(
     root_snapshot: RootSnapshot,
     *,
-    entry_timestamps: Mapping[EntryType, tuple[TimestampKind, ...]],
-    respect_gitignore: bool,
-    excluder: ExplicitExcluder,
-    accounting: AccountingBuilder,
-    entries: list[CollectedFilesystemEntry] | None,
-    observations: list[TimestampObservation] | None,
-    capabilities: list[Capability],
-    diagnostics: list[CollectorDiagnostic],
-    observation_consumer: FilesystemObservationConsumer | None,
-    observation_scope: ObservationScope | None,
-    nested_repository_consumer: Callable[[RootSnapshot, ExplicitExcluder], None],
-    timestamp_adapter: FilesystemTimestampAdapter,
-    ignore_service: GitIgnoreService,
-    lstat_reader: LstatReader,
-    root_identity_reader: LstatReader,
-    scandir_reader: ScandirReader,
-    fast_inventory_supported: bool,
-    inventory_statx_reader: LinuxStatxReader | None,
-    ownership: RootOwnershipScope,
+    request: RootScanRequest,
+    sinks: RootScanSinks,
+    services: RootScanServices,
 ) -> None:
     """Apply metadata, entry, and ignore semantics to one root."""
 
+    entry_timestamps = request.entry_timestamps
+    respect_gitignore = request.respect_gitignore
+    excluder = request.excluder
+    observation_scope = request.observation_scope
+    ownership = request.ownership
+    accounting = sinks.accounting
+    entries = sinks.entries
+    observations = sinks.observations
+    capabilities = sinks.capabilities
+    diagnostics = sinks.diagnostics
+    observation_consumer = sinks.observation_consumer
+    nested_repository_consumer = sinks.nested_repository_consumer
+    timestamp_adapter = services.timestamp_adapter
+    ignore_service = services.ignore_service
+    lstat_reader = services.lstat_reader
+    root_identity_reader = services.root_identity_reader
+    scandir_reader = services.scandir_reader
+    fast_inventory_supported = services.fast_inventory_supported
+    inventory_statx_reader = services.inventory_statx_reader
     root = root_snapshot.path
     root_type = entry_type(root_snapshot.snapshot.st_mode)
     include_regular_files = EntryType.REGULAR_FILE in entry_timestamps
@@ -302,4 +343,4 @@ def collect_root(
             retain_entry(entries, pending_origin(item), RecordDisposition.IGNORED)
 
 
-__all__ = ["collect_root"]
+__all__ = ["RootScanRequest", "RootScanServices", "RootScanSinks", "collect_root"]

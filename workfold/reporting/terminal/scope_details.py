@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from workfold.application.report import CollectionFacts, ReportScope
-from workfold.domain.coverage import CapabilityStatus
+from workfold.domain.coverage import CapabilityKind, CapabilityStatus
 from workfold.domain.observations import EntryType, RecordKind, Source, TimestampKind
 from workfold.domain.scope import RefScope
 
@@ -55,7 +55,9 @@ def ignore_label(scope: ReportScope, collection: CollectionFacts) -> str | None:
     if scope.include_ignored:
         policy = "ignored entries included"
     else:
-        capabilities = tuple(item for item in collection.capabilities if item.name == "standard Git ignore semantics")
+        capabilities = tuple(
+            item for item in collection.capabilities if item.kind is CapabilityKind.GIT_IGNORE_SEMANTICS
+        )
         notes = tuple(item.note or "" for item in capabilities)
         if capabilities and all("outside a Git worktree" in note for note in notes):
             policy = "outside a Git worktree; no Git ignore rules apply"

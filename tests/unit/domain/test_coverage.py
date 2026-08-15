@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from workfold.domain.coverage import (
     Capability,
+    CapabilityKind,
     CapabilityStatus,
     CollectionTimestampCoverage,
     CoverageFragment,
@@ -287,9 +288,20 @@ def test_capability_retains_platform_availability_context() -> None:
     capability = Capability(
         Source.FILESYSTEM,
         "/root",
+        CapabilityKind.FS_CREATED_TIME,
         "birth time",
         CapabilityStatus.UNSUPPORTED,
         TimestampKind.FS_CREATED,
         "not exposed by adapter",
     )
     assert capability.status is CapabilityStatus.UNSUPPORTED
+
+    with pytest.raises(ValueError, match="does not match"):
+        Capability(
+            Source.FILESYSTEM,
+            "/root",
+            CapabilityKind.FS_CREATED_TIME,
+            "birth time",
+            CapabilityStatus.SUPPORTED,
+            TimestampKind.FS_MODIFIED,
+        )

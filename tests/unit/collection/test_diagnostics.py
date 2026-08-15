@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 import pytest
-from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticBuffer, DiagnosticSeverity
+from workfold.collection.diagnostics import (
+    CollectorDiagnostic,
+    DiagnosticBuffer,
+    DiagnosticCategory,
+    DiagnosticKind,
+    DiagnosticSeverity,
+)
 
 
 def _diagnostic(
@@ -54,6 +60,28 @@ def test_diagnostic_buffer_validates_its_limit_and_omits_no_summary_when_complet
 
     assert diagnostics.snapshot() == (diagnostic,)
     assert diagnostics.error_count == 0
+
+
+def test_diagnostic_policy_and_semantic_kind_are_typed_independently() -> None:
+    invocation = CollectorDiagnostic(
+        code="arbitrary_source_code",
+        stage="fixture",
+        target="target",
+        message="failure",
+        category=DiagnosticCategory.INVOCATION,
+    )
+    inventory = CollectorDiagnostic(
+        code="another_source_code",
+        stage="fixture",
+        target="target",
+        message="incomplete",
+        kind=DiagnosticKind.FILESYSTEM_INVENTORY,
+    )
+
+    assert invocation.category is DiagnosticCategory.INVOCATION
+    assert invocation.kind is DiagnosticKind.GENERAL
+    assert inventory.category is DiagnosticCategory.COLLECTION
+    assert inventory.kind is DiagnosticKind.FILESYSTEM_INVENTORY
 
 
 def test_diagnostic_buffer_preserves_completeness_impact_when_sample_is_truncated() -> None:

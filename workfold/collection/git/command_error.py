@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from workfold.collection.diagnostics import DiagnosticCategory
+
 
 class GitCommandError(RuntimeError):
     """Describe a Git subprocess failure without losing byte-exact stderr."""
@@ -19,6 +21,7 @@ class GitCommandError(RuntimeError):
         stderr: bytes = b"",
         stderr_truncated: bool = False,
         hint: str | None = None,
+        category: DiagnosticCategory = DiagnosticCategory.COLLECTION,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -28,6 +31,7 @@ class GitCommandError(RuntimeError):
         self.stderr = stderr
         self.stderr_truncated = stderr_truncated
         self.hint = hint
+        self.category = category
 
     @property
     def stderr_text(self) -> str:

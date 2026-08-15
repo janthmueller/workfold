@@ -3,6 +3,7 @@
 from workfold.domain.coverage.builder import CoverageLedgerBuilder, finalize_coverage_fragments, merge_ledgers
 from workfold.domain.coverage.models import (
     Capability,
+    CapabilityKind,
     CapabilityStatus,
     CollectionTimestampCoverage,
     CoverageFragment,
@@ -19,6 +20,7 @@ from workfold.domain.coverage.models import (
 
 __all__ = [
     "Capability",
+    "CapabilityKind",
     "CapabilityStatus",
     "CollectionTimestampCoverage",
     "CoverageFragment",

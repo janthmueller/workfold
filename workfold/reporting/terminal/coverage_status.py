@@ -6,7 +6,7 @@ from collections import Counter
 from collections.abc import Mapping
 
 from workfold.application.report import CollectionFacts, ReportScope
-from workfold.domain.coverage import CapabilityStatus, CoverageLedger
+from workfold.domain.coverage import Capability, CapabilityKind, CapabilityStatus, CoverageLedger
 from workfold.domain.observations import TimestampKind
 from workfold.reporting.terminal.coverage_scope import pruned_ignored_subtree_label, timestamp_label
 
@@ -48,14 +48,14 @@ def coverage_status_label(
     pruned_ignored_subtrees = collection.pruned_ignored_subtrees
     if pruned_ignored_subtrees:
         qualifiers.append(pruned_ignored_subtree_label(pruned_ignored_subtrees))
-    unsupported_capabilities: dict[str, str | None] = {}
+    unsupported_capabilities: dict[CapabilityKind, Capability] = {}
     for capability in collection.capabilities:
         if capability.status is CapabilityStatus.UNSUPPORTED:
-            unsupported_capabilities.setdefault(capability.name, capability.note)
-    for name, note in unsupported_capabilities.items():
-        qualifier = f"{name} unavailable"
-        if note:
-            qualifier += f": {note}"
+            unsupported_capabilities.setdefault(capability.kind, capability)
+    for capability in unsupported_capabilities.values():
+        qualifier = f"{capability.name} unavailable"
+        if capability.note:
+            qualifier += f": {capability.note}"
         qualifiers.append(qualifier)
     unavailable_by_kind = Counter[TimestampKind]()
     for item in ledger.timestamps:

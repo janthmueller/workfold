@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, Final
 
-from workfold.collection.diagnostics import CollectorDiagnostic
+from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticCategory
 from workfold.collection.git.command_error import GitCommandError
 from workfold.collection.git.process import open_git_stdout
 
@@ -120,6 +120,7 @@ class GitRunner:
                 command=command,
                 cwd=cwd,
                 hint="Install Git or use --mode fs.",
+                category=DiagnosticCategory.INVOCATION,
             ) from error
         except subprocess.TimeoutExpired as error:
             stderr = error.stderr if isinstance(error.stderr, bytes) else b""
@@ -270,6 +271,7 @@ def command_diagnostic(error: GitCommandError, *, stage: str, target: Path) -> C
         path=os.fspath(target),
         message=message,
         hint=error.hint,
+        category=error.category,
     )
 
 

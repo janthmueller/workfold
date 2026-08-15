@@ -26,7 +26,7 @@ from workfold.collection.filesystem.models import (
     FilesystemCollectionResult,
     TimestampExtractionCoverage,
 )
-from workfold.collection.filesystem.root import collect_root
+from workfold.collection.filesystem.root import RootScanRequest, RootScanServices, RootScanSinks, collect_root
 from workfold.collection.filesystem.root_schedule import ExplicitRootOwnership, RootScanSchedule
 from workfold.collection.filesystem.scan import (
     DirectorySafetyError,
@@ -116,6 +116,15 @@ class FilesystemCollector:
         schedule = RootScanSchedule(prepared_roots, scan_roots, excluder)
         successful_roots: list[Path] = []
         fast_inventory_supported = self._lstat is lstat and anchored_inventory_metadata_supported()
+        root_services = RootScanServices(
+            timestamp_adapter=self._timestamp_adapter,
+            ignore_service=self._ignore_service,
+            lstat_reader=lstat_reader,
+            root_identity_reader=self._lstat,
+            scandir_reader=scandir_reader,
+            fast_inventory_supported=fast_inventory_supported,
+            inventory_statx_reader=combined_statx_reader,
+        )
 
         while (task := schedule.take()) is not None:
             root_snapshot = task.snapshot
@@ -139,25 +148,23 @@ class FilesystemCollector:
             try:
                 collect_root(
                     root_snapshot,
-                    entry_timestamps=selection,
-                    respect_gitignore=respect_gitignore,
-                    excluder=root_excluder,
-                    accounting=accounting,
-                    entries=entries,
-                    observations=observations,
-                    capabilities=capabilities,
-                    diagnostics=diagnostics,
-                    observation_consumer=observation_consumer,
-                    observation_scope=observation_scope,
-                    nested_repository_consumer=queue_nested_repository,
-                    timestamp_adapter=self._timestamp_adapter,
-                    ignore_service=self._ignore_service,
-                    lstat_reader=lstat_reader,
-                    root_identity_reader=self._lstat,
-                    scandir_reader=scandir_reader,
-                    fast_inventory_supported=fast_inventory_supported,
-                    inventory_statx_reader=combined_statx_reader,
-                    ownership=ownership.scope_for(root),
+                    request=RootScanRequest(
+                        entry_timestamps=selection,
+                        respect_gitignore=respect_gitignore,
+                        excluder=root_excluder,
+                        observation_scope=observation_scope,
+                        ownership=ownership.scope_for(root),
+                    ),
+                    sinks=RootScanSinks(
+                        accounting=accounting,
+                        entries=entries,
+                        observations=observations,
+                        capabilities=capabilities,
+                        diagnostics=diagnostics,
+                        observation_consumer=observation_consumer,
+                        nested_repository_consumer=queue_nested_repository,
+                    ),
+                    services=root_services,
                 )
             except DirectorySafetyError as error:
                 accounting.discover(root)
