@@ -15,7 +15,7 @@ from workfold.cli import parse_options
 from workfold.cli.runner import default_collector_services, run
 from workfold.collection.git import GitCommandError, GitRunner
 from workfold.collection.git.changes import GitFileChangeCollector
-from workfold.domain.observations import TimestampKind, TimestampObservation
+from workfold.domain.observations import RecordKind, TimestampKind, TimestampObservation
 from workfold.domain.scope import ObservationScope
 from workfold.domain.time import InstantRange, InstantRangeUnion, datetime_to_utc_ns
 from workfold.folding.pipeline import ObservationBatch
@@ -50,8 +50,8 @@ def test_file_change_scope_reports_commit_inputs_and_derivation_per_repository(
     options = parse_options(
         [
             str(repo.path),
-            "--git-records",
-            "file-change",
+            "--events",
+            "git:file-change:author",
             "--time",
             "all",
             "--timezone",
@@ -82,6 +82,56 @@ def test_file_change_scope_reports_commit_inputs_and_derivation_per_repository(
     assert f"target Git file-change derivation [git] {repo.path.resolve()}:" in rendered
 
 
+def test_commit_and_file_change_events_can_select_different_timestamp_roles(
+    tmp_path: Path,
+) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    author = datetime(2026, 8, 3, 10, 0, tzinfo=BERLIN)
+    committer = datetime(2026, 8, 4, 11, 0, tzinfo=BERLIN)
+    repo.commit(
+        "work.txt",
+        "one",
+        "split timestamp roles",
+        author_date=_git_date(author),
+        committer_date=_git_date(committer),
+    )
+    options = parse_options(
+        [
+            str(repo.path),
+            "--events",
+            "git:commit:author",
+            "git:file-change:committer",
+            "--time",
+            "all",
+            "--timezone",
+            "Europe/Berlin",
+            "--coverage",
+            "--no-color",
+        ]
+    )
+    observations: list[TimestampObservation] = []
+
+    collect_sources(
+        options,
+        default_collector_services(),
+        observation_consumer=lambda batch: observations.extend(batch.observations),
+        observation_scope=ObservationScope(InstantRangeUnion((InstantRange(None, None),))),
+    )
+
+    assert {(item.origin.record_kind, item.kind) for item in observations} == {
+        (RecordKind.COMMIT, TimestampKind.GIT_AUTHOR),
+        (RecordKind.GIT_FILE_CHANGE, TimestampKind.GIT_COMMITTER),
+    }
+    assert len(observations) == 2
+
+    output = StringIO()
+    assert run(options, stdout=output, stderr=StringIO(), terminal_width=500) == 0
+    rendered = output.getvalue()
+    assert "git:commit:author selected: 1" in rendered
+    assert "git:file-change:committer selected: 1" in rendered
+    assert "Git commit inputs for file-change derivation:" in rendered
+
+
 def test_bounded_file_changes_match_all_time_reference_and_diff_only_selected_commits(
     tmp_path: Path,
 ) -> None:
@@ -110,10 +160,9 @@ def test_bounded_file_changes_match_all_time_reference_and_diff_only_selected_co
     options = parse_options(
         [
             str(repo.path),
-            "--git-records",
-            "file-change",
-            "--git-commit-times",
-            "author,committer",
+            "--events",
+            "git:file-change:author",
+            "git:file-change:committer",
             "--time",
             "2026-W32",
             "--timezone",
@@ -254,8 +303,9 @@ def test_bounded_tags_and_reflogs_exactly_match_all_time_reference(tmp_path: Pat
     options = parse_options(
         [
             str(repo.path),
-            "--git-records",
-            "tag,reflog",
+            "--events",
+            "git:tag:tagger",
+            "git:reflog:update",
             "--git-identity",
             "selected@example",
             "--time",
@@ -336,8 +386,8 @@ def test_file_change_failure_accounts_for_commits_without_inventing_change_recor
     options = parse_options(
         [
             str(repo.path),
-            "--git-records",
-            "file-change",
+            "--events",
+            "git:file-change:author",
             "--time",
             "all",
             "--timezone",

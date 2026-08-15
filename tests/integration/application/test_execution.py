@@ -68,8 +68,12 @@ def test_collector_scope_accounting_detects_a_dropped_pipeline_batch(
     options = parse_options(
         [
             str(repo.path),
-            "--git-records",
-            record_kind,
+            "--events",
+            {
+                "file-change": "git:file-change:author",
+                "tag": "git:tag:tagger",
+                "reflog": "git:reflog:update",
+            }[record_kind],
             "--time",
             "all",
             "--timezone",
@@ -114,7 +118,8 @@ def test_git_commit_flows_through_selection_schedule_and_terminal_report(tmp_pat
             "--no-color",
             "--coverage",
             "--verbose",
-            "--list-outside",
+            "--list",
+            "outside",
         ]
     )
 
@@ -134,6 +139,57 @@ def test_git_commit_flows_through_selection_schedule_and_terminal_report(tmp_pat
     assert "before the working day" in rendered
     assert "Git commits discovered: 1" in rendered
     assert "timestamp observations selected: 1" in rendered
+
+
+def test_general_event_list_intersects_schedule_and_event_kind(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    outside = datetime(2026, 8, 3, 7, 0, tzinfo=BERLIN)
+    commit_id = repo.commit(
+        "work.txt",
+        "one",
+        "commit detail must stay out of the list",
+        author_date=_git_date(outside),
+        committer_date=_git_date(outside),
+    )
+    repo.run(
+        "tag",
+        "-a",
+        "listed-tag",
+        commit_id,
+        "-m",
+        "listed tag detail",
+        environment={
+            "GIT_COMMITTER_DATE": _git_date(outside),
+            "GIT_COMMITTER_NAME": "Fixture Tagger",
+            "GIT_COMMITTER_EMAIL": "tagger@example.test",
+        },
+    )
+    output = StringIO()
+    options = parse_options(
+        [
+            str(repo.path),
+            "--events",
+            "git:commit:author",
+            "git:tag:tagger",
+            "--time",
+            "all",
+            "--timezone",
+            "Europe/Berlin",
+            "--list",
+            "outside",
+            "git:tag:tagger",
+            "--no-color",
+        ]
+    )
+
+    assert run(options, stdout=output, stderr=StringIO(), terminal_width=100) == 0
+
+    rendered = output.getvalue()
+    _assert_summary_count(rendered, "Events", 2)
+    assert "Events outside working hours (showing 1 of 1)" in rendered
+    assert "git:tag:tagger" in rendered
+    assert "listed tag detail" in rendered
+    assert "commit detail must stay out of the list" not in rendered
 
 
 def test_rolling_time_selector_uses_one_half_open_elapsed_window(tmp_path: Path) -> None:
@@ -385,9 +441,9 @@ def test_git_identity_filter_uses_each_timestamp_roles_own_identity(tmp_path: Pa
     rendered = output.getvalue()
     _assert_summary_count(rendered, "Events", 2)
     assert "Git identities: committer@example OR RELEASE TAGGER" in rendered
-    assert "Git author selected: 0; examined=1, values read=1" in rendered
-    assert "Git committer selected: 1; examined=1, values read=1, scope matches=1, markers=1" in rendered
-    assert "Git tagger selected: 1; examined=1, values read=1, scope matches=1, markers=1" in rendered
+    assert "git:commit:author selected: 0; examined=1, values read=1" in rendered
+    assert "git:commit:committer selected: 1; examined=1, values read=1, scope matches=1, markers=1" in rendered
+    assert "git:tag:tagger selected: 1; examined=1, values read=1, scope matches=1, markers=1" in rendered
 
 
 def test_git_identity_filter_matches_reflog_actor(tmp_path: Path) -> None:
@@ -419,8 +475,8 @@ def test_git_identity_filter_matches_reflog_actor(tmp_path: Path) -> None:
             str(repo.path),
             "--time",
             "all",
-            "--git-records",
-            "reflog",
+            "--events",
+            "git:reflog:update",
             "--git-identity",
             "operator@example",
             "--coverage",
@@ -434,7 +490,7 @@ def test_git_identity_filter_matches_reflog_actor(tmp_path: Path) -> None:
     rendered = output.getvalue()
     _assert_summary_count(rendered, "Events", 1)
     assert "Git identities: operator@example" in rendered
-    assert re.search(r"Git reflog selected: 1; .*markers=1", rendered)
+    assert re.search(r"git:reflog:update selected: 1; .*markers=1", rendered)
 
 
 def test_git_identity_filter_does_not_filter_filesystem_observations(tmp_path: Path) -> None:
@@ -455,10 +511,9 @@ def test_git_identity_filter_does_not_filter_filesystem_observations(tmp_path: P
             str(repo.path),
             "--time",
             "all",
-            "--mode",
-            "both",
-            "--fs-times",
-            "modified",
+            "--events",
+            "git:commit:author",
+            "fs:file:modified",
             "--git-identity",
             "does-not-match",
             "--coverage",
@@ -472,8 +527,8 @@ def test_git_identity_filter_does_not_filter_filesystem_observations(tmp_path: P
     rendered = output.getvalue()
     _assert_summary_count(rendered, "Events", 1)
     assert "Git identities: does-not-match; filesystem unaffected" in rendered
-    assert "Git author selected: 0; examined=1, values read=1" in rendered
-    assert "filesystem modified selected: 1; examined=1, values read=1, scope matches=1, markers=1" in rendered
+    assert "git:commit:author selected: 0; examined=1, values read=1" in rendered
+    assert "fs:file:modified selected: 1; examined=1, values read=1, scope matches=1, markers=1" in rendered
 
 
 def test_same_commit_identical_author_and_committer_dates_coalesce(tmp_path: Path) -> None:
@@ -492,8 +547,9 @@ def test_same_commit_identical_author_and_committer_dates_coalesce(tmp_path: Pat
             str(repo.path),
             "--time",
             "all",
-            "--git-commit-times",
-            "author,committer",
+            "--events",
+            "git:commit:author",
+            "git:commit:committer",
             "--timezone",
             "Europe/Berlin",
             "--coverage",

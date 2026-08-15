@@ -30,24 +30,16 @@ def cli_setting_values(namespace: argparse.Namespace) -> dict[str, SettingValue]
         "time_selectors": "time",
         "modes": "mode",
         "profiles": "profile",
+        "event_selectors": "events",
         "git_identities": "git-identity",
-        "exclusions": "exclude",
+        "exclusions": "fs-exclude",
         "hide_days": "hide-days",
         "hide_empty_days": "hide-empty-days",
+        "list_selectors": "list",
     }
     for destination, key in sequence_mapping.items():
         if destination in raw:
             values[key] = tuple(cast(Sequence[str], raw[destination]))
-
-    csv_mapping = {
-        "git_records": "git-records",
-        "commit_times": "git-commit-times",
-        "filesystem_times": "fs-times",
-        "filesystem_entries": "fs-entries",
-    }
-    for destination, key in csv_mapping.items():
-        if destination in raw:
-            values[key] = tuple(cast(str, raw[destination]).split(","))
 
     scalar_mapping = {
         "commits_from": "git-commits-from",
@@ -62,7 +54,6 @@ def cli_setting_values(namespace: argparse.Namespace) -> dict[str, SettingValue]
         "grid_style": "grid",
         "display_hours": "display-hours",
         "no_color": "no-color",
-        "list_outside": "list-outside",
         "limit": "limit",
         "coverage": "coverage",
         "strict": "strict",
@@ -84,6 +75,13 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
             "Timestamps are discrete activity markers, not measured work duration."
         ),
         epilog=(
+            "Event selectors:\n"
+            "  git:commit:author         git:commit:committer\n"
+            "  git:file-change:author    git:file-change:committer\n"
+            "  git:tag:tagger            git:reflog:update\n"
+            "  fs:<file|directory|symlink>:<birth|modified|metadata-changed|accessed>\n"
+            "  Wildcards include git:*, git:*:committer, fs:file:*, fs:*:modified, fs:*, and *.\n"
+            "  Quote wildcard values, and place PATH arguments before --events or --list.\n\n"
             "Configuration:\n"
             "  Built-in defaults may be overridden by the global or nearest project\n"
             "  configuration. Use --show-config to inspect effective values and origins.\n\n"
@@ -128,8 +126,8 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
         help="show effective settings and their origins, then exit",
     )
 
-    date_group = parser.add_argument_group("time selection")
-    date_group.add_argument(
+    time_group = parser.add_argument_group("time and schedule")
+    time_group.add_argument(
         "-t",
         "--time",
         dest="time_selectors",
@@ -142,8 +140,14 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
             "repeat only ISO weeks"
         ),
     )
+    time_group.add_argument(
+        "--hours",
+        metavar="SCHEDULE",
+        help="working schedule (built-in default: Mo-Fr 08:00-16:30; all means every minute of all seven days)",
+    )
+    time_group.add_argument("--timezone", dest="timezone_name", metavar="IANA_ZONE", help="IANA zone or local")
 
-    collection_group = parser.add_argument_group("collection scope")
+    collection_group = parser.add_argument_group("event selection")
     collection_group.add_argument(
         "-m",
         "--mode",
@@ -166,21 +170,21 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
             "changes or reflogs); every supported kind in the selected mode for full (not all time)"
         ),
     )
+    collection_group.add_argument(
+        "-e",
+        "--events",
+        dest="event_selectors",
+        action="extend",
+        nargs="+",
+        default=[],
+        metavar="SELECTOR",
+        help=(
+            "exact custom event scope; accepts space-separated identifiers and '*' wildcards such as "
+            "git:tag:tagger fs:file:modified or 'git:*:committer'; replaces mode/profile selection"
+        ),
+    )
 
-    git_group = parser.add_argument_group("Git evidence")
-    git_group.add_argument(
-        "--git-records",
-        default=None,
-        metavar="KINDS",
-        help="comma-separated commit,file-change,tag,reflog (built-in default: commit)",
-    )
-    git_group.add_argument(
-        "--git-commit-times",
-        dest="commit_times",
-        default=None,
-        metavar="KINDS",
-        help="comma-separated author,committer (built-in default: author)",
-    )
+    git_group = parser.add_argument_group("Git discovery")
     git_group.add_argument(
         "--git-commits-from",
         dest="commits_from",
@@ -200,23 +204,7 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
         ),
     )
 
-    filesystem_group = parser.add_argument_group("filesystem evidence")
-    filesystem_group.add_argument(
-        "--fs-times",
-        dest="filesystem_times",
-        default=None,
-        metavar="KINDS",
-        help=(
-            "comma-separated timestamps (built-in default: birth,modified): birth, modified, metadata-changed, accessed"
-        ),
-    )
-    filesystem_group.add_argument(
-        "--fs-entries",
-        dest="filesystem_entries",
-        default=None,
-        metavar="KINDS",
-        help="comma-separated file,directory,symlink (built-in default: file)",
-    )
+    filesystem_group = parser.add_argument_group("filesystem discovery")
     ignore_group = filesystem_group.add_mutually_exclusive_group()
     ignore_group.add_argument(
         "--respect-gitignore",
@@ -233,7 +221,7 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
         help="include filesystem entries excluded by Git ignore rules",
     )
     filesystem_group.add_argument(
-        "--exclude",
+        "--fs-exclude",
         dest="exclusions",
         action="append",
         default=[],
@@ -244,13 +232,8 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
         ),
     )
 
-    output_group = parser.add_argument_group("classification and output")
-    output_group.add_argument(
-        "--hours",
-        metavar="SCHEDULE",
-        help="working schedule (built-in default: Mo-Fr 08:00-16:30; all means every minute of all seven days)",
-    )
-    output_group.add_argument("--timezone", dest="timezone_name", metavar="IANA_ZONE", help="IANA zone or local")
+    output_group = parser.add_argument_group("chart layout")
+    detail_group = parser.add_argument_group("details and diagnostics")
     output_group.add_argument(
         "--cluster-window",
         default="1h",
@@ -327,32 +310,39 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
         action="store_false",
         help="allow automatic color, respecting terminal detection and NO_COLOR",
     )
-    output_group.add_argument(
-        "--list-outside",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="append a chronological list of events outside working hours",
+    detail_group.add_argument(
+        "-l",
+        "--list",
+        dest="list_selectors",
+        action="extend",
+        nargs="+",
+        default=[],
+        metavar="SELECTOR",
+        help=(
+            "append bounded details from already enabled report events, selected by all, inside, outside, none, "
+            "or event patterns; schedule and event selectors may be combined"
+        ),
     )
-    output_group.add_argument(
+    detail_group.add_argument(
         "--limit",
         type=int,
         default=None,
         metavar="N",
-        help="maximum outside-hours rows (built-in default: 50; requires --list-outside)",
+        help="maximum listed events (built-in default: 50; requires --list)",
     )
-    output_group.add_argument(
+    detail_group.add_argument(
         "--coverage",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="show the detailed coverage ledger without verbose scope details",
     )
-    output_group.add_argument(
+    detail_group.add_argument(
         "--strict",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="return non-zero when collection is incomplete",
     )
-    output_group.add_argument(
+    detail_group.add_argument(
         "--verbose",
         action=argparse.BooleanOptionalAction,
         default=False,

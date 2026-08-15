@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from workfold.application.collection_plan import CollectionPlan
 from workfold.application.git_selection import GitCommitSelection
-from workfold.application.resolution import filesystem_timestamp_kinds, git_timestamp_kinds
 from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticSeverity
 from workfold.collection.filesystem import FilesystemCollectionResult, FilesystemCollector
 from workfold.collection.git import (
@@ -28,9 +28,9 @@ from workfold.collection.git.reflogs import (
     GitReflogCollector,
 )
 from workfold.collection.git.tags import CollectedGitTag, GitTagCollectionResult, GitTagCollector
-from workfold.configuration.options import FilesystemEntry, RunOptions, UsageError
+from workfold.configuration.options import RunOptions, UsageError
 from workfold.domain.coverage import Capability
-from workfold.domain.observations import Source, TimestampObservation
+from workfold.domain.observations import Source, TimestampKind, TimestampObservation
 from workfold.domain.scope import ObservationScope
 from workfold.folding.pipeline import ObservationBatch, ObservationConsumer
 
@@ -80,6 +80,7 @@ def collect(
 ) -> Collection:
     """Run every enabled collector and retain only aggregate accounting."""
 
+    plan = CollectionPlan.from_selection(options.evidence)
     diagnostics: list[CollectorDiagnostic] = []
     capabilities: list[Capability] = []
     any_succeeded = False
@@ -108,28 +109,36 @@ def collect(
         )
         deliver(selected)
 
-    if options.source.includes_git:
-        if options.git_records.includes_commits:
-            timestamp_kinds = git_timestamp_kinds(options.git_date)
+    if plan.includes_git:
+        if plan.commit_scan_timestamps:
             file_results: list[GitFileChangeCollectionResult] = []
             commit_selection = (
-                GitCommitSelection(observation_scope, timestamp_kinds) if observation_scope is not None else None
+                GitCommitSelection(observation_scope, plan.commit_scan_timestamps)
+                if observation_scope is not None
+                else None
             )
 
             def consume_file_changes(changes: tuple[CollectedGitFileChange, ...]) -> None:
                 for item in changes:
-                    emit(tuple(item.to_observation(kind) for kind in timestamp_kinds))
+                    emit(tuple(item.to_observation(kind) for kind in plan.file_change_timestamps))
 
             def consume_commits(commits: tuple[CollectedGitCommit, ...]) -> None:
-                if options.git_mode.includes_commit_markers:
+                if plan.commit_timestamps:
                     for item in commits:
-                        emit(tuple(item.to_observation(kind) for kind in timestamp_kinds))
-                if options.git_mode.includes_file_changes:
+                        emit(tuple(item.to_observation(kind) for kind in plan.commit_timestamps))
+                if plan.file_change_timestamps:
+                    change_commits = tuple(
+                        item
+                        for item in commits
+                        if _commit_matches_scope(item, plan.file_change_timestamps, observation_scope)
+                    )
+                    if not change_commits:
+                        return
                     file_results.append(
                         collectors.file_changes.collect(
-                            commits,
+                            change_commits,
                             change_consumer=consume_file_changes,
-                            timestamp_kinds=timestamp_kinds,
+                            timestamp_kinds=plan.file_change_timestamps,
                             observation_scope=observation_scope,
                             retain_changes=False,
                         )
@@ -151,7 +160,7 @@ def collect(
             repositories = commit_result.repositories
             diagnostics.extend(commit_result.diagnostics)
             any_succeeded |= commit_result.successful_repositories > 0 or commit_result.discovered_commit_ids > 0
-            if options.git_mode.includes_file_changes:
+            if plan.file_change_timestamps:
                 file_result = merge_file_change_results(file_results)
                 diagnostics.extend(file_result.diagnostics)
         else:
@@ -159,7 +168,7 @@ def collect(
             repositories = repository_resolution.repositories
             diagnostics.extend(repository_resolution.diagnostics)
 
-        if options.git_records.includes_tags:
+        if plan.collect_tags:
 
             def consume_tags(tags: tuple[CollectedGitTag, ...]) -> None:
                 for item in tags:
@@ -174,7 +183,7 @@ def collect(
             )
             diagnostics.extend(tag_result.diagnostics)
             any_succeeded |= tag_result.successful_repositories > 0 or tag_result.discovered_tags > 0
-        if options.git_records.includes_reflogs:
+        if plan.collect_reflogs:
 
             def consume_reflogs(entries: tuple[CollectedGitReflog, ...]) -> None:
                 for item in entries:
@@ -189,14 +198,11 @@ def collect(
             diagnostics.extend(reflog_result.diagnostics)
             any_succeeded |= reflog_result.successful_repositories > 0 or reflog_result.discovered_refs > 0
 
-    if options.source.includes_filesystem:
+    if plan.includes_filesystem:
         try:
             filesystem_result = collectors.filesystem.collect(
                 options.paths,
-                timestamp_kinds=filesystem_timestamp_kinds(options.filesystem_times),
-                include_regular_files=FilesystemEntry.FILE in options.filesystem_entries,
-                include_directories=FilesystemEntry.DIRECTORY in options.filesystem_entries,
-                include_symlinks=FilesystemEntry.SYMLINK in options.filesystem_entries,
+                entry_timestamps=plan.filesystem_timestamps,
                 respect_gitignore=options.respect_gitignore,
                 include_ignored=options.include_ignored,
                 exclusions=options.exclusions,
@@ -229,6 +235,27 @@ def collect(
         filesystem_result=filesystem_result,
         repository_resolution=repository_resolution,
     )
+
+
+def _commit_matches_scope(
+    item: CollectedGitCommit,
+    timestamp_kinds: tuple[TimestampKind, ...],
+    scope: ObservationScope | None,
+) -> bool:
+    """Return whether a hydrated commit can produce a requested scoped role."""
+
+    if scope is None:
+        return True
+    for kind in timestamp_kinds:
+        observation = item.to_observation(kind)
+        if scope.includes_timestamp(
+            instant_utc_ns=observation.instant_utc_ns,
+            source=Source.GIT,
+            actor_name=observation.actor_name,
+            actor_email=observation.actor_email,
+        ):
+            return True
+    return False
 
 
 def merge_file_change_results(

@@ -25,7 +25,7 @@ def test_out_of_scope_timestamp_does_not_materialize_provenance(
     snapshot = cast(os.stat_result, SimpleNamespace(st_mtime_ns=1_000_000_000))
     item = PendingEntry(root, path, snapshot, None, EntryType.REGULAR_FILE)
     accounting = AccountingBuilder(retain_scope_match_ids=False)
-    accounting.ensure_root(root, (TimestampKind.FS_MODIFIED,))
+    accounting.ensure_root(root, {EntryType.REGULAR_FILE: (TimestampKind.FS_MODIFIED,)})
     accounting.discover(root)
     accounting.record(root, RecordDisposition.ELIGIBLE)
     scope = ObservationScope(InstantRangeUnion((InstantRange(2_000_000_000, 3_000_000_000),)))

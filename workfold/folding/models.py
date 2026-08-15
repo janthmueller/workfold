@@ -163,8 +163,8 @@ class Aggregation:
     has_multi_minute_cluster: bool
     hidden_before: HiddenMarkers
     hidden_after: HiddenMarkers
-    retained_outside_markers: tuple[ClassifiedMarker, ...]
-    outside_marker_count: int
+    retained_listed_markers: tuple[ClassifiedMarker, ...]
+    listed_marker_count: int
     cluster_anchor: ClusterAnchor = ClusterAnchor.EVENT
 
     def __post_init__(self) -> None:
@@ -202,10 +202,10 @@ class Aggregation:
             raise ValueError("identity counts must reconcile with displayed Git markers")
 
     @property
-    def outside_omitted_count(self) -> int:
-        """Return outside markers not retained because of the list limit."""
+    def listed_omitted_count(self) -> int:
+        """Return matching detail markers not retained because of the limit."""
 
-        return self.outside_marker_count - len(self.retained_outside_markers)
+        return self.listed_marker_count - len(self.retained_listed_markers)
 
     @property
     def displayed_event_count(self) -> int:

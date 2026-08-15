@@ -5,19 +5,21 @@ from pathlib import Path
 
 import pytest
 from workfold.cli import main, parse_invocation, parse_options
+from workfold.cli.config_display import format_resolved_settings
 from workfold.configuration import (
     BandLabel,
     ClusterAnchor,
     CollectionProfile,
-    GitDateMode,
-    GitMode,
-    GitRecords,
+    EventListSelection,
     GridStyle,
+    ListSchedule,
     OriginKind,
     SourceMode,
     UsageError,
     global_config_path,
 )
+from workfold.domain.evidence import EvidenceKind, EvidenceSelection
+from workfold.reporting.sanitization import display_width
 
 
 def _environment(tmp_path: Path) -> dict[str, str]:
@@ -313,7 +315,7 @@ def test_higher_precedence_locked_profile_replaces_lower_scope_details(tmp_path:
     project.mkdir()
     _write(
         global_config_path(environ=environ, platform_name="linux"),
-        'git-records = ["file-change"]\ngit-commit-times = ["committer"]\n',
+        'events = ["git:file-change:committer"]\n',
     )
     _write(project / "workfold.toml", 'profile = "portable"\n')
 
@@ -325,16 +327,20 @@ def test_higher_precedence_locked_profile_replaces_lower_scope_details(tmp_path:
     ).options
 
     assert options.profile is CollectionProfile.PORTABLE
-    assert options.git_mode is GitMode.COMMITS
-    assert options.git_date is GitDateMode.BOTH
-    assert options.git_records == GitRecords.COMMITS | GitRecords.TAGS
+    assert options.evidence == EvidenceSelection.create(
+        (
+            EvidenceKind.GIT_COMMIT_AUTHOR,
+            EvidenceKind.GIT_COMMIT_COMMITTER,
+            EvidenceKind.GIT_TAG_TAGGER,
+        )
+    )
 
 
 @pytest.mark.parametrize(
     ("global_setting", "local_mode", "expected_source"),
     [
         ('git-identity = ["global@example.test"]\n', "fs", SourceMode.FILESYSTEM),
-        ('exclude = ["*.log"]\n', "git", SourceMode.GIT),
+        ('fs-exclude = ["*.log"]\n', "git", SourceMode.GIT),
     ],
 )
 def test_higher_precedence_mode_discards_lower_disabled_collector_settings(
@@ -359,6 +365,182 @@ def test_higher_precedence_mode_discards_lower_disabled_collector_settings(
     assert options.source is expected_source
     assert options.git_identities == ()
     assert options.exclusions == ()
+
+
+def test_higher_precedence_profile_replaces_lower_custom_source_details(tmp_path: Path) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    _write(
+        global_config_path(environ=environ, platform_name="linux"),
+        'events = ["fs:file:modified"]\ninclude-ignored = true\nfs-exclude = ["*.log"]\n',
+    )
+    _write(project / "workfold.toml", 'profile = "standard"\n')
+
+    invocation = parse_invocation(
+        [str(project)],
+        cwd=tmp_path,
+        environ=environ,
+        platform_name="linux",
+    )
+
+    assert invocation.options.source is SourceMode.GIT
+    assert invocation.options.exclusions == ()
+    assert not invocation.options.include_ignored
+    assert invocation.effective.origins["fs-exclude"].label == ("built-in mode + local profile (source selection)")
+    rendered = " ".join(format_resolved_settings(invocation.settings, invocation.effective).split())
+    assert "fs-exclude [] built-in mode + local profile (source selection)" in rendered
+
+
+def test_show_config_attributes_preset_expansion_to_mode_and_profile(tmp_path: Path) -> None:
+    invocation = parse_invocation(
+        ["--no-config", "--mode", "fs"],
+        cwd=tmp_path,
+        environ=_environment(tmp_path),
+        platform_name="linux",
+    )
+
+    output = format_resolved_settings(invocation.settings, invocation.effective)
+    normalized = " ".join(output.split())
+
+    assert "events [fs:file:birth, fs:file:modified] CLI mode + built-in profile (preset expansion)" in normalized
+
+
+def test_show_config_wraps_full_event_selection_to_terminal_width(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("COLUMNS", "80")
+    monkeypatch.setenv("TZ", "UTC")
+
+    assert main(["--no-config", "--events", "*", "--show-config"]) == 0
+    output = capsys.readouterr().out
+
+    assert max(display_width(line) for line in output.splitlines()) <= 80
+    assert "git:commit:author" in output
+    assert "fs:symlink:accessed" in output
+
+
+@pytest.mark.parametrize(
+    ("global_settings", "local_events", "expected_source"),
+    [
+        (
+            'mode = "fs"\nfs-exclude = ["*.log"]\n',
+            'events = ["git:tag:tagger"]\n',
+            SourceMode.GIT,
+        ),
+        (
+            'mode = "git"\ngit-identity = ["global@example.test"]\n',
+            'events = ["fs:file:modified"]\n',
+            SourceMode.FILESYSTEM,
+        ),
+    ],
+)
+def test_higher_precedence_custom_events_discard_lower_disabled_collector_settings(
+    tmp_path: Path,
+    global_settings: str,
+    local_events: str,
+    expected_source: SourceMode,
+) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    _write(global_config_path(environ=environ, platform_name="linux"), global_settings)
+    _write(project / "workfold.toml", local_events)
+
+    options = parse_invocation(
+        [str(project)],
+        cwd=tmp_path,
+        environ=environ,
+        platform_name="linux",
+    ).options
+
+    assert options.profile is CollectionProfile.CUSTOM
+    assert options.source is expected_source
+    assert options.git_identities == ()
+    assert options.exclusions == ()
+
+
+def test_higher_precedence_non_commit_events_discard_lower_commit_reachability(
+    tmp_path: Path,
+) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    _write(
+        global_config_path(environ=environ, platform_name="linux"),
+        'git-commits-from = "all-refs"\n',
+    )
+    _write(project / "workfold.toml", 'events = ["git:tag:tagger"]\n')
+
+    invocation = parse_invocation(
+        [str(project)],
+        cwd=tmp_path,
+        environ=environ,
+        platform_name="linux",
+    )
+
+    assert invocation.options.evidence == EvidenceSelection.create((EvidenceKind.GIT_TAG_TAGGER,))
+    assert invocation.options.ref_scope.value == "local-branches"
+    assert invocation.settings.origins["events"].kind is OriginKind.LOCAL
+
+
+def test_mode_profile_and_custom_events_cannot_share_one_config_layer(tmp_path: Path) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    config = _write(project / "workfold.toml", 'mode = "git"\nevents = ["git:tag:tagger"]\n')
+
+    with pytest.raises(UsageError, match=rf"{re.escape(str(config))}.*same precedence layer"):
+        parse_invocation(
+            [str(project)],
+            cwd=tmp_path,
+            environ=environ,
+            platform_name="linux",
+        )
+
+
+def test_invalid_selection_family_in_lower_layer_cannot_be_hidden_by_partial_override(
+    tmp_path: Path,
+) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    global_path = _write(
+        global_config_path(environ=environ, platform_name="linux"),
+        'mode = "fs"\nevents = ["git:tag:tagger"]\n',
+    )
+    _write(project / "workfold.toml", 'profile = "standard"\n')
+
+    with pytest.raises(UsageError, match=rf"{re.escape(str(global_path))}.*same precedence layer"):
+        parse_invocation(
+            [str(project)],
+            cwd=tmp_path,
+            environ=environ,
+            platform_name="linux",
+        )
+
+
+def test_incompatible_inherited_list_selector_identifies_its_config_file(tmp_path: Path) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    global_path = _write(
+        global_config_path(environ=environ, platform_name="linux"),
+        'list = ["git:commit:author"]\n',
+    )
+    _write(project / "workfold.toml", 'events = ["fs:file:modified"]\n')
+
+    expected = rf"{re.escape(str(global_path))}: list: .*matches no event kind enabled"
+    with pytest.raises(UsageError, match=expected):
+        parse_invocation(
+            [str(project)],
+            cwd=tmp_path,
+            environ=environ,
+            platform_name="linux",
+        )
 
 
 def test_combined_mode_is_supported_in_configuration(tmp_path: Path) -> None:
@@ -396,9 +578,9 @@ def test_locked_profile_and_scope_details_in_one_layer_are_rejected(tmp_path: Pa
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
-    _write(project / "workfold.toml", 'profile = "portable"\ngit-records = ["commit"]\n')
+    config = _write(project / "workfold.toml", 'profile = "portable"\ngit-commits-from = "head"\n')
 
-    with pytest.raises(UsageError, match="--profile portable controls --git-records"):
+    with pytest.raises(UsageError) as captured:
         parse_invocation(
             [str(project)],
             cwd=tmp_path,
@@ -406,14 +588,41 @@ def test_locked_profile_and_scope_details_in_one_layer_are_rejected(tmp_path: Pa
             platform_name="linux",
         )
 
+    message = str(captured.value)
+    assert message.startswith(f"{config.resolve()}: profile, git-commits-from:")
+    assert "--profile portable controls --git-commits-from" in message
 
-def test_cli_can_negate_configured_boolean_values(tmp_path: Path) -> None:
+
+def test_cross_setting_error_identifies_origins_from_distinct_config_layers(tmp_path: Path) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    global_path = global_config_path(environ=environ, platform_name="linux")
+    _write(global_path, 'mode = "fs"\n')
+    local_path = _write(project / "workfold.toml", 'git-commits-from = "head"\n')
+
+    with pytest.raises(UsageError) as captured:
+        parse_invocation(
+            [str(project)],
+            cwd=tmp_path,
+            environ=environ,
+            platform_name="linux",
+        )
+
+    message = str(captured.value)
+    assert message.startswith("Git-specific options cannot be used with --mode fs")
+    assert f"git-commits-from (local {local_path.resolve()})" in message
+    assert f"mode (global {global_path.resolve()})" in message
+    assert "profile (built-in)" in message
+
+
+def test_cli_can_negate_booleans_and_disable_a_configured_event_list(tmp_path: Path) -> None:
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
     _write(
         project / "workfold.toml",
-        "no-color = true\nlist-outside = true\nlimit = 7\ncoverage = true\nstrict = true\nverbose = true\n",
+        'no-color = true\nlist = ["outside"]\nlimit = 7\ncoverage = true\nstrict = true\nverbose = true\n',
     )
 
     configured = parse_invocation(
@@ -422,14 +631,15 @@ def test_cli_can_negate_configured_boolean_values(tmp_path: Path) -> None:
         environ=environ,
         platform_name="linux",
     ).options
-    assert configured.terminal.list_outside
-    assert configured.terminal.outside_limit == 7
+    assert configured.terminal.event_list == EventListSelection(schedule=ListSchedule.OUTSIDE)
+    assert configured.terminal.event_limit == 7
 
     options = parse_invocation(
         [
             str(project),
             "--color",
-            "--no-list-outside",
+            "--list",
+            "none",
             "--no-coverage",
             "--no-strict",
             "--no-verbose",
@@ -440,8 +650,8 @@ def test_cli_can_negate_configured_boolean_values(tmp_path: Path) -> None:
     ).options
 
     assert not options.terminal.no_color
-    assert not options.terminal.list_outside
-    assert options.terminal.outside_limit == 7
+    assert options.terminal.event_list is None
+    assert options.terminal.event_limit == 7
     assert not options.terminal.coverage
     assert not options.terminal.strict
     assert not options.terminal.verbose
@@ -452,7 +662,7 @@ def test_cli_can_negate_configured_boolean_values(tmp_path: Path) -> None:
     [
         ('unknown-setting = "value"\n', "unknown Workfold configuration key"),
         ('coverage = "yes"\n', "must be true or false"),
-        ('git-records = "commit"\n', "must be an array of strings"),
+        ('events = "git:commit:author"\n', "must be an array of strings"),
         ('mode = "remote"\n', "must be one of"),
         ('cluster-anchor = "noon"\n', "must be one of"),
         ('band-label = "compact"\n', "must be one of"),
@@ -600,7 +810,7 @@ def test_show_config_prints_values_origins_and_files_without_collecting(
 
     output = capsys.readouterr().out
     assert "Configuration files" in output
-    assert f"Local   {local.resolve()}" in output
+    assert f"Local{local.resolve()}" in "".join(output.split())
     assert "Effective value" in output
     assert "timezone" in output and "UTC" in output and "local" in output
     assert "grid" in output and "both" in output and "CLI" in output
@@ -619,7 +829,7 @@ def test_normal_cli_run_applies_project_defaults(
     project.mkdir()
     _write(
         project / "workfold.toml",
-        'mode = "fs"\ntime = "all"\nfs-times = ["modified"]\ntimezone = "UTC"\nno-color = true\n',
+        'events = ["fs:file:modified"]\ntime = "all"\ntimezone = "UTC"\nno-color = true\n',
     )
     monkeypatch.chdir(project)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))

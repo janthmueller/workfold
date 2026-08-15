@@ -131,10 +131,8 @@ def test_filesystem_mode_flows_through_the_shared_pipeline(tmp_path: Path) -> No
     options = parse_options(
         [
             str(root),
-            "--mode",
-            "fs",
-            "--fs-times",
-            "modified",
+            "--events",
+            "fs:file:modified",
             "--include-ignored",
             "--time",
             "all",
@@ -157,7 +155,7 @@ def test_filesystem_mode_flows_through_the_shared_pipeline(tmp_path: Path) -> No
     assert "outside" in rendered.casefold()
     _assert_lean_success_output(rendered)
     assert "Filesystem events:" not in rendered
-    assert "filesystem modified selected: 1" in rendered
+    assert "fs:file:modified selected: 1" in rendered
     assert "Coverage details:" in rendered
     assert "Details\n" not in rendered
 
@@ -172,10 +170,8 @@ def test_all_hours_and_midnight_start_labels_flow_through_the_cli(tmp_path: Path
     options = parse_options(
         [
             str(root),
-            "--mode",
-            "fs",
-            "--fs-times",
-            "modified",
+            "--events",
+            "fs:file:modified",
             "--include-ignored",
             "--time",
             "all",
@@ -213,10 +209,8 @@ def test_incomplete_filesystem_inventory_is_a_clean_warning_unless_strict(tmp_pa
     collector = FilesystemCollector(ignore_service=_IncompleteInventoryService(repository))
     arguments = [
         str(repo.path),
-        "--mode",
-        "fs",
-        "--fs-times",
-        "modified",
+        "--events",
+        "fs:file:modified",
         "--time",
         "all",
         "--timezone",
@@ -263,14 +257,10 @@ def test_filesystem_entry_selection_is_honored_by_the_application(tmp_path: Path
     options = parse_options(
         [
             str(root),
-            "--mode",
-            "fs",
+            "--events",
+            "fs:directory:modified",
             "--time",
             "all",
-            "--fs-times",
-            "modified",
-            "--fs-entries",
-            "directory",
             "--include-ignored",
             "--coverage",
             "--verbose",
@@ -298,14 +288,10 @@ def test_directory_coverage_discloses_pruned_ignored_subtrees(tmp_path: Path) ->
     options = parse_options(
         [
             str(repo.path),
-            "--mode",
-            "fs",
+            "--events",
+            "fs:directory:modified",
             "--time",
             "all",
-            "--fs-times",
-            "modified",
-            "--fs-entries",
-            "directory",
             "--coverage",
             "--timezone",
             "UTC",
@@ -336,10 +322,9 @@ def test_both_mode_preserves_git_and_filesystem_as_distinct_evidence(tmp_path: P
     options = parse_options(
         [
             str(repo.path),
-            "--mode",
-            "both",
-            "--fs-times",
-            "modified",
+            "--events",
+            "git:commit:author",
+            "fs:file:modified",
             "--include-ignored",
             "--time",
             "all",
@@ -428,7 +413,7 @@ def test_full_both_mode_collects_all_record_families_and_reports_capabilities(
             "--coverage",
             "--git-identity",
             "Fixture",
-            "--exclude",
+            "--fs-exclude",
             "*.tmp",
             "--timezone",
             "UTC",
@@ -448,8 +433,8 @@ def test_full_both_mode_collects_all_record_families_and_reports_capabilities(
     assert "Git tags discovered: 1" in rendered
     assert "Git reflog entries discovered:" in rendered
     assert "filesystem entries discovered:" in rendered
-    assert "Git tagger selected: 1" in rendered
-    assert "filesystem created selected:" in rendered
+    assert "git:tag:tagger selected: 1" in rendered
+    assert "fs:file:birth selected:" in rendered
     assert "explicitly excluded=1" in rendered
     assert "Coverage details:" in rendered
     assert "Details\n" not in rendered
@@ -504,9 +489,9 @@ def test_portable_collects_only_git_object_timestamp_evidence(tmp_path: Path) ->
     rendered = output.getvalue()
     assert "Git commits discovered: 1" in rendered
     assert "Git tags discovered: 1" in rendered
-    assert "Git author selected: 1" in rendered
-    assert "Git committer selected: 1" in rendered
-    assert "Git tagger selected: 1" in rendered
+    assert "git:commit:author selected: 1" in rendered
+    assert "git:commit:committer selected: 1" in rendered
+    assert "git:tag:tagger selected: 1" in rendered
     _assert_lean_success_output(rendered)
     assert "Coverage details:" in rendered
     assert "Details\n" not in rendered
@@ -531,10 +516,8 @@ def test_strict_filesystem_partial_run_renders_useful_data_then_fails(
         [
             str(root),
             str(missing),
-            "--mode",
-            "fs",
-            "--fs-times",
-            "modified",
+            "--events",
+            "fs:file:modified",
             "--include-ignored",
             "--time",
             "all",
@@ -572,7 +555,7 @@ def test_verbose_enables_expanded_coverage_without_coverage_flag(tmp_path: Path)
     assert "Coverage:" in rendered
     assert "Coverage details:" in rendered
     assert "timestamp slots examined: 0" in rendered
-    assert "not requested=" in rendered
+    assert "scope event kinds: requested=git:commit:author" in rendered
 
 
 def test_accessed_time_warning_and_non_repository_ignore_policy_are_visible_in_verbose_output(
@@ -587,10 +570,8 @@ def test_accessed_time_warning_and_non_repository_ignore_policy_are_visible_in_v
     options = parse_options(
         [
             str(root),
-            "--mode",
-            "fs",
-            "--fs-times",
-            "accessed",
+            "--events",
+            "fs:file:accessed",
             "--time",
             "all",
             "--timezone",
@@ -623,13 +604,14 @@ def test_outside_git_file_change_lists_change_kind_path_and_subject(tmp_path: Pa
             str(repo.path),
             "--time",
             "all",
-            "--git-records",
-            "file-change",
+            "--events",
+            "git:file-change:author",
             "--hours",
             "Mo-Fr 11:00-12:00",
             "--timezone",
             "UTC",
-            "--list-outside",
+            "--list",
+            "outside",
             "--no-color",
         ]
     )

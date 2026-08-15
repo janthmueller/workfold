@@ -5,14 +5,15 @@ from __future__ import annotations
 from collections import Counter
 
 from workfold.application.collection import Collection
+from workfold.application.collection_plan import CollectionPlan
 from workfold.configuration.options import RunOptions
 from workfold.domain.coverage import CapabilityStatus, CoverageLedger
-from workfold.domain.observations import RecordKind, TimestampKind
+from workfold.domain.evidence import EvidenceKind
+from workfold.domain.observations import RecordKind
 from workfold.reporting.terminal.coverage_scope import (
     coverage_scope_details,
     pruned_ignored_subtree_label,
     record_label,
-    timestamp_label,
 )
 
 
@@ -64,9 +65,14 @@ def coverage_details(
         if pruned:
             details.append(pruned_ignored_subtree_label(pruned))
 
-    timestamp_counts: dict[TimestampKind, Counter[str]] = {}
+    timestamp_counts: dict[EvidenceKind, Counter[str]] = {}
     for item in ledger.timestamps:
-        counts = timestamp_counts.setdefault(item.key.timestamp_kind, Counter())
+        evidence_kind = EvidenceKind.from_dimensions(
+            item.key.record_kind,
+            item.key.timestamp_kind,
+            item.key.entry_type,
+        )
+        counts = timestamp_counts.setdefault(evidence_kind, Counter())
         counts.update(
             examined=item.examined,
             values_read=item.values_read,
@@ -80,9 +86,11 @@ def coverage_details(
             errors=item.extraction_errors,
             coalesced=item.coalesced_into_markers,
         )
-    for kind in sorted(timestamp_counts, key=lambda item: item.value):
+    for kind in EvidenceKind:
+        if kind not in timestamp_counts:
+            continue
         counts = timestamp_counts[kind]
-        line = f"{timestamp_label(kind)} selected: {counts['selected']:,}"
+        line = f"{kind.value} selected: {counts['selected']:,}"
         extras = [
             f"{name.replace('_', ' ')}={counts[name]:,}"
             for name in (
@@ -101,11 +109,8 @@ def coverage_details(
         ]
         details.append(line + ("; " + ", ".join(extras) if extras else ""))
 
-    if (
-        collection.commit_result is not None
-        and options.git_mode.includes_file_changes
-        and not options.git_mode.includes_commit_markers
-    ):
+    plan = CollectionPlan.from_selection(options.evidence)
+    if collection.commit_result is not None and plan.file_change_timestamps:
         commit_result = collection.commit_result
         examined_commits = sum(item.examined_commits for item in commit_result.repository_accounting)
         candidate_commits = sum(item.candidate_commits for item in commit_result.repository_accounting)
@@ -178,9 +183,13 @@ def coverage_details(
             f"materialization errors={item.materialization_errors:,}, selected={item.selected:,}, "
             f"markers={item.markers:,}, coalesced={item.coalesced_into_markers:,}"
         )
+        evidence_kind = EvidenceKind.from_dimensions(
+            item.key.record_kind,
+            item.key.timestamp_kind,
+            item.key.entry_type,
+        )
         details.append(
-            f"target timestamps [{item.key.source.value}] {item.key.target} "
-            f"{item.key.record_kind.value}/{item.key.timestamp_kind.value}: {outcomes}"
+            f"target timestamps [{item.key.source.value}] {item.key.target} {evidence_kind.value}: {outcomes}"
         )
 
     if collection.commit_result is not None and collection.commit_result.duplicate_commit_ids:

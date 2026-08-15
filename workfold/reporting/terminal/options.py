@@ -14,7 +14,7 @@ class TerminalOptions:
 
     width: int = 80
     color: bool = False
-    list_outside: bool = False
+    show_event_list: bool = False
     verbose: bool = False
     marker_style: MarkerStyle = MarkerStyle.SOURCE
     grid_style: GridStyle = GridStyle.NONE
@@ -28,6 +28,7 @@ class TerminalOptions:
         _require_option_type(self.marker_style, MarkerStyle, "marker_style")
         _require_option_type(self.grid_style, GridStyle, "grid_style")
         _require_option_type(self.band_label, BandLabel, "band_label")
+        _require_option_type(self.show_event_list, bool, "show_event_list")
         _require_option_type(self.show_empty_bands, bool, "show_empty_bands")
         _require_option_type(self.coverage, bool, "coverage")
 

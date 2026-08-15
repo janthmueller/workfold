@@ -18,7 +18,7 @@ from workfold.domain.coverage import (
     RecordDisposition,
     TimestampCoverageKey,
 )
-from workfold.domain.observations import RecordOrigin, TimestampObservation
+from workfold.domain.observations import EntryType, RecordOrigin, TimestampObservation
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +91,19 @@ class FilesystemAccounting:
             record = records_by_key.get(record_key)
             if record is None:
                 raise ValueError("filesystem timestamp accounting has no record partition")
-            if item.requested != record.eligible:
+        requested_by_entry: dict[tuple[str, EntryType], set[int]] = {}
+        for item in self.timestamps:
+            assert item.key.entry_type is not None
+            requested_by_entry.setdefault((item.key.target, item.key.entry_type), set()).add(item.requested)
+        if any(len(values) != 1 for values in requested_by_entry.values()):
+            raise ValueError("filesystem timestamp slots must agree within each entry type")
+        for record in self.records:
+            eligible_from_timestamps = sum(
+                next(iter(values))
+                for (target, _entry_type), values in requested_by_entry.items()
+                if target == record.key.target
+            )
+            if eligible_from_timestamps != record.eligible:
                 raise ValueError("filesystem timestamp slots must equal eligible filesystem records")
 
     def build_coverage(

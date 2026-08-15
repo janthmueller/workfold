@@ -2,59 +2,83 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+from workfold.configuration.effective import EffectiveSettings
 from workfold.configuration.layers import DEFAULT_SETTINGS, ResolvedSettings, SettingValue
-from workfold.configuration.options import RunOptions
+from workfold.configuration.options import ListSchedule, RunOptions
 from workfold.reporting.sanitization import display_width, pad_right, sanitize_terminal_text
+from workfold.reporting.terminal.layout import aligned_fact_lines, column_chunks
 
 
-def format_resolved_settings(resolution: ResolvedSettings, options: RunOptions) -> str:
+def format_resolved_settings(
+    resolution: ResolvedSettings,
+    effective: EffectiveSettings,
+    *,
+    width: int = 80,
+) -> str:
     """Format the effective values and origins for ``--show-config``."""
 
+    width = max(20, width)
     lines = ["Configuration files"]
     if resolution.config_disabled:
-        lines.append("  disabled by --no-config")
+        lines.extend(f"  {chunk}" for chunk in column_chunks("disabled by --no-config", width - 2))
     elif resolution.explicit_config is not None:
-        lines.append(f"  Config  {_safe(resolution.explicit_config)}")
+        lines.extend(_config_lines((("Config", resolution.explicit_config),), width))
     else:
         global_text = (
             _safe(resolution.global_config)
             if resolution.global_config is not None
             else f"{_safe(resolution.global_candidate)} (not found)"
         )
-        lines.append(f"  Global  {global_text}")
-        lines.append(f"  Local   {_safe(resolution.local_config) if resolution.local_config is not None else '—'}")
+        lines.extend(
+            _config_lines(
+                (
+                    ("Global", global_text),
+                    ("Local", _safe(resolution.local_config) if resolution.local_config is not None else "—"),
+                ),
+                width,
+            )
+        )
 
-    rows = _effective_rows(resolution, options)
-    setting_width = max(display_width("Setting"), *(display_width(name) for name, _, _ in rows))
-    value_width = max(display_width("Effective value"), *(display_width(value) for _, value, _ in rows))
-    lines.extend(("", f"{pad_right('Setting', setting_width)}  {pad_right('Effective value', value_width)}  Origin"))
-    for name, value, origin in rows:
-        lines.append(f"{pad_right(name, setting_width)}  {pad_right(value, value_width)}  {origin}")
+    rows = _effective_rows(effective)
+    lines.extend(("", *_setting_table(rows, width)))
     return "\n".join(lines) + "\n"
 
 
-def _effective_rows(
-    resolution: ResolvedSettings,
-    options: RunOptions,
-) -> list[tuple[str, str, str]]:
-    values = _effective_values(options)
-    profile_origin = resolution.origins["profile"]
-    profile_controlled = {
-        "git-records",
-        "git-commit-times",
-        "git-commits-from",
-        "fs-times",
-        "fs-entries",
-        "include-ignored",
-    }
-    rows: list[tuple[str, str, str]] = []
-    for key in DEFAULT_SETTINGS:
-        origin = resolution.origins[key]
-        origin_label = origin.label
-        if options.profile.value != "standard" and key in profile_controlled:
-            origin_label = f"{profile_origin.label} (profile)"
-        rows.append((key, _format_value(values[key]), origin_label))
-    return rows
+def _config_lines(facts: Sequence[tuple[str, object]], width: int) -> list[str]:
+    available = max(1, width - 2)
+    return [f"  {line}" for line in aligned_fact_lines([(key, _safe(value)) for key, value in facts], available)]
+
+
+def _setting_table(rows: Sequence[tuple[str, str, str]], width: int) -> list[str]:
+    setting_max = max(display_width("Setting"), *(display_width(name) for name, _, _ in rows))
+    origin_max = max(display_width("Origin"), *(display_width(origin) for _, _, origin in rows))
+    setting_width = min(setting_max, max(7, width // 4))
+    remaining = max(2, width - setting_width - 4)
+    desired_origin_width = max(8, remaining // 3)
+    origin_width = min(origin_max, desired_origin_width, remaining - 1)
+    value_width = remaining - origin_width
+
+    table_rows = (("Setting", "Effective value", "Origin"), *rows)
+    lines: list[str] = []
+    for name, value, origin in table_rows:
+        name_chunks = column_chunks(name, setting_width) or [""]
+        value_chunks = column_chunks(value, value_width) or [""]
+        origin_chunks = column_chunks(origin, origin_width) or [""]
+        line_count = max(len(name_chunks), len(value_chunks), len(origin_chunks))
+        for index in range(line_count):
+            name_part = name_chunks[index] if index < len(name_chunks) else ""
+            value_part = value_chunks[index] if index < len(value_chunks) else ""
+            origin_part = origin_chunks[index] if index < len(origin_chunks) else ""
+            line = f"{pad_right(name_part, setting_width)}  {pad_right(value_part, value_width)}  {origin_part}"
+            lines.append(line.rstrip())
+    return lines
+
+
+def _effective_rows(effective: EffectiveSettings) -> list[tuple[str, str, str]]:
+    values = _effective_values(effective.options)
+    return [(key, _format_value(values[key]), effective.origins[key].label) for key in DEFAULT_SETTINGS]
 
 
 def _effective_values(options: RunOptions) -> dict[str, SettingValue]:
@@ -70,37 +94,26 @@ def _effective_values(options: RunOptions) -> dict[str, SettingValue]:
     else:
         time_value = "this-week"
 
-    git_records: list[str] = []
-    if options.git_records.includes_commits:
-        if options.git_mode.includes_commit_markers:
-            git_records.append("commit")
-        if options.git_mode.includes_file_changes:
-            git_records.append("file-change")
-    if options.git_records.includes_tags:
-        git_records.append("tag")
-    if options.git_records.includes_reflogs:
-        git_records.append("reflog")
-
-    commit_times = ("author", "committer") if options.git_date.value == "both" else (options.git_date.value,)
-    filesystem_time_names = {
-        "created": "birth",
-        "modified": "modified",
-        "changed": "metadata-changed",
-        "accessed": "accessed",
-    }
+    event_list = options.terminal.event_list
+    if event_list is None:
+        list_value: tuple[str, ...] = ()
+    elif event_list.schedule is ListSchedule.ALL and not event_list.evidence_kinds:
+        list_value = ("all",)
+    else:
+        list_value = (
+            *((event_list.schedule.value,) if event_list.schedule is not ListSchedule.ALL else ()),
+            *(kind.value for kind in event_list.evidence_kinds),
+        )
     source_mode = options.source.value
     return {
         "time": time_value,
         "mode": source_mode,
         "profile": options.profile.value,
-        "git-records": tuple(git_records),
-        "git-commit-times": commit_times,
+        "events": tuple(kind.value for kind in options.evidence.kinds),
         "git-commits-from": options.ref_scope.value,
         "git-identity": options.git_identities,
-        "fs-times": tuple(filesystem_time_names[item.value] for item in options.filesystem_times),
-        "fs-entries": tuple(item.value for item in options.filesystem_entries),
         "include-ignored": options.include_ignored,
-        "exclude": options.exclusions,
+        "fs-exclude": options.exclusions,
         "hours": options.hours,
         "timezone": options.timezone_name or "local",
         "cluster-window": _format_duration(options.cluster_window.total_seconds()),
@@ -117,8 +130,8 @@ def _effective_values(options: RunOptions) -> dict[str, SettingValue]:
         "hide-days": tuple(day.abbreviation for day in options.hide_days),
         "hide-empty-days": tuple(day.abbreviation for day in options.hide_empty_days),
         "no-color": preferences.no_color,
-        "list-outside": preferences.list_outside,
-        "limit": preferences.outside_limit,
+        "list": list_value,
+        "limit": preferences.event_limit,
         "coverage": preferences.coverage,
         "strict": preferences.strict,
         "verbose": preferences.verbose,

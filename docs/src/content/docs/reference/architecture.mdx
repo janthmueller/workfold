@@ -116,14 +116,39 @@ The report is also renderer-neutral. A future renderer may consume it, but the
 MVP exposes only terminal output and does not contain a web server or browser
 application.
 
+## Selection axes
+
+Workfold keeps four independent questions separate instead of encoding all
+scope in one flag:
+
+| Axis | Question | Examples |
+| --- | --- | --- |
+| Evidence | Which intrinsic timestamp observations exist in the answer? | `git:commit:author`, `fs:directory:modified` |
+| Discovery | Which records are searched? | paths, Git commit reachability, ignore policy, `--fs-exclude` |
+| Query | Which discovered timestamps match? | time range, timezone boundaries, Git identity |
+| Presentation | How is the answer displayed? | schedule, clustering, hidden days, list projection |
+
+Every exact evidence identifier has the shape
+`source:record:timestamp`. Git records use `commit`, `file-change`, `tag`, or
+`reflog`; filesystem records use `file`, `directory`, or `symlink`. This makes
+the filesystem collection request an exact entry-type × timestamp matrix, so
+one request can collect regular-file mtime, directory birth time, and symlink
+atime without reading unwanted timestamp slots.
+
+Git refs deliberately remain a discovery scope. The same commit may be
+reachable from several refs but is still one object and one commit record, so
+ref names cannot be embedded in its event kind without duplicating evidence.
+Tag and reflog selectors enable independent records; `--git-commits-from`
+controls only the starting refs for commit-derived evidence.
+
 ## Package responsibilities
 
 ### Domain
 
-`domain` owns facts and invariant-preserving value objects: timestamp kinds,
-record provenance, exact UTC instants, observation scope, schedules, Git ref
-scope, identities, and the coverage ledger. It performs no source discovery
-and produces no terminal text.
+`domain` owns facts and invariant-preserving value objects: canonical evidence
+kinds, timestamp kinds, record provenance, exact UTC instants, observation
+scope, schedules, Git ref scope, identities, and the coverage ledger. It
+performs no source discovery and produces no terminal text.
 
 ### Collection
 
@@ -151,6 +176,16 @@ collectors, classify observations, aggregate markers, reconcile coverage, and
 construct the neutral report. A `CollectorServices` bundle supplies its
 collector ports. Application code neither constructs production adapters nor
 uses optional collaborators with hidden defaults.
+
+The resolved `EvidenceSelection` is the single semantic event scope.
+`CollectionPlan` projects it into exact commit, file-change, tag, reflog, and
+filesystem entry-type/timestamp work; collectors do not reinterpret CLI
+presets or keep a second scope model. Filesystem record discovery remains one
+root-level accounting partition because ignored candidates can be counted
+without an extra stat and may therefore have an intentionally unknown entry
+type. Timestamp extraction is partitioned by entry type, where the type is
+necessarily known, preserving exact coverage without sacrificing the fast Git
+inventory path.
 
 The report retains structured options, resolved time selection, timezone,
 schedule, collection accounting, coverage, and provenance. It does not flatten

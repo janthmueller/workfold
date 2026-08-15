@@ -16,7 +16,7 @@ from workfold.domain.coverage import (
     TimestampCoverageKey,
     merge_ledgers,
 )
-from workfold.domain.observations import RecordKind, Source, TimestampKind
+from workfold.domain.observations import EntryType, RecordKind, Source, TimestampKind
 
 RECORD_KEY = RecordCoverageKey(Source.GIT, "/repo", RecordKind.COMMIT)
 AUTHOR_KEY = TimestampCoverageKey(Source.GIT, "/repo", RecordKind.COMMIT, TimestampKind.GIT_AUTHOR)
@@ -191,6 +191,44 @@ def test_ledger_rejects_duplicate_partition_keys_and_negative_counts() -> None:
 def test_timestamp_partition_rejects_cross_source_kind() -> None:
     with pytest.raises(ValueError, match="does not belong"):
         TimestampCoverageKey(Source.FILESYSTEM, "/root", RecordKind.FILESYSTEM_ENTRY, TimestampKind.GIT_AUTHOR)
+
+
+def test_coverage_keys_reject_cross_source_record_kinds() -> None:
+    with pytest.raises(ValueError, match="record kind does not belong"):
+        RecordCoverageKey(Source.GIT, "/root", RecordKind.FILESYSTEM_ENTRY)
+
+
+def test_filesystem_timestamp_partitions_require_an_exact_entry_type() -> None:
+    with pytest.raises(ValueError, match="requires an entry type"):
+        TimestampCoverageKey(
+            Source.FILESYSTEM,
+            "/root",
+            RecordKind.FILESYSTEM_ENTRY,
+            TimestampKind.FS_MODIFIED,
+        )
+
+    key = TimestampCoverageKey(
+        Source.FILESYSTEM,
+        "/root",
+        RecordKind.FILESYSTEM_ENTRY,
+        TimestampKind.FS_MODIFIED,
+        EntryType.SYMLINK,
+    )
+    assert key.entry_type is EntryType.SYMLINK
+
+
+def test_timestamp_partitions_reject_unsupported_record_timestamp_pairs() -> None:
+    with pytest.raises(ValueError, match="does not belong to coverage record kind"):
+        TimestampCoverageKey(Source.GIT, "/repo", RecordKind.TAG, TimestampKind.GIT_AUTHOR)
+
+    with pytest.raises(ValueError, match="valid only for filesystem"):
+        TimestampCoverageKey(
+            Source.GIT,
+            "/repo",
+            RecordKind.COMMIT,
+            TimestampKind.GIT_AUTHOR,
+            EntryType.REGULAR_FILE,
+        )
 
 
 def test_capability_retains_platform_availability_context() -> None:

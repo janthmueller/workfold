@@ -6,7 +6,7 @@ import os
 from collections.abc import Mapping
 
 from workfold.application.collection import Collection
-from workfold.application.resolution import git_timestamp_kinds
+from workfold.application.collection_plan import CollectionPlan
 from workfold.collection.git.objects.models import GitSignatureRole
 from workfold.configuration.options import RunOptions
 from workfold.domain.coverage import (
@@ -35,10 +35,11 @@ def build_coverage(
     """Build a reconciled coverage ledger for every enabled collector partition."""
 
     ledgers: list[CoverageLedger] = []
-    timestamp_kinds = git_timestamp_kinds(options.git_date)
+    plan = CollectionPlan.from_selection(options.evidence)
 
-    if collection.commit_result is not None and options.git_mode.includes_commit_markers:
+    if collection.commit_result is not None and plan.commit_timestamps:
         result = collection.commit_result
+        timestamp_kinds = plan.commit_timestamps
         if result.repository_accounting:
             for accounting in result.repository_accounting:
                 target = os.fspath(accounting.repository.root)
@@ -89,6 +90,7 @@ def build_coverage(
 
     if collection.file_change_result is not None:
         result = collection.file_change_result
+        timestamp_kinds = plan.file_change_timestamps
         if result.repository_accounting:
             for accounting in result.repository_accounting:
                 target = os.fspath(accounting.repository.root)

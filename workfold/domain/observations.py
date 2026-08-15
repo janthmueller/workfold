@@ -187,8 +187,11 @@ class TimestampObservation:
                 raise ValueError("Git observations require their recorded UTC offset")
             if self.actor_name is None or self.actor_email is None:
                 raise ValueError("Git observations require their recorded identity")
-        elif any(value is not None for value in (self.original_offset_minutes, self.actor_name, self.actor_email)):
-            raise ValueError("filesystem observations cannot carry Git identity or offset metadata")
+        else:
+            if self.origin.entry_type is None:
+                raise ValueError("filesystem observations require a supported entry type")
+            if any(value is not None for value in (self.original_offset_minutes, self.actor_name, self.actor_email)):
+                raise ValueError("filesystem observations cannot carry Git identity or offset metadata")
 
     @classmethod
     def create(

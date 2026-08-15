@@ -9,11 +9,18 @@ from datetime import datetime, timezone
 
 from workfold.application.collection import Collection, CollectorServices, collect
 from workfold.application.coverage import build_coverage
-from workfold.application.report import Report, ReportContext, ReportRequirements, build_report
+from workfold.application.report import (
+    Report,
+    ReportContext,
+    ReportRequirements,
+    build_report,
+    matches_event_list,
+)
 from workfold.application.resolution import resolve_date_range, resolve_schedule, resolve_timezone_selection
 from workfold.collection.diagnostics import diagnostics_are_partial
 from workfold.configuration.options import RunOptions
 from workfold.domain.coverage import CoverageLedger
+from workfold.domain.observations import ClassifiedMarker
 from workfold.domain.scope import ObservationScope
 from workfold.folding import AggregationBuilder
 from workfold.folding.pipeline import ActivityClassifier
@@ -54,12 +61,19 @@ def execute(
         if options.display_hours is not None
         else None
     )
+    event_list = report_requirements.event_list
+
+    def requested_for_list(marker: ClassifiedMarker) -> bool:
+        assert event_list is not None
+        return matches_event_list(marker, event_list)
+
     aggregation = AggregationBuilder(
         cluster_window=options.cluster_window,
         cluster_anchor=options.cluster_anchor,
         schedule_bounds=schedule.bounds,
         display_range=display_range,
-        outside_limit=report_requirements.outside_event_limit,
+        listed_marker_limit=report_requirements.event_limit,
+        listed_marker_predicate=None if event_list is None else requested_for_list,
         retain_git_identities=report_requirements.retain_git_identities,
         hide_days=options.hide_days,
         hide_empty_days=options.hide_empty_days,
@@ -99,6 +113,7 @@ def execute(
                 schedule=schedule,
                 coverage=ledger,
             ),
+            report_requirements.event_list,
         )
         return ExecutionResult(collection, report, ledger)
     finally:

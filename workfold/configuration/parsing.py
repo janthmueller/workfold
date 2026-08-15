@@ -8,14 +8,12 @@ from datetime import date, timedelta
 
 from workfold.configuration.options import (
     DisplayHours,
-    FilesystemEntry,
-    FilesystemTime,
-    GitDateMode,
-    GitMode,
-    GitRecords,
+    EventListSelection,
+    ListSchedule,
     RollingDuration,
     UsageError,
 )
+from workfold.domain.evidence import EvidenceSelection, expand_evidence_selectors
 from workfold.domain.observations import Weekday
 from workfold.folding import bands as time_bands
 from workfold.folding.bands import ClusterAnchor
@@ -258,102 +256,51 @@ def _parse_ordered_duration(
     return duration, "".join(label_parts)
 
 
-def parse_filesystem_times(value: str) -> tuple[FilesystemTime, ...]:
-    """Parse a comma-separated filesystem timestamp selection."""
+def parse_event_selectors(values: tuple[str, ...], *, option: str = "--events") -> EvidenceSelection:
+    """Resolve exact and wildcard event selectors into canonical evidence kinds."""
 
-    values = [part.strip().lower() for part in value.split(",")]
-    if not values or any(not part for part in values):
-        raise UsageError("--fs-times must contain one or more timestamp kinds")
-    names = {
-        "birth": FilesystemTime.CREATED,
-        "modified": FilesystemTime.MODIFIED,
-        "metadata-changed": FilesystemTime.CHANGED,
-        "accessed": FilesystemTime.ACCESSED,
-    }
-    parsed: list[FilesystemTime] = []
-    for part in values:
-        try:
-            item = names[part]
-        except KeyError as error:
-            choices = ", ".join(names)
-            raise UsageError(f"unknown --fs-times value {part!r}; choose from {choices}") from error
-        if item not in parsed:
-            parsed.append(item)
-    return tuple(parsed)
+    try:
+        return expand_evidence_selectors(values, option=option)
+    except ValueError as error:
+        raise UsageError(str(error)) from error
 
 
-def parse_filesystem_entries(value: str) -> tuple[FilesystemEntry, ...]:
-    """Parse a comma-separated filesystem entry-type selection."""
+def parse_event_list(values: tuple[str, ...]) -> EventListSelection | None:
+    """Parse one generalized bounded event-list request."""
 
-    values = [part.strip().lower() for part in value.split(",")]
-    if not values or any(not part for part in values):
-        raise UsageError("--fs-entries must contain one or more entry types")
-    parsed: list[FilesystemEntry] = []
-    for part in values:
-        try:
-            item = FilesystemEntry(part)
-        except ValueError as error:
-            choices = ", ".join(item.value for item in FilesystemEntry)
-            raise UsageError(f"unknown --fs-entries value {part!r}; choose from {choices}") from error
-        if item not in parsed:
-            parsed.append(item)
-    return tuple(parsed)
+    if not values:
+        raise UsageError("--list requires one or more selectors")
+    normalized = tuple(value.strip().lower() for value in values)
+    if any(not value for value in normalized):
+        raise UsageError("--list selectors cannot be empty")
+    if "none" in normalized:
+        if normalized != ("none",):
+            raise UsageError("--list none cannot be combined with other selectors")
+        return None
+    if "all" in normalized:
+        if normalized != ("all",):
+            raise UsageError("--list all cannot be combined with other selectors")
+        return EventListSelection()
 
-
-def parse_git_records(value: str) -> tuple[GitMode, GitRecords]:
-    """Parse public Git record names into record families and commit granularity."""
-
-    values = [part.strip().lower() for part in value.split(",")]
-    if not values or any(not part for part in values):
-        raise UsageError("--git-records must contain one or more record kinds")
-    choices = ("commit", "file-change", "tag", "reflog")
-    unknown = next((part for part in values if part not in choices), None)
-    if unknown is not None:
-        raise UsageError(f"unknown --git-records value {unknown!r}; choose from {', '.join(choices)}")
-
-    selected = frozenset(values)
-    has_commits = "commit" in selected
-    has_file_changes = "file-change" in selected
-    if has_commits and has_file_changes:
-        git_mode = GitMode.BOTH
-    elif has_file_changes:
-        git_mode = GitMode.FILES
-    else:
-        git_mode = GitMode.COMMITS
-
-    records = GitRecords(0)
-    if has_commits or has_file_changes:
-        records |= GitRecords.COMMITS
-    if "tag" in selected:
-        records |= GitRecords.TAGS
-    if "reflog" in selected:
-        records |= GitRecords.REFLOGS
-    return git_mode, records
-
-
-def parse_commit_times(value: str) -> GitDateMode:
-    """Parse commit timestamp roles."""
-
-    values = [part.strip().lower() for part in value.split(",")]
-    if not values or any(not part for part in values):
-        raise UsageError("--git-commit-times must contain one or more timestamp roles")
-    unknown = next((part for part in values if part not in {"author", "committer"}), None)
-    if unknown is not None:
-        raise UsageError(f"unknown --git-commit-times value {unknown!r}; choose from author, committer")
-    selected = frozenset(values)
-    if selected == frozenset(("author", "committer")):
-        return GitDateMode.BOTH
-    return GitDateMode(next(iter(selected)))
+    schedule_values = tuple(value for value in normalized if value in {"inside", "outside"})
+    if len(set(schedule_values)) > 1:
+        raise UsageError("--list inside and --list outside are mutually exclusive")
+    if len(schedule_values) != len(set(schedule_values)):
+        raise UsageError("--list schedule selectors cannot be repeated")
+    event_values = tuple(value for value in normalized if value not in {"inside", "outside"})
+    schedule = ListSchedule(schedule_values[0]) if schedule_values else ListSchedule.ALL
+    if not event_values:
+        return EventListSelection(schedule=schedule)
+    selection = parse_event_selectors(event_values, option="--list")
+    return EventListSelection(schedule=schedule, evidence_kinds=selection.kinds)
 
 
 __all__ = [
     "parse_clock_minutes",
     "parse_cluster_window",
-    "parse_commit_times",
     "parse_display_hours",
-    "parse_filesystem_entries",
-    "parse_filesystem_times",
-    "parse_git_records",
+    "parse_event_list",
+    "parse_event_selectors",
     "parse_rolling_duration",
     "parse_time_selectors",
     "parse_weekday_scopes",

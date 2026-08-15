@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from workfold.domain.observations import RecordKind, Source, TimestampKind
+from workfold.domain.evidence import EvidenceKind
+from workfold.domain.observations import EntryType, RecordKind, Source, TimestampKind
 
 
 class RecordDisposition(str, Enum):
@@ -64,6 +65,11 @@ class RecordCoverageKey:
     target: str
     record_kind: RecordKind
 
+    def __post_init__(self) -> None:
+        filesystem_record = self.record_kind is RecordKind.FILESYSTEM_ENTRY
+        if filesystem_record != (self.source is Source.FILESYSTEM):
+            raise ValueError("record kind does not belong to coverage source")
+
 
 @dataclass(frozen=True, slots=True)
 class TimestampCoverageKey:
@@ -73,10 +79,19 @@ class TimestampCoverageKey:
     target: str
     record_kind: RecordKind
     timestamp_kind: TimestampKind
+    entry_type: EntryType | None = None
 
     def __post_init__(self) -> None:
         if self.timestamp_kind.source is not self.source:
             raise ValueError("timestamp kind does not belong to coverage source")
+        if self.record_kind is RecordKind.FILESYSTEM_ENTRY and self.entry_type is None:
+            raise ValueError("filesystem timestamp coverage requires an entry type")
+        if self.record_kind is not RecordKind.FILESYSTEM_ENTRY and self.entry_type is not None:
+            raise ValueError("entry type is valid only for filesystem timestamp coverage")
+        try:
+            EvidenceKind.from_dimensions(self.record_kind, self.timestamp_kind, self.entry_type)
+        except ValueError as error:
+            raise ValueError("timestamp kind does not belong to coverage record kind") from error
 
 
 class CoverageInvariantError(RuntimeError):

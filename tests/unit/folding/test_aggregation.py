@@ -11,6 +11,7 @@ from workfold.configuration import ClusterAnchor
 from workfold.domain.observations import (
     ActivityMarker,
     ClassifiedMarker,
+    EntryType,
     RecordKind,
     RecordOrigin,
     Source,
@@ -57,6 +58,7 @@ def _classified(
         repository_or_root=Path("/work"),
         commit_id=identifier if source is Source.GIT else None,
         path=Path(identifier) if source is Source.FILESYSTEM else None,
+        entry_type=EntryType.REGULAR_FILE if source is Source.FILESYSTEM else None,
     )
     instant_ns = datetime_to_utc_ns(local_datetime) + submicrosecond_ns
     observation = TimestampObservation.create(
@@ -348,7 +350,8 @@ def test_explicitly_hidden_days_keep_totals_but_do_not_anchor_visible_clusters()
         markers,
         cluster_window=timedelta(minutes=10),
         hide_days=(Weekday.SATURDAY, Weekday.SUNDAY),
-        outside_limit=1,
+        listed_marker_limit=1,
+        listed_marker_predicate=lambda marker: not marker.within_schedule,
     )
 
     assert result.visible_weekdays == tuple(day for day in Weekday if not day.is_weekend)
@@ -357,7 +360,7 @@ def test_explicitly_hidden_days_keep_totals_but_do_not_anchor_visible_clusters()
     assert result.weekend_count == 1
     assert result.hidden_weekday_counts == ((Weekday.SATURDAY, 1),)
     assert result.hidden_weekday_event_count == 1
-    assert [marker.marker.marker_id for marker in result.retained_outside_markers] == [markers[0].marker.marker_id]
+    assert [marker.marker.marker_id for marker in result.retained_listed_markers] == [markers[0].marker.marker_id]
     assert len(result.clusters) == 1
     assert result.clusters[0].band_start_time_ns == 8 * 60 * NANOSECONDS_PER_MINUTE
 
@@ -434,7 +437,7 @@ def test_hidden_day_identities_are_not_retained_in_the_visible_registry() -> Non
     assert result.identity_counts == ((0, 1),)
 
 
-def test_outside_list_retains_only_most_recent_markers_in_chronological_order() -> None:
+def test_event_list_retains_only_most_recent_matching_markers_in_chronological_order() -> None:
     markers = [
         _classified(
             str(hour),
@@ -444,11 +447,16 @@ def test_outside_list_retains_only_most_recent_markers_in_chronological_order() 
         for hour in (11, 8, 10, 9)
     ]
 
-    result = aggregate_markers(markers, cluster_window=timedelta(minutes=10), outside_limit=2)
+    result = aggregate_markers(
+        markers,
+        cluster_window=timedelta(minutes=10),
+        listed_marker_limit=2,
+        listed_marker_predicate=lambda marker: not marker.within_schedule,
+    )
 
-    assert result.outside_marker_count == 4
-    assert result.outside_omitted_count == 2
-    assert [item.local_datetime.hour for item in result.retained_outside_markers] == [10, 11]
+    assert result.listed_marker_count == 4
+    assert result.listed_omitted_count == 2
+    assert [item.local_datetime.hour for item in result.retained_listed_markers] == [10, 11]
 
 
 @pytest.mark.parametrize(
@@ -563,8 +571,8 @@ def test_aggregation_validates_other_public_options() -> None:
         aggregate_markers((), cluster_window=timedelta(minutes=10), schedule_bounds=(500, 400))
     with pytest.raises(ValueError, match="display_range"):
         aggregate_markers((), cluster_window=timedelta(minutes=10), display_range=(0, 1500))
-    with pytest.raises(ValueError, match="outside_limit"):
-        aggregate_markers((), cluster_window=timedelta(minutes=10), outside_limit=-1)
+    with pytest.raises(ValueError, match="listed_marker_limit"):
+        aggregate_markers((), cluster_window=timedelta(minutes=10), listed_marker_limit=-1)
     with pytest.raises(ValueError, match="cluster_materialization_threshold"):
         AggregationBuilder(
             cluster_window=timedelta(minutes=10),
@@ -577,11 +585,11 @@ def test_aggregation_validates_other_public_options() -> None:
 
 
 def test_empty_aggregation_has_no_rows_and_uses_full_day_without_schedule_bounds() -> None:
-    result = aggregate_markers((), cluster_window=timedelta(minutes=10), outside_limit=0)
+    result = aggregate_markers((), cluster_window=timedelta(minutes=10), listed_marker_limit=0)
 
     assert result.event_count == result.displayed_event_count == 0
     assert result.clusters == ()
-    assert result.retained_outside_markers == ()
+    assert result.retained_listed_markers == ()
     assert (result.display_start_minute, result.display_end_minute) == (0, 24 * 60)
 
 

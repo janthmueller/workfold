@@ -50,9 +50,12 @@ anchors bands at events, labels them as ranges, and classifies against
 workfold . -t 2026-W31
 workfold . -t 2w3d
 workfold . -t 2026-07-01..2026-07-31
-workfold . --timezone Europe/Berlin --list-outside
+workfold . --timezone Europe/Berlin --list outside
 workfold . -t all -m git -p portable
 workfold . -t all -m both -p full
+workfold . --events git:tag:tagger fs:file:modified
+workfold . --events 'fs:*:modified'
+workfold . --events 'git:*:committer'
 workfold . --cluster-window 1m30s --cluster-anchor event
 workfold . --cluster-window 10m
 workfold . --cluster-window 1h5m --cluster-anchor midnight
@@ -73,6 +76,13 @@ evidence stored in Git objects; it says nothing about remote publication. The
 `full` preset expands evidence only inside the selected time and mode, so the
 canonical exhaustive command spells out `-t all -m both -p full`.
 
+For a custom scope, `--events` replaces mode/profile with exact identifiers and
+wildcards. Values are space-separated, and wildcard values should be quoted.
+For example, `--events git:tag:tagger fs:file:modified` combines annotated-tag
+and regular-file mtime observations, while `--events 'fs:*:modified'` selects
+mtime for files, directories, and symlinks. Positional paths come before
+`--events` and `--list`.
+
 ## Read the chart
 
 By default, the chart renders only occupied clusters in implicit
@@ -91,7 +101,7 @@ under the compact `Time` heading. An explicitly
 cropped partial edge remains an exact range so its label cannot imply a complete
 window. Labels use minute-level clock text. An event-anchored label names the
 minute containing its exact observation or anchor; exact seconds and
-nanoseconds remain in provenance and outside-event rows. Empty bands are
+nanoseconds remain in provenance and listed-event rows. Empty bands are
 omitted by default, and a gap at least as long as the configured cluster window
 uses one dim duration cue rather than rows of empty intervals. The built-in
 `1h` window therefore retains the familiar one-hour threshold while custom
@@ -127,7 +137,7 @@ Weekday columns default to Monday through Sunday. `--hide-empty-days all`
 removes every empty column, while the `weekdays`, `weekend`, and individual-day
 scopes apply that condition selectively. `--hide-days` uses the same scopes but
 always hides them. Column controls affect only the matrix: summary, coverage,
-and outside-event rows retain the complete selected event set, and explicitly
+and listed-event rows retain the complete selected event set, and explicitly
 hidden occupied columns receive a compact `Hidden` count.
 
 Each ordinary symbol is one activity marker:

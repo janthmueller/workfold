@@ -58,7 +58,7 @@ def test_known_out_of_scope_git_timestamp_is_not_a_coverage_outcome(tmp_path: Pa
     assert run(options, stdout=output, stderr=StringIO(), terminal_width=80) == 0
 
     rendered = output.getvalue()
-    assert "Git author selected: 0; examined=1, values read=1" in rendered
+    assert "git:commit:author selected: 0; examined=1, values read=1" in rendered
     assert "outside date" not in rendered
 
 
@@ -99,8 +99,8 @@ def test_bounded_portable_profile_selects_author_and_committer_dates_independent
 
     rendered = output.getvalue()
     _assert_summary_count(rendered, "Events", 1)
-    assert "Git author selected: 1; examined=1, values read=1, scope matches=1, markers=1" in rendered
-    assert "Git committer selected: 0; examined=1, values read=1" in rendered
+    assert "git:commit:author selected: 1; examined=1, values read=1, scope matches=1, markers=1" in rendered
+    assert "git:commit:committer selected: 0; examined=1, values read=1" in rendered
 
 
 def test_bounded_git_identity_filter_matches_only_in_range_identity(tmp_path: Path) -> None:
@@ -167,7 +167,7 @@ def test_bounded_git_identity_filter_matches_only_in_range_identity(tmp_path: Pa
 
     rendered = output.getvalue()
     _assert_summary_count(rendered, "Events", 1)
-    assert "Git author selected: 1; examined=1, values read=1, scope matches=1, markers=1" in rendered
+    assert "git:commit:author selected: 1; examined=1, values read=1, scope matches=1, markers=1" in rendered
     traversal = next(arguments for arguments in runner.arguments if arguments[0] == "rev-list")
     assert traversal[3] == "--format=%H%x00%at%x00"
     assert "%an" not in traversal[3]
@@ -254,7 +254,7 @@ def test_selected_git_hydration_failure_preserves_scope_accounting(
     rendered = output.getvalue()
     _assert_summary_count(rendered, "Events", 0)
     assert "Coverage  partial · 1 collection error" in rendered
-    assert f"Git author selected: 0; examined=1, values read=1, {coverage_detail}" in rendered
+    assert f"git:commit:author selected: 0; examined=1, values read=1, {coverage_detail}" in rendered
     target_timestamps = next(line for line in rendered.splitlines() if "target timestamps [git]" in line)
     assert f"scope errors={int(bool(identity_arguments))}" in target_timestamps
     assert "Git object is unavailable" in errors.getvalue()

@@ -8,11 +8,9 @@ from workfold.configuration.layers import OriginKind, ResolvedSettings, SettingV
 from workfold.configuration.options import UsageError
 from workfold.configuration.parsing import (
     parse_cluster_window,
-    parse_commit_times,
     parse_display_hours,
-    parse_filesystem_entries,
-    parse_filesystem_times,
-    parse_git_records,
+    parse_event_list,
+    parse_event_selectors,
     parse_time_selectors,
     parse_weekday_scopes,
 )
@@ -27,16 +25,10 @@ def validate_setting_values(resolution: ResolvedSettings) -> None:
 
     values = resolution.values
     _validate(resolution, "time", lambda: parse_time_selectors(_tuple_value(values, "time")))
-    _validate(resolution, "git-records", lambda: parse_git_records(_csv_value(values, "git-records")))
-    _validate(
-        resolution,
-        "git-commit-times",
-        lambda: parse_commit_times(_csv_value(values, "git-commit-times")),
-    )
+    if values["events"] is not None:
+        _validate(resolution, "events", lambda: parse_event_selectors(_tuple_value(values, "events")))
     _validate(resolution, "git-identity", lambda: _validate_nonempty(_tuple_value(values, "git-identity")))
-    _validate(resolution, "fs-times", lambda: parse_filesystem_times(_csv_value(values, "fs-times")))
-    _validate(resolution, "fs-entries", lambda: parse_filesystem_entries(_csv_value(values, "fs-entries")))
-    _validate(resolution, "exclude", lambda: _validate_exclusions(_tuple_value(values, "exclude")))
+    _validate(resolution, "fs-exclude", lambda: _validate_exclusions(_tuple_value(values, "fs-exclude")))
     _validate(resolution, "hours", lambda: parse_schedule(_string_value(values, "hours")))
     _validate(resolution, "timezone", lambda: _validate_timezone(_optional_string(values, "timezone")))
     _validate(
@@ -61,6 +53,8 @@ def validate_setting_values(resolution: ResolvedSettings) -> None:
         lambda: parse_weekday_scopes(_tuple_value(values, "hide-empty-days"), option="--hide-empty-days"),
     )
     _validate(resolution, "limit", lambda: _validate_limit(_integer_value(values, "limit")))
+    if _tuple_value(values, "list"):
+        _validate(resolution, "list", lambda: parse_event_list(_tuple_value(values, "list")))
 
 
 def _validate(resolution: ResolvedSettings, key: str, operation: Callable[[], object]) -> None:
@@ -114,9 +108,9 @@ def _validate_nonempty(values: tuple[str, ...]) -> None:
 
 def _validate_exclusions(values: tuple[str, ...]) -> None:
     if any(not value.strip() for value in values):
-        raise UsageError("--exclude values cannot be empty")
+        raise UsageError("--fs-exclude values cannot be empty")
     if any(value.strip().startswith("!") for value in values):
-        raise UsageError("--exclude patterns cannot be negated; explicit exclusions always win")
+        raise UsageError("--fs-exclude patterns cannot be negated; explicit exclusions always win")
 
 
 def _validate_timezone(value: str | None) -> None:
@@ -145,10 +139,6 @@ def _tuple_value(values: Mapping[str, SettingValue], key: str) -> tuple[str, ...
     if not isinstance(value, tuple):
         raise AssertionError(f"internal setting {key!r} is not a tuple")
     return value
-
-
-def _csv_value(values: Mapping[str, SettingValue], key: str) -> str:
-    return ",".join(_tuple_value(values, key))
 
 
 def _string_value(values: Mapping[str, SettingValue], key: str) -> str:

@@ -5,45 +5,23 @@ from __future__ import annotations
 import os
 
 from workfold.application.collection import Collection
-from workfold.configuration.options import FilesystemEntry, FilesystemTime, GitDateMode, RefScope, RunOptions
+from workfold.configuration.options import RefScope, RunOptions
 from workfold.domain.coverage import CapabilityStatus
+from workfold.domain.observations import EntryType, RecordKind, TimestampKind
 
 
 def source_label(options: RunOptions) -> str:
-    parts: list[str] = []
-    if options.source.includes_git:
-        records: list[str] = []
-        if options.git_records.includes_commits:
-            if options.git_mode.includes_commit_markers:
-                records.append("commits")
-            if options.git_mode.includes_file_changes:
-                records.append("file changes")
-        if options.git_records.includes_tags:
-            records.append("tags")
-        if options.git_records.includes_reflogs:
-            records.append("reflogs")
-        roles = {
-            GitDateMode.AUTHOR: "author dates",
-            GitDateMode.COMMITTER: "committer dates",
-            GitDateMode.BOTH: "author + committer dates",
-        }[options.git_date]
+    events = ", ".join(kind.value for kind in options.evidence.kinds)
+    parts = [events]
+    if any(kind.record_kind in {RecordKind.COMMIT, RecordKind.GIT_FILE_CHANGE} for kind in options.evidence.kinds):
         reachability = {
             RefScope.HEAD: "HEAD",
             RefScope.LOCAL_BRANCHES: "local branches + detached HEAD",
             RefScope.ALL_REFS: "all locally stored refs",
         }[options.ref_scope]
-        suffix = f", {roles}, commits from {reachability}" if options.git_records.includes_commits else ""
-        parts.append(f"Git {' + '.join(records)}{suffix}")
-    if options.source.includes_filesystem:
-        time_names = {
-            FilesystemTime.CREATED: "birth",
-            FilesystemTime.MODIFIED: "modified",
-            FilesystemTime.CHANGED: "metadata-changed",
-            FilesystemTime.ACCESSED: "accessed",
-        }
-        times = ",".join(time_names[item] for item in options.filesystem_times)
-        reliability = "; atime potentially unreliable" if FilesystemTime.ACCESSED in options.filesystem_times else ""
-        parts.append(f"filesystem ({times}{reliability})")
+        parts.append(f"commits from {reachability}")
+    if any(kind.timestamp_kind is TimestampKind.FS_ACCESSED for kind in options.evidence.kinds):
+        parts.append("atime potentially unreliable")
     return "; ".join(parts)
 
 
@@ -79,11 +57,12 @@ def ignore_label(options: RunOptions, collection: Collection) -> str | None:
     if not options.source.includes_filesystem:
         return None
     entry_names = {
-        FilesystemEntry.FILE: "files",
-        FilesystemEntry.DIRECTORY: "directories",
-        FilesystemEntry.SYMLINK: "symlinks",
+        EntryType.REGULAR_FILE: "files",
+        EntryType.DIRECTORY: "directories",
+        EntryType.SYMLINK: "symlinks",
     }
-    entry_scope = " + ".join(entry_names[item] for item in options.filesystem_entries)
+    selected_types = {kind.entry_type for kind in options.evidence.kinds if kind.entry_type is not None}
+    entry_scope = " + ".join(entry_names[item] for item in EntryType if item in selected_types)
     if options.include_ignored:
         policy = "ignored entries included"
     else:

@@ -13,7 +13,7 @@ from workfold.collection.filesystem.ignore.models import ExclusionPatternError
 
 @dataclass(frozen=True, slots=True)
 class ExplicitExcluder:
-    """Match the non-negating Git-wildmatch subset used by ``--exclude``."""
+    """Match the non-negating Git-wildmatch subset used by ``--fs-exclude``."""
 
     patterns: tuple[str, ...]
     _spec: GitIgnoreSpec
@@ -28,7 +28,7 @@ class ExplicitExcluder:
             if not pattern:
                 raise ExclusionPatternError("explicit exclusion patterns cannot be empty")
             if pattern.startswith("!"):
-                raise ExclusionPatternError(f"negated --exclude patterns are not supported: {pattern!r}")
+                raise ExclusionPatternError(f"negated --fs-exclude patterns are not supported: {pattern!r}")
             if "\0" in pattern:
                 raise ExclusionPatternError("explicit exclusion patterns cannot contain NUL bytes")
         return cls(normalized, GitIgnoreSpec.from_lines(normalized))

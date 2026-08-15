@@ -40,8 +40,8 @@ Workfold therefore uses qualified wording such as:
 
 > complete for all discoverable timestamps in the requested scope
 
-That scope includes paths, the time selector, mode, evidence preset, record and
-timestamp kinds, commit reachability, Git identity filters, filesystem ignore
+That scope includes paths, the time selector, the mode/profile preset or exact
+event selectors, commit reachability, Git identity filters, filesystem ignore
 policy, explicit exclusions, and platform capabilities. `--coverage` prints
 the detailed ledger without operational details; `--verbose` prints operational
 details, the full successful coverage status, and that ledger. The `full`
@@ -96,8 +96,7 @@ cluster window is at least one minute, preventing
 distinct clusters from receiving the same displayed start minute. An
 event-anchored label names the minute containing the exact observation or
 anchor; it does not round or overwrite the normalized instant. Exact seconds
-and available nanoseconds remain in provenance and exact outside-event
-listings.
+and available nanoseconds remain in provenance and exact event listings.
 Empty bands do not affect evidence accounting. The terminal adds one `⋮`
 cue only when a compressed gap reaches the configured cluster window. In event
 anchoring that duration is measured between consecutive observed extents; in
@@ -119,9 +118,11 @@ weeks, dates, or months.
 - For a bounded query, Workfold scans the requested author/committer roles and
   selects them independently. It does not rely on ordinary `git --since` for
   author dates because author timestamps are not ordered by commit topology.
-- Git file changes inherit their commit's selected timestamp roles. Workfold
-  therefore derives tree differences only for commits with at least one
-  matching role; this is an exact scope optimization, not a history shortcut.
+- Commit and file-change timestamp roles are independently selectable. A file
+  change inherits the requested author or committer role from its commit.
+  Workfold therefore derives tree differences only for commits with at least
+  one matching file-change role; this is an exact scope optimization, not a
+  history shortcut.
 - File changes are derived from first-parent tree differences, not stored human
   actions; root commits are compared with an empty tree.
 - Annotated tags may have independent tagger dates; lightweight tags do not.
@@ -152,6 +153,10 @@ weeks, dates, or months.
   reports each pruned ignored subtree and states that descendant directories
   were not enumerated. The full profile and `--include-ignored` instead traverse
   and stat those entries because their timestamps are explicitly in scope.
+- A repository embedded below a selected root is not an escape from that
+  root's ignore policy. An ignored repository boundary is pruned; a visible
+  boundary receives its own repository context. A nested repository supplied
+  explicitly as another input root remains independently selected.
 - A directory visited only so a file-only scan can reach descendant files is
   traversal structure, not a discovered metadata record. It enters record and
   timestamp coverage when directories are requested; explicit exclusion and
@@ -171,8 +176,8 @@ run can produce partial coverage; Workfold reports detected failures but does
 not lock the user's working tree.
 
 Weekday-column controls are presentation-only. `--hide-days` may omit occupied
-columns from the matrix, but those events remain in summary, coverage, and
-outside-event accounting and receive a compact hidden-event count.
+columns from the matrix, but those events remain in summary, coverage, and any
+requested event list, and receive a compact hidden-event count.
 
 ## Privacy and security
 

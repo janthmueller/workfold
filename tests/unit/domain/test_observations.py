@@ -164,6 +164,13 @@ def test_origin_rejects_inconsistent_semantics() -> None:
 
 
 def test_observation_validation() -> None:
+    untyped_filesystem_origin = RecordOrigin(
+        "untyped-file",
+        Source.FILESYSTEM,
+        RecordKind.FILESYSTEM_ENTRY,
+        Path("/root"),
+        path=Path("file"),
+    )
     filesystem_origin = RecordOrigin(
         "file",
         Source.FILESYSTEM,
@@ -174,6 +181,8 @@ def test_observation_validation() -> None:
     )
     with pytest.raises(ValueError, match="does not belong"):
         TimestampObservation.create(filesystem_origin, TimestampKind.GIT_AUTHOR, 1, "1")
+    with pytest.raises(ValueError, match="supported entry type"):
+        TimestampObservation.create(untyped_filesystem_origin, TimestampKind.FS_MODIFIED, 1, "1")
     with pytest.raises(ValueError, match="recorded UTC offset"):
         TimestampObservation.create(_git_origin(), TimestampKind.GIT_AUTHOR, 1, "1")
     with pytest.raises(ValueError, match="recorded identity"):

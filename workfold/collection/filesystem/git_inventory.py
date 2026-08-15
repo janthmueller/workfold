@@ -89,30 +89,6 @@ def collect_git_inventory_stream(
             eligible_consumer(PendingEntry(root, path, snapshot, candidate_origin, candidate_type))
 
     def consume_ignored(relative_path: str, is_directory: bool) -> None:
-        path = root / relative_path
-        if is_directory and not excluder.matches(relative_path, is_directory=True):
-            try:
-                snapshot = lstat_reader(path)
-            except (FileNotFoundError, NotADirectoryError):
-                pass
-            except OSError as error:
-                accounting.discover(root)
-                accounting.record(root, RecordDisposition.RECORD_ERROR)
-                diagnostics.append(stat_diagnostic(root, path, error, is_root=False))
-                return
-            else:
-                if entry_type(snapshot.st_mode) is EntryType.DIRECTORY and is_nested_repository_boundary(
-                    path,
-                    selected_root=root,
-                ):
-                    # Parent ignore rules stop at an embedded repository
-                    # boundary. The nested repository decides the visibility of
-                    # its own tracked and untracked files.
-                    nested_repository_consumer(
-                        RootSnapshot(path, snapshot),
-                        excluder.scoped(PurePosixPath(relative_path)),
-                    )
-                    return
         disposition = (
             RecordDisposition.EXPLICITLY_EXCLUDED
             if excluder.matches(relative_path, is_directory=is_directory)
@@ -145,10 +121,11 @@ def collect_git_inventory_stream(
             accounting.record(root, RecordDisposition.RECORD_ERROR)
             diagnostics.append(stat_diagnostic(root, admin_path, error, is_root=False))
         else:
+            admin_type = entry_type(admin_snapshot.st_mode)
             accounting.discover(root)
             accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
             if entries is not None:
-                admin_origin = origin(root, admin_path, entry_type(admin_snapshot.st_mode))
+                admin_origin = origin(root, admin_path, admin_type)
                 retain_entry(entries, admin_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
 
     if visit.warning is not None:

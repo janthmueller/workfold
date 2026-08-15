@@ -4,16 +4,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from enum import Enum, IntFlag
+from enum import Enum
 from pathlib import Path
 
-from workfold.domain.observations import Weekday
+from workfold.domain.evidence import EvidenceKind, EvidenceSelection
+from workfold.domain.observations import Source, Weekday
 from workfold.domain.scope import RefScope
 from workfold.folding.bands import ClusterAnchor
 
 
 class UsageError(ValueError):
     """Raised when command-line values are individually or jointly invalid."""
+
+    def __init__(self, message: str, *, setting_keys: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        if any(not key for key in setting_keys):
+            raise ValueError("usage-error setting keys must not be empty")
+        self.setting_keys = tuple(dict.fromkeys(setting_keys))
 
 
 class SourceMode(str, Enum):
@@ -34,6 +41,7 @@ class CollectionProfile(str, Enum):
     STANDARD = "standard"
     PORTABLE = "portable"
     FULL = "full"
+    CUSTOM = "custom"
 
 
 class MarkerStyle(str, Enum):
@@ -67,58 +75,42 @@ class BandLabel(str, Enum):
     START = "start"
 
 
-class GitMode(str, Enum):
-    COMMITS = "commits"
-    FILES = "files"
-    BOTH = "both"
+class ListSchedule(str, Enum):
+    """Optional schedule predicate applied to detailed event rows."""
 
-    @property
-    def includes_commit_markers(self) -> bool:
-        return self in {GitMode.COMMITS, GitMode.BOTH}
-
-    @property
-    def includes_file_changes(self) -> bool:
-        return self in {GitMode.FILES, GitMode.BOTH}
+    ALL = "all"
+    INSIDE = "inside"
+    OUTSIDE = "outside"
 
 
-class GitDateMode(str, Enum):
-    AUTHOR = "author"
-    COMMITTER = "committer"
-    BOTH = "both"
+@dataclass(frozen=True, slots=True)
+class EventListSelection:
+    """A bounded detail projection over events already selected for the report."""
+
+    schedule: ListSchedule = ListSchedule.ALL
+    evidence_kinds: tuple[EvidenceKind, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_list_schedule(self.schedule)
+        _require_list_evidence_kinds(tuple(self.evidence_kinds))
+        canonical = tuple(kind for kind in EvidenceKind if kind in self.evidence_kinds)
+        if canonical != self.evidence_kinds:
+            raise ValueError("listed evidence kinds must be unique and canonically ordered")
+
+    def includes_schedule_state(self, within_schedule: bool) -> bool:
+        if self.schedule is ListSchedule.ALL:
+            return True
+        return within_schedule is (self.schedule is ListSchedule.INSIDE)
 
 
-class GitRecords(IntFlag):
-    """Resolved Git record families; commit/file-change granularity is separate."""
-
-    COMMITS = 1
-    TAGS = 2
-    REFLOGS = 4
-    ALL = COMMITS | TAGS | REFLOGS
-
-    @property
-    def includes_commits(self) -> bool:
-        return bool(self & GitRecords.COMMITS)
-
-    @property
-    def includes_tags(self) -> bool:
-        return bool(self & GitRecords.TAGS)
-
-    @property
-    def includes_reflogs(self) -> bool:
-        return bool(self & GitRecords.REFLOGS)
+def _require_list_schedule(value: object) -> None:
+    if not isinstance(value, ListSchedule):
+        raise TypeError("listed schedule must be a ListSchedule")
 
 
-class FilesystemTime(str, Enum):
-    CREATED = "created"
-    MODIFIED = "modified"
-    CHANGED = "changed"
-    ACCESSED = "accessed"
-
-
-class FilesystemEntry(str, Enum):
-    FILE = "file"
-    DIRECTORY = "directory"
-    SYMLINK = "symlink"
+def _require_list_evidence_kinds(values: tuple[object, ...]) -> None:
+    if any(not isinstance(kind, EvidenceKind) for kind in values):
+        raise TypeError("listed evidence kinds must be EvidenceKind values")
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,8 +144,8 @@ class TerminalPreferences:
     band_label: BandLabel
     show_empty_bands: bool
     no_color: bool
-    list_outside: bool
-    outside_limit: int
+    event_list: EventListSelection | None
+    event_limit: int
     coverage: bool
     strict: bool
     verbose: bool
@@ -170,14 +162,9 @@ class RunOptions:
     all_dates: bool
     rolling_duration: RollingDuration | None
     profile: CollectionProfile
-    source: SourceMode
-    git_mode: GitMode
-    git_date: GitDateMode
-    git_records: GitRecords
+    evidence: EvidenceSelection
     ref_scope: RefScope
     git_identities: tuple[str, ...]
-    filesystem_times: tuple[FilesystemTime, ...]
-    filesystem_entries: tuple[FilesystemEntry, ...]
     include_ignored: bool
     respect_gitignore: bool
     exclusions: tuple[str, ...]
@@ -190,6 +177,16 @@ class RunOptions:
     terminal: TerminalPreferences
     cluster_anchor: ClusterAnchor = ClusterAnchor.EVENT
 
+    @property
+    def source(self) -> SourceMode:
+        """Return the source mode derived from the canonical event selection."""
+
+        includes_git = self.evidence.includes_source(Source.GIT)
+        includes_filesystem = self.evidence.includes_source(Source.FILESYSTEM)
+        if includes_git and includes_filesystem:
+            return SourceMode.BOTH
+        return SourceMode.GIT if includes_git else SourceMode.FILESYSTEM
+
 
 @dataclass(frozen=True, slots=True)
 class UnresolvedOptions:
@@ -199,12 +196,9 @@ class UnresolvedOptions:
     time_selectors: tuple[str, ...]
     modes: tuple[str, ...]
     profiles: tuple[str, ...]
-    git_records: str | None
-    commit_times: str | None
+    event_selectors: tuple[str, ...] | None
     commits_from: str | None
     git_identities: tuple[str, ...]
-    filesystem_times: str | None
-    filesystem_entries: str | None
     include_ignored: bool
     exclusions: tuple[str, ...]
     hours: str
@@ -216,7 +210,7 @@ class UnresolvedOptions:
     hide_days: tuple[str, ...]
     hide_empty_days: tuple[str, ...]
     no_color: bool
-    list_outside: bool
+    list_selectors: tuple[str, ...] | None
     limit: int
     coverage: bool
     strict: bool
@@ -236,12 +230,9 @@ __all__ = [
     "DEFAULT_HOURS",
     "CollectionProfile",
     "DisplayHours",
-    "FilesystemEntry",
-    "FilesystemTime",
-    "GitDateMode",
-    "GitMode",
-    "GitRecords",
+    "EventListSelection",
     "GridStyle",
+    "ListSchedule",
     "MarkerStyle",
     "RunOptions",
     "RefScope",

@@ -168,8 +168,14 @@ def _record_key_sort(key: RecordCoverageKey) -> tuple[str, str, str]:
     return key.source.value, key.target, key.record_kind.value
 
 
-def _timestamp_key_sort(key: TimestampCoverageKey) -> tuple[str, str, str, str]:
-    return key.source.value, key.target, key.record_kind.value, key.timestamp_kind.value
+def _timestamp_key_sort(key: TimestampCoverageKey) -> tuple[str, str, str, str, str]:
+    return (
+        key.source.value,
+        key.target,
+        key.record_kind.value,
+        key.entry_type.value if key.entry_type else "",
+        key.timestamp_kind.value,
+    )
 
 
 def merge_ledgers(*ledgers: CoverageLedger) -> CoverageLedger:

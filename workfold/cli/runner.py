@@ -45,7 +45,8 @@ def run(
         options,
         collectors or default_collector_services(),
         ReportRequirements(
-            outside_event_limit=preferences.outside_limit if preferences.list_outside else 0,
+            event_list=preferences.event_list,
+            event_limit=preferences.event_limit,
             retain_git_identities=preferences.marker_style is MarkerStyle.IDENTITY,
         ),
         now=now,
@@ -64,7 +65,7 @@ def run(
             environ=environment,
             stdout_is_tty=_is_tty(output),
         ),
-        list_outside=preferences.list_outside,
+        show_event_list=preferences.event_list is not None,
         verbose=preferences.verbose,
         band_label=preferences.band_label,
         show_empty_bands=preferences.show_empty_bands,

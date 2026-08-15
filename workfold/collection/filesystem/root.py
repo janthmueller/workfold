@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from pathlib import Path
+from collections.abc import Callable, Mapping
+from pathlib import Path, PurePosixPath
 
 from workfold.collection.diagnostics import CollectorDiagnostic
 from workfold.collection.filesystem.accounting import AccountingBuilder
@@ -25,6 +25,7 @@ from workfold.collection.filesystem.ignore import (
     IgnoreCandidate,
     has_git_admin_ancestor,
     has_repository_marker_ancestor,
+    is_nested_repository_boundary,
     is_within_git_admin,
     looks_like_bare_repository,
 )
@@ -47,10 +48,7 @@ from workfold.domain.scope import ObservationScope
 def collect_root(
     root_snapshot: RootSnapshot,
     *,
-    kinds: tuple[TimestampKind, ...],
-    include_regular_files: bool,
-    include_directories: bool,
-    include_symlinks: bool,
+    entry_timestamps: Mapping[EntryType, tuple[TimestampKind, ...]],
     respect_gitignore: bool,
     excluder: ExplicitExcluder,
     accounting: AccountingBuilder,
@@ -70,8 +68,16 @@ def collect_root(
 
     root = root_snapshot.path
     root_type = entry_type(root_snapshot.snapshot.st_mode)
+    include_regular_files = EntryType.REGULAR_FILE in entry_timestamps
+    include_directories = EntryType.DIRECTORY in entry_timestamps
+    include_symlinks = EntryType.SYMLINK in entry_timestamps
 
     def consume_eligible(item: PendingEntry) -> None:
+        if item.entry_type is None:
+            raise RuntimeError("eligible filesystem entry has no supported entry type")
+        kinds = entry_timestamps.get(item.entry_type)
+        if kinds is None:
+            raise RuntimeError("eligible filesystem entry has no timestamp selection")
         extract_entry(
             item,
             kinds,
@@ -240,11 +246,30 @@ def collect_root(
     capabilities.append(ignore_capability(root, respect_gitignore, probe, error=ignore_error))
 
     for item in pending:
+        nested_boundary = item.entry_type is EntryType.DIRECTORY and is_nested_repository_boundary(
+            item.path,
+            selected_root=root,
+        )
         if item.path not in ignored:
+            if nested_boundary:
+                relative = PurePosixPath(item.path.relative_to(root).as_posix())
+                nested_repository_consumer(
+                    RootSnapshot(item.path, item.snapshot),
+                    excluder.scoped(relative),
+                )
+                continue
             process_visible_entry(item)
             continue
         if item.entry_type is EntryType.DIRECTORY and not include_directories:
+            if nested_boundary:
+                # The boundary replaced an otherwise enumerable ignored leaf
+                # inventory. Account for it without turning an unrequested
+                # directory into retained filesystem evidence.
+                accounting.discover(root)
+                accounting.record(root, RecordDisposition.IGNORED)
             continue
+        if nested_boundary:
+            accounting.prune_ignored_subtree()
         accounting.discover(root)
         accounting.record(root, RecordDisposition.IGNORED)
         if entries is not None:

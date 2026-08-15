@@ -2,13 +2,14 @@ from dataclasses import replace
 
 import pytest
 from workfold.collection.diagnostics import CollectorDiagnostic
-from workfold.configuration import BandLabel, ClusterAnchor, GridStyle, MarkerStyle
+from workfold.configuration import BandLabel, ClusterAnchor, EventListSelection, GridStyle, MarkerStyle
+from workfold.domain.evidence import EvidenceKind
 from workfold.domain.observations import Source
 from workfold.reporting.sanitization import display_width, sanitize_terminal_text, truncate_end, truncate_middle
 from workfold.reporting.terminal import TerminalOptions, render_terminal, terminal_color_enabled
 from workfold.reporting.terminal.coverage_status import COMPLETE_COVERAGE_STATUS
 
-from support.reports import classified_marker, report
+from support.reports import classified_marker, coalesced_git_marker, report
 
 
 @pytest.mark.parametrize(
@@ -36,12 +37,14 @@ def test_outside_list_is_bounded_chronological_sanitized_and_80_columns() -> Non
         report(
             classified_marker("old", 6, 0, source=Source.GIT, within_schedule=False),
             classified_marker("new", 20, 0, source=Source.GIT, within_schedule=False, description=hostile),
-            outside_limit=1,
+            event_limit=1,
         ),
-        options=TerminalOptions(width=80, list_outside=True),
+        options=TerminalOptions(width=80, show_event_list=True),
     )
 
-    assert "showing 1 of 2; 1 older omitted" in rendered
+    assert "showing 1 of 2; 1 additional omitted" in rendered
+    assert "Events outside working hours" in rendered
+    assert "Timestamp                              Schedule" not in rendered
     assert "2026-08-03T20:00:00+00:00" in rendered
     assert "2026-08-03T06:00:00+00:00" not in rendered
     assert r"subject\n\x1b[31mforged" in rendered
@@ -61,9 +64,41 @@ def test_outside_list_preserves_fractional_nanoseconds() -> None:
                 fractional_nanoseconds=123_456_789,
             )
         ),
-        options=TerminalOptions(width=100, list_outside=True),
+        options=TerminalOptions(width=100, show_event_list=True),
     )
     assert "2026-08-03T20:00:00.123456789+00:00" in rendered
+    assert "  fs:file:modified\n" in rendered
+    assert "  /work/repository\n" in rendered
+    assert "  files/precise\n" in rendered
+
+
+def test_all_event_list_shows_each_rows_schedule_state() -> None:
+    rendered = render_terminal(
+        report(
+            classified_marker("inside", 10, 0, source=Source.GIT, within_schedule=True),
+            classified_marker("outside", 20, 0, source=Source.GIT, within_schedule=False),
+            event_list=EventListSelection(),
+        ),
+        options=TerminalOptions(width=80, show_event_list=True),
+    )
+
+    assert "Timestamp                              Schedule" in rendered
+    timestamp_lines = tuple(line for line in rendered.splitlines() if line.startswith("2026-"))
+    assert any(line.endswith("inside") for line in timestamp_lines)
+    assert any(line.endswith("outside") for line in timestamp_lines)
+
+
+def test_exact_event_list_projects_only_selected_role_from_a_coalesced_marker() -> None:
+    rendered = render_terminal(
+        report(
+            coalesced_git_marker("abc123", 10, within_schedule=True),
+            event_list=EventListSelection(evidence_kinds=(EvidenceKind.GIT_COMMIT_COMMITTER,)),
+        ),
+        options=TerminalOptions(width=80, show_event_list=True),
+    )
+
+    assert "git:commit:committer" in rendered
+    assert "git:commit:{author,committer}" not in rendered
 
 
 def test_zero_event_summary_uses_na_percentages() -> None:
@@ -88,7 +123,8 @@ def test_verbose_renderer_restores_operational_and_exact_scope_details() -> None
     assert "Band labels: range" in rendered
     assert "Compression: empty time omitted; gaps of at least one cluster window" in rendered
     assert "busy cells use exact symbol×count" in rendered
-    assert "Collector selectors: Git commits, author dates, commits from local" in rendered
+    assert "Collector selectors: git:commit:author, fs:file:birth, fs:file:modified; commits" in rendered
+    assert "from local branches + detached HEAD" in rendered
     assert "Git identities: all recorded identities" in rendered
     assert "Extents:" not in rendered
     assert "Filesystem policy: standard Git ignores respected; files" in rendered

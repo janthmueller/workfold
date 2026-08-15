@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from workfold.domain.observations import RecordKind, RecordOrigin, Source, TimestampKind, TimestampObservation
+from workfold.domain.observations import (
+    EntryType,
+    RecordKind,
+    RecordOrigin,
+    Source,
+    TimestampKind,
+    TimestampObservation,
+)
 from workfold.domain.scope import ObservationScope
 from workfold.domain.time import InstantRange, InstantRangeUnion
 
@@ -40,6 +47,7 @@ def _filesystem_observation(instant_utc_ns: int) -> TimestampObservation:
         record_kind=RecordKind.FILESYSTEM_ENTRY,
         repository_or_root=Path("/root"),
         path=path,
+        entry_type=EntryType.REGULAR_FILE,
     )
     return TimestampObservation.create(
         origin,

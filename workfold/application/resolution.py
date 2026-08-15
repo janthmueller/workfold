@@ -8,8 +8,7 @@ from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 from workfold.configuration.local_timezone import resolve_local_timezone
-from workfold.configuration.options import FilesystemTime, GitDateMode, RunOptions, UsageError
-from workfold.domain.observations import TimestampKind
+from workfold.configuration.options import RunOptions, UsageError
 from workfold.domain.schedule import Schedule, parse_schedule
 from workfold.domain.time import (
     InstantRangeUnion,
@@ -88,28 +87,6 @@ def validate_without_collection(options: RunOptions, *, environ: Mapping[str, st
     timezone_value = resolve_timezone_selection(options, environ)
     resolve_schedule(options)
     resolve_date_range(options, timezone_value, datetime.now(timezone.utc))
-
-
-def git_timestamp_kinds(mode: GitDateMode) -> tuple[TimestampKind, ...]:
-    """Map the Git date mode to normalized timestamp kinds."""
-
-    if mode is GitDateMode.AUTHOR:
-        return (TimestampKind.GIT_AUTHOR,)
-    if mode is GitDateMode.COMMITTER:
-        return (TimestampKind.GIT_COMMITTER,)
-    return (TimestampKind.GIT_AUTHOR, TimestampKind.GIT_COMMITTER)
-
-
-def filesystem_timestamp_kinds(values: tuple[FilesystemTime, ...]) -> tuple[TimestampKind, ...]:
-    """Map filesystem time selections to normalized timestamp kinds."""
-
-    mapping = {
-        FilesystemTime.CREATED: TimestampKind.FS_CREATED,
-        FilesystemTime.MODIFIED: TimestampKind.FS_MODIFIED,
-        FilesystemTime.CHANGED: TimestampKind.FS_METADATA_CHANGED,
-        FilesystemTime.ACCESSED: TimestampKind.FS_ACCESSED,
-    }
-    return tuple(mapping[value] for value in values)
 
 
 def _calendar_range_label(start: date | None, end: date | None) -> str:

@@ -49,6 +49,21 @@ from support.git_repo import GitRepo
 FS_MODIFIED = (TimestampKind.FS_MODIFIED,)
 
 
+def fs_selection(
+    kinds: Sequence[TimestampKind],
+    *,
+    files: bool = True,
+    directories: bool = False,
+    symlinks: bool = False,
+) -> tuple[tuple[EntryType, tuple[TimestampKind, ...]], ...]:
+    selected_types = (
+        *((EntryType.REGULAR_FILE,) if files else ()),
+        *((EntryType.DIRECTORY,) if directories else ()),
+        *((EntryType.SYMLINK,) if symlinks else ()),
+    )
+    return tuple((entry_type, tuple(kinds)) for entry_type in selected_types)
+
+
 def make_admin_layout_nonstandard(repo: GitRepo, storage: Path) -> None:
     storage.mkdir()
     for name in ("objects", "refs"):
@@ -190,7 +205,7 @@ def test_identityless_directory_entry_is_refreshed_before_queueing(tmp_path: Pat
         scandir_reader=identityless_scandir,
     ).collect(
         (root,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -217,7 +232,7 @@ def test_quick_scan_accounts_for_regular_ignored_excluded_and_admin_entries(tmp_
 
     result = FilesystemCollector().collect(
         (repo.path,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         exclusions=("excluded/", "*.ignored"),
     )
 
@@ -283,7 +298,7 @@ def test_git_inventory_validates_current_files_without_statting_ignored_tree(tmp
 
     result = FilesystemCollector(lstat_reader=counting_lstat).collect(
         (repo.path,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
     )
 
     eligible_paths = {item.path for item in result.eligible_origins}
@@ -313,7 +328,7 @@ def test_git_inventory_restricts_candidates_to_literal_selected_subdirectory(tmp
     (selected / "ignored.tmp").write_text("ignored", encoding="utf-8")
     (repo.path / "outside.txt").write_text("outside", encoding="utf-8")
 
-    result = FilesystemCollector().collect((selected,), timestamp_kinds=FS_MODIFIED)
+    result = FilesystemCollector().collect((selected,), entry_timestamps=fs_selection(FS_MODIFIED))
 
     assert {item.path for item in result.eligible_origins} == {inside}
     assert result.accounting.records[0].ignored == 1
@@ -327,7 +342,7 @@ def test_git_inventory_preserves_newlines_in_paths(tmp_path: Path) -> None:
     unusual = repo.path / "line\nbreak.txt"
     unusual.write_text("unusual", encoding="utf-8")
 
-    result = FilesystemCollector().collect((repo.path,), timestamp_kinds=FS_MODIFIED)
+    result = FilesystemCollector().collect((repo.path,), entry_timestamps=fs_selection(FS_MODIFIED))
 
     assert unusual in {item.path for item in result.eligible_origins}
     assert not result.diagnostics
@@ -356,8 +371,7 @@ def test_git_inventory_prunes_ignored_directories_but_keeps_visible_empty_direct
 
     result = FilesystemCollector(scandir_reader=guarded_scandir).collect(
         (repo.path,),
-        timestamp_kinds=FS_MODIFIED,
-        include_directories=True,
+        entry_timestamps=fs_selection(FS_MODIFIED, directories=True),
     )
 
     assert visible_empty in {item.path for item in result.eligible_origins}
@@ -377,8 +391,7 @@ def test_pruned_ignored_subtree_makes_unenumerated_descendant_directories_explic
 
     result = FilesystemCollector().collect(
         (repo.path,),
-        timestamp_kinds=FS_MODIFIED,
-        include_directories=True,
+        entry_timestamps=fs_selection(FS_MODIFIED, directories=True),
     )
 
     assert result.accounting.pruned_ignored_subtrees == 1
@@ -402,8 +415,7 @@ def test_directory_inventory_does_not_materialize_git_paths_in_python(tmp_path: 
     service = GitIgnoreService(inventory_builder=reject_materialization)
     result = FilesystemCollector(ignore_service=service).collect(
         (repo.path,),
-        timestamp_kinds=FS_MODIFIED,
-        include_directories=True,
+        entry_timestamps=fs_selection(FS_MODIFIED, directories=True),
     )
 
     assert {item.path for item in result.eligible_origins} >= {
@@ -432,9 +444,9 @@ def test_git_inventory_and_native_scan_select_the_same_regular_files(tmp_path: P
     (repo.path / "ignored.log").write_text("ignored", encoding="utf-8")
     (repo.path / "nested" / "generated" / "artifact.txt").write_text("ignored", encoding="utf-8")
 
-    fast = FilesystemCollector().collect((repo.path,), timestamp_kinds=FS_MODIFIED)
+    fast = FilesystemCollector().collect((repo.path,), entry_timestamps=fs_selection(FS_MODIFIED))
     native = FilesystemCollector(ignore_service=NativeOnlyIgnoreService()).collect(
-        (repo.path,), timestamp_kinds=FS_MODIFIED
+        (repo.path,), entry_timestamps=fs_selection(FS_MODIFIED)
     )
 
     native_regular = {item.path for item in native.eligible_origins}
@@ -466,7 +478,7 @@ def test_explicitly_excluded_directory_is_recorded_once_and_never_opened(tmp_pat
 
     result = FilesystemCollector(scandir_reader=guarded_scandir).collect(
         (root,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         exclusions=("private/",),
         respect_gitignore=False,
         include_ignored=True,
@@ -491,16 +503,16 @@ def test_exhaustive_scan_includes_directories_and_symlinks_without_following(tmp
 
     result = FilesystemCollector().collect(
         (root,),
-        timestamp_kinds=tuple(
+        entry_timestamps=fs_selection(
             (
                 TimestampKind.FS_CREATED,
                 TimestampKind.FS_MODIFIED,
                 TimestampKind.FS_METADATA_CHANGED,
                 TimestampKind.FS_ACCESSED,
-            )
+            ),
+            directories=True,
+            symlinks=True,
         ),
-        include_directories=True,
-        include_symlinks=True,
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -513,20 +525,77 @@ def test_exhaustive_scan_includes_directories_and_symlinks_without_following(tmp
         EntryType.REGULAR_FILE,
         EntryType.SYMLINK,
     }
-    by_kind = {item.key.timestamp_kind: item for item in result.accounting.timestamps}
+    eligible_by_type = {
+        entry_type: sum(1 for item in result.eligible_origins if item.entry_type is entry_type)
+        for entry_type in EntryType
+    }
     eligible = result.accounting.records[0].eligible
-    assert all(item.requested == eligible for item in by_kind.values())
-    assert by_kind[TimestampKind.FS_MODIFIED].captured == eligible
-    assert by_kind[TimestampKind.FS_ACCESSED].captured == eligible
-    birth = by_kind[TimestampKind.FS_CREATED]
+    assert sum(eligible_by_type.values()) == eligible
+    assert all(
+        item.key.entry_type is not None and item.requested == eligible_by_type[item.key.entry_type]
+        for item in result.accounting.timestamps
+    )
+    assert (
+        sum(
+            item.captured
+            for item in result.accounting.timestamps
+            if item.key.timestamp_kind is TimestampKind.FS_MODIFIED
+        )
+        == eligible
+    )
+    assert (
+        sum(
+            item.captured
+            for item in result.accounting.timestamps
+            if item.key.timestamp_kind is TimestampKind.FS_ACCESSED
+        )
+        == eligible
+    )
+    births = tuple(item for item in result.accounting.timestamps if item.key.timestamp_kind is TimestampKind.FS_CREATED)
     birth_capability = next(item for item in result.capabilities if item.timestamp_kind is TimestampKind.FS_CREATED)
     if birth_capability.status is CapabilityStatus.SUPPORTED:
-        assert birth.captured + birth.unavailable == eligible
-        assert birth.unsupported == 0
+        assert sum(item.captured + item.unavailable for item in births) == eligible
+        assert sum(item.unsupported for item in births) == 0
     else:
-        assert birth.unsupported == eligible
+        assert sum(item.unsupported for item in births) == eligible
     atime = next(item for item in result.capabilities if item.timestamp_kind is TimestampKind.FS_ACCESSED)
     assert atime.status is CapabilityStatus.POTENTIALLY_UNRELIABLE
+
+
+def test_entry_types_can_request_different_timestamp_roles(tmp_path: Path) -> None:
+    root = tmp_path / "tree"
+    child = root / "child"
+    child.mkdir(parents=True)
+    file_path = child / "work.txt"
+    file_path.write_text("work", encoding="utf-8")
+    link = root / "link"
+    link.symlink_to(file_path)
+
+    result = FilesystemCollector().collect(
+        (root,),
+        entry_timestamps=(
+            (EntryType.REGULAR_FILE, (TimestampKind.FS_MODIFIED,)),
+            (EntryType.DIRECTORY, (TimestampKind.FS_METADATA_CHANGED,)),
+            (EntryType.SYMLINK, (TimestampKind.FS_ACCESSED,)),
+        ),
+        respect_gitignore=False,
+        include_ignored=True,
+    )
+
+    observed = {(item.origin.entry_type, item.kind, item.origin.path) for item in result.observations}
+    assert observed == {
+        (EntryType.REGULAR_FILE, TimestampKind.FS_MODIFIED, file_path),
+        (EntryType.DIRECTORY, TimestampKind.FS_METADATA_CHANGED, root),
+        (EntryType.DIRECTORY, TimestampKind.FS_METADATA_CHANGED, child),
+        (EntryType.SYMLINK, TimestampKind.FS_ACCESSED, link),
+    }
+    assert {
+        (item.key.entry_type, item.key.timestamp_kind, item.requested) for item in result.accounting.timestamps
+    } == {
+        (EntryType.REGULAR_FILE, TimestampKind.FS_MODIFIED, 1),
+        (EntryType.DIRECTORY, TimestampKind.FS_METADATA_CHANGED, 2),
+        (EntryType.SYMLINK, TimestampKind.FS_ACCESSED, 1),
+    }
 
 
 def test_entry_type_scope_can_exclude_regular_files(tmp_path: Path) -> None:
@@ -538,9 +607,7 @@ def test_entry_type_scope_can_exclude_regular_files(tmp_path: Path) -> None:
 
     result = FilesystemCollector().collect(
         (root,),
-        timestamp_kinds=FS_MODIFIED,
-        include_regular_files=False,
-        include_directories=True,
+        entry_timestamps=fs_selection(FS_MODIFIED, files=False, directories=True),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -561,7 +628,7 @@ def test_exact_file_and_symlink_roots_are_not_expanded(tmp_path: Path) -> None:
 
     quick = FilesystemCollector().collect(
         (target, link),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -573,8 +640,7 @@ def test_exact_file_and_symlink_roots_are_not_expanded(tmp_path: Path) -> None:
 
     exhaustive = FilesystemCollector().collect(
         (link,),
-        timestamp_kinds=FS_MODIFIED,
-        include_symlinks=True,
+        entry_timestamps=fs_selection(FS_MODIFIED, symlinks=True),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -591,7 +657,7 @@ def test_lexical_overlaps_deduplicate_and_nested_repository_uses_its_own_context
 
     result = FilesystemCollector().collect(
         (outer, outer, outer / "outer.txt", nested.path, nested.path / "nested.txt"),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -632,7 +698,7 @@ def test_explicit_nested_repository_remains_scannable_when_covering_root_fails(t
 
     result = FilesystemCollector(scandir_reader=failing_outer_scandir).collect(
         (outer, nested.path),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -644,7 +710,42 @@ def test_explicit_nested_repository_remains_scannable_when_covering_root_fails(t
     )
 
 
-def test_outer_scan_enters_nested_repository_with_its_own_ignore_semantics(tmp_path: Path) -> None:
+@pytest.mark.parametrize("include_directories", [False, True])
+def test_outer_ignore_prunes_nested_repository(
+    tmp_path: Path,
+    *,
+    include_directories: bool,
+) -> None:
+    outer = GitRepo.create(tmp_path / "outer")
+    (outer.path / ".gitignore").write_text("nested/\n", encoding="utf-8")
+    (outer.path / "outer.txt").write_text("outer", encoding="utf-8")
+    outer.run("add", ".gitignore", "outer.txt")
+
+    nested = GitRepo.create(outer.path / "nested")
+    nested_file = nested.path / "work.txt"
+    nested_file.write_text("nested", encoding="utf-8")
+
+    result = FilesystemCollector().collect(
+        (outer.path,),
+        entry_timestamps=fs_selection(FS_MODIFIED, directories=include_directories),
+    )
+
+    assert result.scan_roots == (outer.path,)
+    assert nested_file not in {item.path for item in result.origins}
+    assert all(item.repository_or_root == outer.path for item in result.origins)
+    assert sum(item.ignored for item in result.accounting.records) == 1
+    assert result.accounting.pruned_ignored_subtrees == int(include_directories)
+
+    reference = FilesystemCollector(ignore_service=NativeOnlyIgnoreService()).collect(
+        (outer.path,),
+        entry_timestamps=fs_selection(FS_MODIFIED, directories=include_directories),
+    )
+    assert reference.scan_roots == (outer.path,)
+    assert nested_file not in {item.path for item in reference.origins}
+    assert reference.accounting == result.accounting
+
+
+def test_explicit_ignored_nested_repository_is_scanned_with_its_own_ignore_semantics(tmp_path: Path) -> None:
     outer = GitRepo.create(tmp_path / "outer")
     (outer.path / ".gitignore").write_text("nested/\n", encoding="utf-8")
     (outer.path / "outer.txt").write_text("outer", encoding="utf-8")
@@ -659,9 +760,9 @@ def test_outer_scan_enters_nested_repository_with_its_own_ignore_semantics(tmp_p
     nested.run("add", ".gitignore", "tracked.txt")
 
     result = FilesystemCollector().collect(
-        (outer.path,),
-        timestamp_kinds=FS_MODIFIED,
-        exclusions=("nested/secret.txt",),
+        (outer.path, nested.path),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+        exclusions=("secret.txt",),
     )
 
     assert result.scan_roots == (outer.path, nested.path)
@@ -689,9 +790,17 @@ def test_outer_scan_enters_nested_repository_with_its_own_ignore_semantics(tmp_p
         for item in result.entries
     )
 
+
+def test_include_ignored_enters_nested_repository(tmp_path: Path) -> None:
+    outer = GitRepo.create(tmp_path / "outer")
+    (outer.path / ".gitignore").write_text("nested/\n", encoding="utf-8")
+    nested = GitRepo.create(outer.path / "nested")
+    ignored = nested.path / "ignored.log"
+    ignored.write_text("ignored", encoding="utf-8")
+
     exhaustive = FilesystemCollector().collect(
         (outer.path,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -700,7 +809,7 @@ def test_outer_scan_enters_nested_repository_with_its_own_ignore_semantics(tmp_p
         for item in exhaustive.entries
         if item.origin.repository_or_root == nested.path and item.disposition is RecordDisposition.ELIGIBLE
     }
-    assert nested.path / "ignored.log" in exhaustive_paths
+    assert ignored in exhaustive_paths
 
 
 def test_visible_nested_repository_transfers_record_ownership_without_an_accounting_gap(tmp_path: Path) -> None:
@@ -709,7 +818,7 @@ def test_visible_nested_repository_transfers_record_ownership_without_an_account
     nested_file = nested.path / "work.txt"
     nested_file.write_text("nested", encoding="utf-8")
 
-    result = FilesystemCollector().collect((outer.path,), timestamp_kinds=FS_MODIFIED)
+    result = FilesystemCollector().collect((outer.path,), entry_timestamps=fs_selection(FS_MODIFIED))
 
     assert result.scan_roots == (outer.path, nested.path)
     assert result.successful_roots == (outer.path, nested.path)
@@ -742,7 +851,7 @@ def test_initialized_submodule_transfers_record_ownership_without_an_accounting_
     )
     submodule = outer.path / "vendor" / "source"
 
-    result = FilesystemCollector().collect((outer.path,), timestamp_kinds=FS_MODIFIED)
+    result = FilesystemCollector().collect((outer.path,), entry_timestamps=fs_selection(FS_MODIFIED))
 
     assert submodule in result.scan_roots
     assert sum(item.path == submodule / "work.txt" for item in result.eligible_origins) == 1
@@ -756,7 +865,7 @@ def test_missing_roots_and_traversal_failures_are_structured_partial_results(tmp
     missing = tmp_path / "missing"
     missing_result = FilesystemCollector().collect(
         (missing,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -779,7 +888,7 @@ def test_missing_roots_and_traversal_failures_are_structured_partial_results(tmp
 
     traversal = FilesystemCollector(scandir_reader=denied_scandir).collect(
         (root,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -810,7 +919,7 @@ def test_descendant_stat_failures_receive_record_error_accounting(tmp_path: Path
 
     result = FilesystemCollector(scandir_reader=broken_scandir).collect(
         (root,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -836,7 +945,7 @@ def test_ignore_unavailability_is_error_in_visible_repo_but_warning_outside(tmp_
     outside.mkdir()
     (outside / "file.txt").write_text("work", encoding="utf-8")
     outside_result = FilesystemCollector(ignore_service=FixedIgnoreService(probe)).collect(
-        (outside,), timestamp_kinds=FS_MODIFIED
+        (outside,), entry_timestamps=fs_selection(FS_MODIFIED)
     )
     assert outside_result.diagnostics[0].severity is DiagnosticSeverity.WARNING
     assert not outside_result.is_partial
@@ -850,7 +959,7 @@ def test_ignore_unavailability_is_error_in_visible_repo_but_warning_outside(tmp_
     (visible / ".git" / "refs").mkdir()
     (visible / "file.txt").write_text("work", encoding="utf-8")
     visible_result = FilesystemCollector(ignore_service=FixedIgnoreService(probe)).collect(
-        (visible,), timestamp_kinds=FS_MODIFIED
+        (visible,), entry_timestamps=fs_selection(FS_MODIFIED)
     )
     assert visible_result.diagnostics[0].severity is DiagnosticSeverity.ERROR
     assert visible_result.is_partial
@@ -873,7 +982,7 @@ def test_losing_git_after_repository_probe_is_an_error(tmp_path: Path) -> None:
         GitIgnoreMatches(frozenset(), unavailable),
     )
 
-    result = FilesystemCollector(ignore_service=service).collect((root,), timestamp_kinds=FS_MODIFIED)
+    result = FilesystemCollector(ignore_service=service).collect((root,), entry_timestamps=fs_selection(FS_MODIFIED))
 
     assert result.is_partial
     assert result.diagnostics[0].severity is DiagnosticSeverity.ERROR
@@ -895,7 +1004,7 @@ def test_include_ignored_is_an_explicit_complete_policy_even_without_git(tmp_pat
 
     result = FilesystemCollector(ignore_service=service).collect(
         (root,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -922,7 +1031,7 @@ def test_unsupported_unavailable_and_error_timestamp_slots_reconcile(tmp_path: P
         lstat_reader=missing_birth_lstat,
     ).collect(
         (unavailable_path,),
-        timestamp_kinds=(TimestampKind.FS_CREATED,),
+        entry_timestamps=fs_selection((TimestampKind.FS_CREATED,)),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -942,7 +1051,7 @@ def test_unsupported_unavailable_and_error_timestamp_slots_reconcile(tmp_path: P
 
     error = FilesystemCollector(lstat_reader=extreme_lstat).collect(
         (error_path,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -958,7 +1067,7 @@ def test_coverage_adapter_validates_selected_and_plotted_observations(tmp_path: 
     (root / "two.txt").write_text("two", encoding="utf-8")
     result = FilesystemCollector().collect(
         (root,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -995,6 +1104,7 @@ def test_accounting_value_objects_reject_nonconservation() -> None:
         target,
         RecordKind.FILESYSTEM_ENTRY,
         TimestampKind.FS_MODIFIED,
+        EntryType.REGULAR_FILE,
     )
     with pytest.raises(ValueError, match="non-negative"):
         TimestampExtractionCoverage(timestamp_key, -1, 0, 0, 0, 0, 0, ())
@@ -1014,7 +1124,7 @@ def test_accounting_value_objects_reject_nonconservation() -> None:
     with pytest.raises(ValueError, match="no record partition"):
         FilesystemAccounting((), (extraction,))
     builder = AccountingBuilder()
-    builder.match_scope(Path("/orphan"), TimestampKind.FS_MODIFIED)
+    builder.match_scope(Path("/orphan"), EntryType.REGULAR_FILE, TimestampKind.FS_MODIFIED)
     with pytest.raises(ValueError, match="scope-match count"):
         builder.build()
     with pytest.raises(ValueError, match="pruned ignored subtree"):
@@ -1028,17 +1138,35 @@ def test_accounting_value_objects_reject_nonconservation() -> None:
 def test_collection_rejects_invalid_scope_configuration(tmp_path: Path) -> None:
     collector = FilesystemCollector()
     with pytest.raises(ValueError, match="at least one path"):
-        collector.collect((), timestamp_kinds=FS_MODIFIED)
+        collector.collect((), entry_timestamps=fs_selection(FS_MODIFIED))
     with pytest.raises(ValueError, match="ignore policy"):
-        collector.collect((tmp_path,), timestamp_kinds=FS_MODIFIED, respect_gitignore=True, include_ignored=True)
+        collector.collect(
+            (tmp_path,), entry_timestamps=fs_selection(FS_MODIFIED), respect_gitignore=True, include_ignored=True
+        )
     with pytest.raises(ValueError, match="ignore policy"):
-        collector.collect((tmp_path,), timestamp_kinds=FS_MODIFIED, respect_gitignore=False, include_ignored=False)
-    with pytest.raises(ValueError, match="at least one timestamp"):
-        collector.collect((tmp_path,), timestamp_kinds=(), respect_gitignore=False, include_ignored=True)
+        collector.collect(
+            (tmp_path,), entry_timestamps=fs_selection(FS_MODIFIED), respect_gitignore=False, include_ignored=False
+        )
+    with pytest.raises(ValueError, match="at least one entry/timestamp selection"):
+        collector.collect((tmp_path,), entry_timestamps=(), respect_gitignore=False, include_ignored=True)
     with pytest.raises(ValueError, match="only filesystem"):
         collector.collect(
             (tmp_path,),
-            timestamp_kinds=(TimestampKind.GIT_AUTHOR,),
+            entry_timestamps=fs_selection((TimestampKind.GIT_AUTHOR,)),
+            respect_gitignore=False,
+            include_ignored=True,
+        )
+    with pytest.raises(TypeError, match="EntryType"):
+        collector.collect(
+            (tmp_path,),
+            entry_timestamps=((cast(EntryType, "file"), FS_MODIFIED),),
+            respect_gitignore=False,
+            include_ignored=True,
+        )
+    with pytest.raises(TypeError, match="TimestampKind"):
+        collector.collect(
+            (tmp_path,),
+            entry_timestamps=((EntryType.REGULAR_FILE, (cast(TimestampKind, "modified"),)),),
             respect_gitignore=False,
             include_ignored=True,
         )
@@ -1049,7 +1177,7 @@ def test_git_admin_and_bare_roots_are_semantically_excluded(tmp_path: Path) -> N
     admin_file = repo.path / ".git" / "HEAD"
     admin = FilesystemCollector().collect(
         (admin_file,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -1062,7 +1190,7 @@ def test_git_admin_and_bare_roots_are_semantically_excluded(tmp_path: Path) -> N
     (bare / "HEAD").write_text("ref: refs/heads/main\n", encoding="ascii")
     bare_result = FilesystemCollector().collect(
         (bare,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -1079,7 +1207,7 @@ def test_ignore_evaluation_maps_symlinked_ancestors_but_keeps_lexical_provenance
     alias.symlink_to(repo.path, target_is_directory=True)
     selected = alias / ignored.name
 
-    result = FilesystemCollector().collect((selected,), timestamp_kinds=FS_MODIFIED)
+    result = FilesystemCollector().collect((selected,), entry_timestamps=fs_selection(FS_MODIFIED))
 
     assert not result.diagnostics
     assert len(result.entries) == 1
@@ -1098,7 +1226,7 @@ def test_symlinked_ancestor_into_git_admin_is_semantically_excluded(tmp_path: Pa
 
     result = FilesystemCollector().collect(
         (selected,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -1116,9 +1244,7 @@ def test_confirmed_admin_directory_is_pruned_with_nonstandard_internal_layout(tm
 
     result = FilesystemCollector().collect(
         (repo.path,),
-        timestamp_kinds=FS_MODIFIED,
-        include_directories=True,
-        include_symlinks=True,
+        entry_timestamps=fs_selection(FS_MODIFIED, directories=True, symlinks=True),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -1140,9 +1266,7 @@ def test_cached_admin_boundary_prunes_nonstandard_storage_inside_worktree(tmp_pa
 
     result = FilesystemCollector().collect(
         (repo.path,),
-        timestamp_kinds=FS_MODIFIED,
-        include_directories=True,
-        include_symlinks=True,
+        entry_timestamps=fs_selection(FS_MODIFIED, directories=True, symlinks=True),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -1164,8 +1288,7 @@ def test_unrelated_dot_git_entries_remain_normal_filesystem_evidence(tmp_path: P
 
     result = FilesystemCollector().collect(
         (root,),
-        timestamp_kinds=FS_MODIFIED,
-        include_directories=True,
+        entry_timestamps=fs_selection(FS_MODIFIED, directories=True),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -1212,7 +1335,7 @@ def test_queued_directory_replaced_by_symlink_cannot_escape_scan_root(tmp_path: 
 
     result = FilesystemCollector(scandir_reader=swapping_scandir).collect(
         (root,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -1251,7 +1374,7 @@ def test_queued_directory_replaced_by_another_directory_is_reported(tmp_path: Pa
 
     result = FilesystemCollector(scandir_reader=swapping_scandir).collect(
         (root,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -1272,7 +1395,7 @@ def test_non_retaining_collection_streams_one_entry_batch_at_a_time(tmp_path: Pa
 
     result = FilesystemCollector().collect(
         (root,),
-        timestamp_kinds=(TimestampKind.FS_MODIFIED, TimestampKind.FS_ACCESSED),
+        entry_timestamps=fs_selection((TimestampKind.FS_MODIFIED, TimestampKind.FS_ACCESSED)),
         respect_gitignore=False,
         include_ignored=True,
         observation_consumer=received.append,
@@ -1306,7 +1429,7 @@ def test_bounded_collection_accounts_for_all_files_but_emits_only_matching_times
 
     result = FilesystemCollector().collect(
         (root,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
         observation_consumer=received.append,
@@ -1346,7 +1469,7 @@ def test_native_bounded_non_retaining_scan_does_not_materialize_out_of_scope_pro
 
     result = FilesystemCollector().collect(
         (root,),
-        timestamp_kinds=FS_MODIFIED,
+        entry_timestamps=fs_selection(FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
         observation_scope=scope,

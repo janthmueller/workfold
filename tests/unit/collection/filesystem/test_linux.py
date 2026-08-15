@@ -16,9 +16,15 @@ from workfold.collection.filesystem.linux import (
 )
 from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter
 from workfold.domain.coverage import CapabilityStatus
-from workfold.domain.observations import TimestampKind
+from workfold.domain.observations import EntryType, TimestampKind
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux statx is available only on Linux")
+
+
+def file_timestamps(
+    *kinds: TimestampKind,
+) -> tuple[tuple[EntryType, tuple[TimestampKind, ...]], ...]:
+    return ((EntryType.REGULAR_FILE, kinds),)
 
 
 def _reader_or_skip() -> LinuxStatxReader:
@@ -135,7 +141,7 @@ def test_collection_uses_descriptor_relative_statx_for_descendants(tmp_path: Pat
 
     result = FilesystemCollector(timestamp_adapter=adapter).collect(
         (root,),
-        timestamp_kinds=(TimestampKind.FS_CREATED, TimestampKind.FS_MODIFIED),
+        entry_timestamps=file_timestamps(TimestampKind.FS_CREATED, TimestampKind.FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -171,7 +177,7 @@ def test_native_statx_birth_time_flows_through_collection(tmp_path: Path) -> Non
 
     result = FilesystemCollector().collect(
         (path,),
-        timestamp_kinds=(TimestampKind.FS_CREATED,),
+        entry_timestamps=file_timestamps(TimestampKind.FS_CREATED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -212,7 +218,7 @@ def test_statx_snapshot_failure_falls_back_without_losing_portable_timestamps(tm
 
     result = FilesystemCollector(timestamp_adapter=adapter).collect(
         (path,),
-        timestamp_kinds=(TimestampKind.FS_CREATED, TimestampKind.FS_MODIFIED),
+        entry_timestamps=file_timestamps(TimestampKind.FS_CREATED, TimestampKind.FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
     )
@@ -266,7 +272,7 @@ def test_failed_combined_statx_is_not_followed_by_separate_birthtime_reads(tmp_p
 
     result = FilesystemCollector(timestamp_adapter=adapter).collect(
         (root,),
-        timestamp_kinds=(TimestampKind.FS_CREATED, TimestampKind.FS_MODIFIED),
+        entry_timestamps=file_timestamps(TimestampKind.FS_CREATED, TimestampKind.FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
         retain_entries=False,
@@ -299,7 +305,7 @@ def test_statx_enosys_disables_future_calls_and_reports_unsupported_birth_time(t
 
     result = FilesystemCollector(timestamp_adapter=adapter).collect(
         (root,),
-        timestamp_kinds=(TimestampKind.FS_CREATED, TimestampKind.FS_MODIFIED),
+        entry_timestamps=file_timestamps(TimestampKind.FS_CREATED, TimestampKind.FS_MODIFIED),
         respect_gitignore=False,
         include_ignored=True,
         retain_entries=False,

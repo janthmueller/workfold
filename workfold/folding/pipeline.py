@@ -17,6 +17,7 @@ from workfold.domain.coverage import (
 from workfold.domain.observations import (
     ActivityMarker,
     ClassifiedMarker,
+    EntryType,
     RecordKind,
     Source,
     TimestampKind,
@@ -67,7 +68,10 @@ class ActivityClassifier:
         self._marker_consumer = marker_consumer
         self._observation_counts: Counter[ObservationCountKey] = Counter()
         self._plotting_counts: Counter[PlottingCountKey] = Counter()
-        self._coverage_keys: dict[tuple[Source, Path, RecordKind, TimestampKind], TimestampCoverageKey] = {}
+        self._coverage_keys: dict[
+            tuple[Source, Path, RecordKind, TimestampKind, EntryType | None],
+            TimestampCoverageKey,
+        ] = {}
 
     @property
     def observation_counts(self) -> Mapping[ObservationCountKey, int]:
@@ -106,7 +110,13 @@ class ActivityClassifier:
 
     def _coverage_key(self, observation: TimestampObservation) -> TimestampCoverageKey:
         origin = observation.origin
-        partition = (origin.source, origin.repository_or_root, origin.record_kind, observation.kind)
+        partition = (
+            origin.source,
+            origin.repository_or_root,
+            origin.record_kind,
+            observation.kind,
+            origin.entry_type,
+        )
         key = self._coverage_keys.get(partition)
         if key is None:
             key = TimestampCoverageKey(
@@ -114,6 +124,7 @@ class ActivityClassifier:
                 os.fspath(origin.repository_or_root),
                 origin.record_kind,
                 observation.kind,
+                origin.entry_type,
             )
             self._coverage_keys[partition] = key
         return key

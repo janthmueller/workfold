@@ -30,6 +30,8 @@ def extract_entry(
 
     captured: list[TimestampObservation] = []
     resolved_origin = item.origin
+    if item.entry_type is None:
+        raise ValueError("timestamp extraction requires a supported filesystem entry type")
 
     def resolve_origin() -> RecordOrigin:
         nonlocal resolved_origin
@@ -38,12 +40,12 @@ def extract_entry(
         return resolved_origin
 
     for kind in kinds:
-        accounting.request(item.root, kind)
+        accounting.request(item.root, item.entry_type, kind)
         extraction = adapter.extract(item.snapshot, kind, path=item.path)
         if extraction.disposition is ExtractionDisposition.CAPTURED:
             if extraction.instant_utc_ns is None or extraction.raw_timestamp is None:
                 raise RuntimeError("captured timestamp extraction omitted its value")
-            accounting.extraction(item.root, kind, extraction.disposition)
+            accounting.extraction(item.root, item.entry_type, kind, extraction.disposition)
             if observation_scope is not None and not observation_scope.includes_timestamp(
                 instant_utc_ns=extraction.instant_utc_ns,
                 source=kind.source,
@@ -51,7 +53,7 @@ def extract_entry(
                 continue
             entry_origin = resolve_origin()
             retained_id = observation_id(entry_origin.record_id, kind.value) if observations is not None else None
-            accounting.match_scope(item.root, kind, retained_id)
+            accounting.match_scope(item.root, item.entry_type, kind, retained_id)
             observation = TimestampObservation.create(
                 entry_origin,
                 kind,
@@ -62,7 +64,7 @@ def extract_entry(
             if observations is not None:
                 observations.append(observation)
         else:
-            accounting.extraction(item.root, kind, extraction.disposition)
+            accounting.extraction(item.root, item.entry_type, kind, extraction.disposition)
             if extraction.disposition is ExtractionDisposition.ERROR:
                 entry_origin = resolve_origin()
                 diagnostics.append(

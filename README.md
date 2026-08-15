@@ -40,6 +40,9 @@ workfold . -t 2026-07-01..2026-07-31          # inclusive date range
 workfold . -t all -m fs                        # filesystem metadata
 workfold . -t all -m git -p portable           # portable Git-object timestamps
 workfold . -t all -m both -p full              # exhaustive local view
+workfold . --events git:tag:tagger fs:file:modified  # exact custom evidence
+workfold . --events 'git:*:committer'           # wildcard timestamp roles
+workfold . --events 'fs:*:modified'              # mtime for files, directories, links
 workfold . --git-identity jan@example.com      # only that recorded Git identity
 workfold . --marker-style identity             # identity codes instead of circles
 workfold . --timezone Europe/Berlin
@@ -52,20 +55,35 @@ workfold . -E all                              # keep only occupied day columns
 workfold . -E weekend                          # remove empty weekend columns
 workfold . -H weekend                          # always hide weekend columns
 workfold . --grid vertical                     # add column separators
-workfold . --list-outside --limit 50
+workfold . --events git:tag:tagger --list outside --limit 50  # outside tag details
 ```
 
-The three main selectors control separate parts of the request:
+The main selectors control separate parts of the request:
 
 | Selector | Purpose | Values |
 | --- | --- | --- |
 | `-t`, `--time` | Date scope | `this-week`, `2w3d`, `YYYY-Www`, `DATE..DATE`, `all` |
 | `-m`, `--mode` | Evidence source | `git`, `fs`, `both` |
 | `-p`, `--profile` | Evidence preset | `standard`, `portable`, `full` |
+| `-e`, `--events` | Exact event scope (alternative to mode/profile) | IDs and wildcards |
 
-Time and mode independently choose when and where to collect. A profile chooses
-which evidence kinds to use inside that request and never changes time or mode;
-the `portable` preset is intentionally available only with Git mode.
+Time is independent from evidence selection. For the simple path, mode chooses
+the source and profile chooses its preset; `portable` is Git-only. For exact
+control, `--events` replaces both mode and profile:
+
+```bash
+workfold . --events git:commit:author git:tag:tagger fs:file:modified
+workfold . --events 'git:*'                     # every Git event kind
+workfold . --events '*'                         # every event kind, not full-policy defaults
+```
+
+Every exact selector uses `source:record:timestamp`. Filesystem records are
+`file`, `directory`, or `symlink`; their timestamps are `birth`, `modified`,
+`metadata-changed`, or `accessed`. Quote wildcards so the shell
+does not expand them. `--events '*'` selects every event kind but, unlike
+`-m both -p full`, keeps the ordinary Git reachability and filesystem ignore
+policies. Put positional paths before `--events` and `--list` because both
+accept multiple space-separated values.
 
 - `standard` — **What does the ordinary activity pattern look like?** Git uses
   commit author dates reachable from local branches (plus a detached `HEAD`);
@@ -77,6 +95,13 @@ the `portable` preset is intentionally available only with Git mode.
 - `full` — **What dated evidence can this local machine still discover?**
   Enables every supported kind inside the selected time and mode; it does not
   imply `-t all` or `-m both`.
+
+`-l/--list all|inside|outside|EVENT...` appends a bounded chronological detail
+view. A schedule selector and event selectors intersect; several event
+selectors form a union. For example, `--list outside git:tag:tagger fs:file:accessed`
+lists only outside-hours tag or access-time events from the already selected
+scope. Every exact event kind named by `--list` must already be enabled;
+wildcards match only enabled kinds and must match at least one.
 
 Use `--cluster-window 10m`, `--cluster-window 1h5m`, or another duration to tune
 row clustering. The default `--cluster-anchor event` starts a band at each

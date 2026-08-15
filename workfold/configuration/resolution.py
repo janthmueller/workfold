@@ -10,11 +10,7 @@ from workfold.configuration.options import (
     BandLabel,
     CollectionProfile,
     DisplayHours,
-    FilesystemEntry,
-    FilesystemTime,
-    GitDateMode,
-    GitMode,
-    GitRecords,
+    EventListSelection,
     GridStyle,
     MarkerStyle,
     RefScope,
@@ -28,18 +24,17 @@ from workfold.configuration.options import (
 from workfold.configuration.parsing import (
     parse_clock_minutes,
     parse_cluster_window,
-    parse_commit_times,
     parse_display_hours,
-    parse_filesystem_entries,
-    parse_filesystem_times,
-    parse_git_records,
+    parse_event_list,
+    parse_event_selectors,
     parse_rolling_duration,
     parse_time_selectors,
     parse_weekday_scopes,
     validate_cluster_options,
     validate_iso_week,
 )
-from workfold.domain.observations import Weekday
+from workfold.domain.evidence import EvidenceKind, EvidenceSelection
+from workfold.domain.observations import RecordKind, Source, Weekday
 from workfold.folding.bands import ClusterAnchor
 
 
@@ -53,63 +48,53 @@ def resolve_options(values: UnresolvedOptions) -> RunOptions:
     weeks, from_date, to_date, all_dates, rolling_duration = parse_time_selectors(values.time_selectors)
     modes = values.modes
     if len(modes) > 1:
-        raise UsageError("--mode may be supplied only once")
+        raise UsageError("--mode may be supplied only once", setting_keys=("mode",))
     mode = modes[0] if modes else "git"
     profiles = values.profiles
     if len(profiles) > 1:
-        raise UsageError("--profile may be supplied only once")
-    profile = CollectionProfile(profiles[0] if profiles else CollectionProfile.STANDARD.value)
-    source = {
+        raise UsageError("--profile may be supplied only once", setting_keys=("profile",))
+    selected_profile = CollectionProfile(profiles[0] if profiles else CollectionProfile.STANDARD.value)
+    selected_source = {
         "git": SourceMode.GIT,
         "fs": SourceMode.FILESYSTEM,
         "both": SourceMode.BOTH,
     }[mode]
 
-    if profile is CollectionProfile.PORTABLE and source is not SourceMode.GIT:
-        raise UsageError("--profile portable is valid only with --mode git")
+    if values.event_selectors is not None:
+        if _explicit(values, "modes") or _explicit(values, "profiles"):
+            preset_keys = (
+                *(("mode",) if _explicit(values, "modes") else ()),
+                *(("profile",) if _explicit(values, "profiles") else ()),
+            )
+            raise UsageError(
+                "--events cannot be combined with --mode or --profile",
+                setting_keys=("events", *preset_keys),
+            )
+        evidence = parse_event_selectors(values.event_selectors)
+        profile = CollectionProfile.CUSTOM
+    else:
+        if selected_profile is CollectionProfile.PORTABLE and selected_source is not SourceMode.GIT:
+            raise UsageError(
+                "--profile portable is valid only with --mode git",
+                setting_keys=("profile", "mode"),
+            )
+        evidence = _preset_evidence(selected_source, selected_profile)
+        profile = selected_profile
 
-    preset = None if profile is CollectionProfile.STANDARD else f"--profile {profile.value}"
+    source = _source_mode(evidence)
+    preset = None if profile in {CollectionProfile.STANDARD, CollectionProfile.CUSTOM} else f"--profile {profile.value}"
     controlled = {
-        "--git-records": "git_records",
-        "--git-commit-times": "commit_times",
-        "--git-commits-from": "commits_from",
-        "--fs-times": "filesystem_times",
-        "--fs-entries": "filesystem_entries",
-        "--include-ignored/--respect-gitignore": "include_ignored",
+        "--git-commits-from": ("commits_from", "git-commits-from"),
+        "--include-ignored/--respect-gitignore": ("include_ignored", "include-ignored"),
     }
     if preset is not None:
-        conflicts = [flag for flag, name in controlled.items() if _explicit(values, name)]
+        conflicts = [flag for flag, (name, _key) in controlled.items() if _explicit(values, name)]
         if conflicts:
-            raise UsageError(f"{preset} controls {', '.join(conflicts)}; remove the scope option(s)")
-
-    if profile is CollectionProfile.FULL:
-        git_mode = GitMode.BOTH if source.includes_git else GitMode.COMMITS
-        git_date = GitDateMode.BOTH if source.includes_git else GitDateMode.AUTHOR
-        git_records = GitRecords.ALL if source.includes_git else GitRecords.COMMITS
-        filesystem_times = (
-            tuple(FilesystemTime)
-            if source.includes_filesystem
-            else (
-                FilesystemTime.CREATED,
-                FilesystemTime.MODIFIED,
+            conflict_keys = tuple(key for _flag, (name, key) in controlled.items() if _explicit(values, name))
+            raise UsageError(
+                f"{preset} controls {', '.join(conflicts)}; remove the scope option(s)",
+                setting_keys=("profile", *conflict_keys),
             )
-        )
-        filesystem_entries = tuple(FilesystemEntry) if source.includes_filesystem else (FilesystemEntry.FILE,)
-    elif profile is CollectionProfile.PORTABLE:
-        git_mode = GitMode.COMMITS
-        git_date = GitDateMode.BOTH
-        git_records = GitRecords.COMMITS | GitRecords.TAGS
-        filesystem_times = (FilesystemTime.CREATED, FilesystemTime.MODIFIED)
-        filesystem_entries = (FilesystemEntry.FILE,)
-    else:
-        git_records_value = values.git_records if values.git_records is not None else "commit"
-        commit_times_value = values.commit_times if values.commit_times is not None else "author"
-        filesystem_times_value = values.filesystem_times if values.filesystem_times is not None else "birth,modified"
-        filesystem_entries_value = values.filesystem_entries if values.filesystem_entries is not None else "file"
-        git_mode, git_records = parse_git_records(git_records_value)
-        git_date = parse_commit_times(commit_times_value)
-        filesystem_times = parse_filesystem_times(filesystem_times_value)
-        filesystem_entries = parse_filesystem_entries(filesystem_entries_value)
 
     if values.commits_from is not None:
         ref_scope = {
@@ -122,47 +107,71 @@ def resolve_options(values: UnresolvedOptions) -> RunOptions:
     else:
         ref_scope = RefScope.LOCAL_BRANCHES
 
-    explicit_git = any(_explicit(values, name) for name in ("git_records", "commit_times", "commits_from")) or bool(
-        values.git_identities
-    )
-    explicit_filesystem = any(
-        _explicit(values, name) for name in ("filesystem_times", "filesystem_entries", "include_ignored")
-    ) or bool(values.exclusions)
+    explicit_git = _explicit(values, "commits_from") or bool(values.git_identities)
+    explicit_filesystem = _explicit(values, "include_ignored") or bool(values.exclusions)
     if source is SourceMode.FILESYSTEM and explicit_git:
-        raise UsageError("Git-specific options cannot be used with --mode fs")
+        suffix = (
+            "with --mode fs" if profile is not CollectionProfile.CUSTOM else "when only filesystem events are selected"
+        )
+        git_keys = (
+            *(("git-commits-from",) if _explicit(values, "commits_from") else ()),
+            *(("git-identity",) if values.git_identities else ()),
+        )
+        source_keys = ("events",) if profile is CollectionProfile.CUSTOM else ("mode", "profile")
+        raise UsageError(
+            f"Git-specific options cannot be used {suffix}",
+            setting_keys=(*git_keys, *source_keys),
+        )
     if source is SourceMode.GIT and explicit_filesystem:
-        raise UsageError("filesystem-specific options cannot be used with --mode git")
+        suffix = "with --mode git" if profile is not CollectionProfile.CUSTOM else "when only Git events are selected"
+        filesystem_keys = (
+            *(("include-ignored",) if _explicit(values, "include_ignored") else ()),
+            *(("fs-exclude",) if values.exclusions else ()),
+        )
+        source_keys = ("events",) if profile is CollectionProfile.CUSTOM else ("mode", "profile")
+        raise UsageError(
+            f"filesystem-specific options cannot be used {suffix}",
+            setting_keys=(*filesystem_keys, *source_keys),
+        )
 
-    if not git_records.includes_commits:
-        irrelevant: list[str] = []
-        if _explicit(values, "commit_times"):
-            irrelevant.append("--git-commit-times")
-        if _explicit(values, "commits_from"):
-            irrelevant.append("--git-commits-from")
-        if irrelevant:
-            raise UsageError(f"{', '.join(irrelevant)} require commit or file-change records to be enabled")
+    has_commit_records = any(
+        kind.record_kind in {RecordKind.COMMIT, RecordKind.GIT_FILE_CHANGE} for kind in evidence.kinds
+    )
+    if _explicit(values, "commits_from") and not has_commit_records:
+        evidence_keys = ("events",) if profile is CollectionProfile.CUSTOM else ("mode", "profile")
+        raise UsageError(
+            "--git-commits-from requires commit or file-change events to be enabled",
+            setting_keys=("git-commits-from", *evidence_keys),
+        )
 
     git_identities = tuple(value.strip() for value in values.git_identities)
     if any(not value for value in git_identities):
-        raise UsageError("--git-identity values cannot be empty")
+        raise UsageError("--git-identity values cannot be empty", setting_keys=("git-identity",))
     exclusions = tuple(value.strip() for value in values.exclusions)
     if any(not value for value in exclusions):
-        raise UsageError("--exclude values cannot be empty")
+        raise UsageError("--fs-exclude values cannot be empty", setting_keys=("fs-exclude",))
     if any(value.startswith("!") for value in exclusions):
-        raise UsageError("--exclude patterns cannot be negated; explicit exclusions always win")
+        raise UsageError(
+            "--fs-exclude patterns cannot be negated; explicit exclusions always win",
+            setting_keys=("fs-exclude",),
+        )
 
-    if _explicit(values, "limit") and not values.list_outside:
-        raise UsageError("--limit requires --list-outside")
+    event_list = parse_event_list(values.list_selectors) if values.list_selectors is not None else None
+    if event_list is not None and event_list.evidence_kinds:
+        assert values.list_selectors is not None
+        event_list = _resolve_list_selection(values.list_selectors, event_list, evidence)
+    if _explicit(values, "limit") and event_list is None:
+        raise UsageError("--limit requires --list", setting_keys=("limit", "list"))
     limit = values.limit
     if limit < 1:
-        raise UsageError("--limit must be at least 1")
+        raise UsageError("--limit must be at least 1", setting_keys=("limit",))
 
     include_ignored = bool((profile is CollectionProfile.FULL and source.includes_filesystem) or values.include_ignored)
     respect_gitignore = not include_ignored
 
     hide_days = parse_weekday_scopes(values.hide_days, option="--hide-days")
     if hide_days == tuple(Weekday):
-        raise UsageError("--hide-days cannot hide all seven weekday columns")
+        raise UsageError("--hide-days cannot hide all seven weekday columns", setting_keys=("hide-days",))
     hide_empty_days = parse_weekday_scopes(values.hide_empty_days, option="--hide-empty-days")
 
     cluster_window = parse_cluster_window(values.cluster_window)
@@ -182,14 +191,9 @@ def resolve_options(values: UnresolvedOptions) -> RunOptions:
         all_dates=all_dates,
         rolling_duration=rolling_duration,
         profile=profile,
-        source=source,
-        git_mode=git_mode,
-        git_date=git_date,
-        git_records=git_records,
+        evidence=evidence,
         ref_scope=ref_scope,
         git_identities=git_identities,
-        filesystem_times=filesystem_times,
-        filesystem_entries=filesystem_entries,
         include_ignored=include_ignored,
         respect_gitignore=respect_gitignore,
         exclusions=exclusions,
@@ -206,12 +210,73 @@ def resolve_options(values: UnresolvedOptions) -> RunOptions:
             band_label=BandLabel(values.band_label),
             show_empty_bands=values.show_empty_bands,
             no_color=values.no_color,
-            list_outside=values.list_outside,
-            outside_limit=limit,
+            event_list=event_list,
+            event_limit=limit,
             coverage=values.coverage,
             strict=values.strict,
             verbose=values.verbose,
         ),
+    )
+
+
+def _preset_evidence(source: SourceMode, profile: CollectionProfile) -> EvidenceSelection:
+    if profile is CollectionProfile.PORTABLE:
+        return EvidenceSelection.create(
+            (
+                EvidenceKind.GIT_COMMIT_AUTHOR,
+                EvidenceKind.GIT_COMMIT_COMMITTER,
+                EvidenceKind.GIT_TAG_TAGGER,
+            )
+        )
+    if profile is CollectionProfile.FULL:
+        return EvidenceSelection.create(
+            kind
+            for kind in EvidenceKind
+            if (source.includes_git and kind.source is Source.GIT)
+            or (source.includes_filesystem and kind.source is Source.FILESYSTEM)
+        )
+
+    standard: list[EvidenceKind] = []
+    if source.includes_git:
+        standard.append(EvidenceKind.GIT_COMMIT_AUTHOR)
+    if source.includes_filesystem:
+        standard.extend((EvidenceKind.FS_FILE_BIRTH, EvidenceKind.FS_FILE_MODIFIED))
+    return EvidenceSelection.create(standard)
+
+
+def _source_mode(evidence: EvidenceSelection) -> SourceMode:
+    includes_git = evidence.includes_source(Source.GIT)
+    includes_filesystem = evidence.includes_source(Source.FILESYSTEM)
+    if includes_git and includes_filesystem:
+        return SourceMode.BOTH
+    return SourceMode.GIT if includes_git else SourceMode.FILESYSTEM
+
+
+def _resolve_list_selection(
+    raw_values: tuple[str, ...],
+    parsed: EventListSelection,
+    enabled: EvidenceSelection,
+) -> EventListSelection:
+    """Match each list event selector only against the enabled report scope."""
+
+    enabled_kinds = frozenset(enabled.kinds)
+    selected: set[EvidenceKind] = set()
+    event_selectors = tuple(
+        value.strip().lower() for value in raw_values if value.strip().lower() not in {"inside", "outside"}
+    )
+    for selector in event_selectors:
+        expanded = parse_event_selectors((selector,), option="--list")
+        matches = enabled_kinds.intersection(expanded.kinds)
+        if not matches:
+            raise UsageError(
+                f"--list selector {selector!r} matches no event kind enabled in the report; "
+                "enable matching events with --events or an appropriate mode/profile",
+                setting_keys=("list",),
+            )
+        selected.update(matches)
+    return EventListSelection(
+        schedule=parsed.schedule,
+        evidence_kinds=tuple(kind for kind in EvidenceKind if kind in selected),
     )
 
 
@@ -222,11 +287,6 @@ __all__ = [
     "ClusterAnchor",
     "CollectionProfile",
     "DisplayHours",
-    "FilesystemEntry",
-    "FilesystemTime",
-    "GitDateMode",
-    "GitMode",
-    "GitRecords",
     "GridStyle",
     "MarkerStyle",
     "RunOptions",
@@ -238,11 +298,9 @@ __all__ = [
     "UsageError",
     "parse_clock_minutes",
     "parse_cluster_window",
-    "parse_commit_times",
     "parse_display_hours",
-    "parse_filesystem_entries",
-    "parse_filesystem_times",
-    "parse_git_records",
+    "parse_event_list",
+    "parse_event_selectors",
     "parse_rolling_duration",
     "parse_time_selectors",
     "parse_weekday_scopes",

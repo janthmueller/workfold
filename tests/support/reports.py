@@ -5,14 +5,15 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from workfold.application.collection import Collection
-from workfold.application.report import Report, ReportContext, build_report
+from workfold.application.report import Report, ReportContext, build_report, matches_event_list
 from workfold.application.resolution import ResolvedTimeSelection
 from workfold.cli import parse_options
-from workfold.configuration import ClusterAnchor
+from workfold.configuration import ClusterAnchor, EventListSelection, ListSchedule
 from workfold.domain.coverage import CoverageLedger
 from workfold.domain.observations import (
     ActivityMarker,
     ClassifiedMarker,
+    EntryType,
     RecordKind,
     RecordOrigin,
     Source,
@@ -58,6 +59,7 @@ def classified_marker(
         repository_or_root=root,
         path=None if is_git else Path(f"files/{identifier}"),
         commit_id=identifier if is_git else None,
+        entry_type=None if is_git else EntryType.REGULAR_FILE,
         description=description,
     )
     kind = TimestampKind.GIT_AUTHOR if is_git else TimestampKind.FS_MODIFIED
@@ -80,7 +82,8 @@ def classified_marker(
 
 def report(
     *markers: ClassifiedMarker,
-    outside_limit: int = 50,
+    event_limit: int = 50,
+    event_list: EventListSelection | None = None,
     cluster_window: timedelta = timedelta(hours=1),
     cluster_anchor: ClusterAnchor = ClusterAnchor.EVENT,
     schedule_bounds: tuple[int, int] | None = None,
@@ -89,13 +92,15 @@ def report(
     hide_days: tuple[Weekday, ...] = (),
     hide_empty_days: tuple[Weekday, ...] = (),
 ) -> Report:
+    selected_list = event_list or EventListSelection(schedule=ListSchedule.OUTSIDE)
     aggregation = aggregate_markers(
         markers,
         cluster_window=cluster_window,
         cluster_anchor=cluster_anchor,
         schedule_bounds=schedule_bounds,
         display_range=display_range,
-        outside_limit=outside_limit,
+        listed_marker_limit=event_limit,
+        listed_marker_predicate=lambda marker: matches_event_list(marker, selected_list),
         retain_git_identities=retain_git_identities,
         hide_days=hide_days,
         hide_empty_days=hide_empty_days,
@@ -109,7 +114,7 @@ def report(
         schedule=parse_schedule(options.hours),
         coverage=CoverageLedger(),
     )
-    return build_report(aggregation, context)
+    return build_report(aggregation, context, selected_list)
 
 
 def coalesced_git_marker(identifier: str, hour: int, *, within_schedule: bool) -> ClassifiedMarker:

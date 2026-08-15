@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import heapq
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import timedelta
 
 from workfold.domain.identity import MarkerIdentity, marker_identity, marker_identity_sort_key
@@ -40,7 +40,8 @@ class AggregationBuilder:
         cluster_anchor: ClusterAnchor = ClusterAnchor.EVENT,
         schedule_bounds: tuple[int, int] | None = None,
         display_range: tuple[int, int] | None = None,
-        outside_limit: int = 50,
+        listed_marker_limit: int = 0,
+        listed_marker_predicate: Callable[[ClassifiedMarker], bool] | None = None,
         retain_git_identities: bool = False,
         hide_days: tuple[Weekday, ...] = (),
         hide_empty_days: tuple[Weekday, ...] = (),
@@ -53,13 +54,14 @@ class AggregationBuilder:
         validate_cluster_window_alignment(self._cluster_window, self._cluster_anchor)
         _validate_schedule_bounds(schedule_bounds)
         _validate_display_range(display_range)
-        if outside_limit < 0:
-            raise ValueError("outside_limit must not be negative")
+        if listed_marker_limit < 0:
+            raise ValueError("listed_marker_limit must not be negative")
         if cluster_materialization_threshold < 0:
             raise ValueError("cluster_materialization_threshold must be non-negative")
         self._schedule_bounds = schedule_bounds
         self._display_range = display_range
-        self._outside_limit = outside_limit
+        self._listed_marker_limit = listed_marker_limit
+        self._listed_marker_predicate = listed_marker_predicate
         self._retain_git_identities = retain_git_identities
         _validate_weekdays(hide_days, "hide_days")
         _validate_weekdays(hide_empty_days, "hide_empty_days")
@@ -85,8 +87,8 @@ class AggregationBuilder:
         self._within_schedule_count = 0
         self._outside_schedule_count = 0
         self._weekend_count = 0
-        self._outside_marker_count = 0
-        self._outside_heap: list[tuple[tuple[int, str], int, ClassifiedMarker]] = []
+        self._listed_marker_count = 0
+        self._listed_heap: list[tuple[tuple[int, str], int, ClassifiedMarker]] = []
         self._occupied_start_ns: dict[Weekday, int] = {}
         self._occupied_end_ns: dict[Weekday, int] = {}
 
@@ -110,8 +112,14 @@ class AggregationBuilder:
             self._within_schedule_count += 1
         else:
             self._outside_schedule_count += 1
-            self._outside_marker_count += 1
-            _retain_recent(self._outside_heap, classified, self._outside_limit, self._event_count)
+        if self._listed_marker_predicate is not None and self._listed_marker_predicate(classified):
+            self._listed_marker_count += 1
+            _retain_recent(
+                self._listed_heap,
+                classified,
+                self._listed_marker_limit,
+                self._event_count,
+            )
         if classified.weekend:
             self._weekend_count += 1
 
@@ -178,7 +186,7 @@ class AggregationBuilder:
             self._cluster_anchor,
             materialization_threshold=self._cluster_materialization_threshold,
         )
-        retained_outside = tuple(item[2] for item in sorted(self._outside_heap, key=lambda item: (item[0], item[1])))
+        retained_listed = tuple(item[2] for item in sorted(self._listed_heap, key=lambda item: (item[0], item[1])))
         visible_visual_counts: Counter[tuple[Source, bool]] = Counter()
         for (weekday, source, within_schedule), count in self._visual_counts.items():
             if weekday in visible_weekday_set:
@@ -217,8 +225,8 @@ class AggregationBuilder:
             has_multi_minute_cluster=layout.has_multi_minute_cluster,
             hidden_before=HiddenMarkers(self._hidden_before_total, freeze_counter(self._hidden_before_sources)),
             hidden_after=HiddenMarkers(self._hidden_after_total, freeze_counter(self._hidden_after_sources)),
-            retained_outside_markers=retained_outside,
-            outside_marker_count=self._outside_marker_count,
+            retained_listed_markers=retained_listed,
+            listed_marker_count=self._listed_marker_count,
         )
         if (
             aggregation.displayed_event_count
@@ -286,7 +294,8 @@ def aggregate_markers(
     cluster_anchor: ClusterAnchor = ClusterAnchor.EVENT,
     schedule_bounds: tuple[int, int] | None = None,
     display_range: tuple[int, int] | None = None,
-    outside_limit: int = 50,
+    listed_marker_limit: int = 0,
+    listed_marker_predicate: Callable[[ClassifiedMarker], bool] | None = None,
     retain_git_identities: bool = False,
     hide_days: tuple[Weekday, ...] = (),
     hide_empty_days: tuple[Weekday, ...] = (),
@@ -305,7 +314,8 @@ def aggregate_markers(
         cluster_anchor=cluster_anchor,
         schedule_bounds=schedule_bounds,
         display_range=display_range,
-        outside_limit=outside_limit,
+        listed_marker_limit=listed_marker_limit,
+        listed_marker_predicate=listed_marker_predicate,
         retain_git_identities=retain_git_identities,
         hide_days=hide_days,
         hide_empty_days=hide_empty_days,

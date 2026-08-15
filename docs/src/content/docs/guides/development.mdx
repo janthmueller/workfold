@@ -182,9 +182,13 @@ not recreate parallel top-level Git façades or a catch-all `git_core` tree.
 Keep protocol state machines independent from normalized domain conversion and
 coverage accounting.
 
-Configuration resolves time, mode, and the evidence preset as three separate
-axes. The preset defaults to `standard` and never rewrites time or mode;
-`portable` is intentionally valid only with Git mode.
+Configuration resolves time independently from evidence scope. Common evidence
+scope uses the mode/profile preset pair; exact `--events` selectors are a
+complete alternative. `EvidenceSelection` is the one canonical set after
+resolution, and the application derives its exact collector activation through
+`CollectionPlan` rather than retaining parallel record/timestamp flags. The
+preset defaults to `standard` and never rewrites time or mode; `portable` is
+intentionally valid only with Git mode.
 
 Within `configuration/`, `options` owns immutable option values and built-in
 defaults, `parsing` owns individual value grammars, `files` and `layers` own
@@ -234,6 +238,11 @@ entries traverse them instead. Scans outside Git and scans that include ignored
 entries use the native walker alone. Keep the fast inventory and native
 reference behavior equivalent for requested regular files, and never
 reintroduce per-entry path resolution for repository/admin containment.
+Apply the containing repository's ignore result before transferring ownership
+to an embedded repository: ignored boundaries are pruned, visible boundaries
+receive their own scan context, and separately requested nested roots remain
+independent members of the requested root union.
+
 `FilesystemCollector` resolves and schedules roots; `collection/filesystem/root`
 applies entry, ignore, and extraction policy to one prepared root.
 
@@ -288,7 +297,7 @@ their clock values at minute precision. Start-only output uses the compact
 `Time` column heading. Cluster windows have a one-minute
 minimum so two distinct clusters cannot collapse to the same visible start
 label. Do not round the underlying instant to obtain that label: normalized
-provenance and outside-event rows retain exact seconds and available nanoseconds. The renderer must emit the
+provenance and listed-event rows retain exact seconds and available nanoseconds. The renderer must emit the
 matrix first, without a title or subtitle. After the matrix it emits a
 content-aware symbol key without a heading, a left-aligned working-hours line,
 and three direct statistic rows without a Summary heading: Events, Schedule,

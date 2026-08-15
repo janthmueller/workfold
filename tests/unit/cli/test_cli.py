@@ -85,6 +85,10 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
         "--mode",
         "-p",
         "--profile",
+        "-e",
+        "--events",
+        "-l",
+        "--list",
     } <= public_options
     assert "--time SELECTOR" in normalized_help
     assert "rolling duration such as 2w3d" in normalized_help
@@ -97,8 +101,12 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     assert "no file changes or reflogs" in normalized_help
     assert "selected mode for full (not all time)" in normalized_help
     assert "implies coverage" not in normalized_help
-    assert "--git-records KINDS" in help_text
-    assert "--git-commit-times KINDS" in help_text
+    assert "--events SELECTOR [SELECTOR ...]" in normalized_help
+    assert actions_by_option["-e"] is actions_by_option["--events"]
+    assert "space-separated identifiers and '*' wildcards" in normalized_help
+    assert "git:file-change:author" in normalized_help
+    assert "fs:<file|directory|symlink>:<birth|modified|metadata-changed|accessed>" in normalized_help
+    assert "place PATH arguments before --events or --list" in normalized_help
     assert "--git-commits-from {head,local-branches,all-refs}" in normalized_help
     assert "standard built-in: local-branches; portable/full: all-refs" in normalized_help.replace("- ", "-")
     assert "--git-identity VALUE" in normalized_help
@@ -114,12 +122,15 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     assert actions_by_option["-E"] is actions_by_option["--hide-empty-days"]
     assert actions_by_option["-E"].metavar == "SCOPE"
     assert "author, committer, tagger, or reflog identity" in normalized_help
-    assert "--fs-times KINDS" in help_text
-    assert "--fs-entries KINDS" in help_text
+    assert "--fs-entries" not in public_options
+    assert "--fs-exclude PATTERN" in normalized_help
     assert "exclude root-relative filesystem paths using Git-style patterns" in normalized_help
     assert "allow automatic color, respecting terminal detection and NO_COLOR" in normalized_help
-    assert "append a chronological list of events outside working hours" in normalized_help
-    assert "maximum outside-hours rows (built-in default: 50; requires --list-outside)" in normalized_help
+    assert "--list SELECTOR [SELECTOR ...]" in normalized_help
+    assert actions_by_option["-l"] is actions_by_option["--list"]
+    assert "details from already enabled report events" in normalized_help
+    assert "selected by all, inside, outside, none, or event patterns" in normalized_help
+    assert "maximum listed events (built-in default: 50; requires --list)" in normalized_help
     assert "show the detailed coverage ledger" in normalized_help
     assert "return non-zero when collection is incomplete" in normalized_help
     assert "scope and operational details plus the detailed coverage ledger" in normalized_help
@@ -142,6 +153,13 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
         "--filesystem-times",
         "--filesystem-entries",
         "--author",
+        "--git-records",
+        "--git-commit-times",
+        "--fs-times",
+        "--fs-entries",
+        "--exclude",
+        "--list-outside",
+        "--no-list-outside",
     }.isdisjoint(public_options)
 
 
@@ -164,6 +182,13 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
         "--filesystem-times",
         "--filesystem-entries",
         "--author",
+        "--git-records",
+        "--git-commit-times",
+        "--fs-times",
+        "--fs-entries",
+        "--exclude",
+        "--list-outside",
+        "--no-list-outside",
     ],
 )
 def test_cli_rejects_retired_collection_options(option: str) -> None:

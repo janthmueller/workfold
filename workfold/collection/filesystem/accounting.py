@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,7 +15,7 @@ from workfold.domain.coverage import (
     RecordDisposition,
     TimestampCoverageKey,
 )
-from workfold.domain.observations import RecordKind, Source, TimestampKind
+from workfold.domain.observations import EntryType, RecordKind, Source, TimestampKind
 
 
 @dataclass(slots=True)
@@ -32,7 +32,9 @@ class AccountingBuilder:
     # let the retaining adapter prove that every match reached the pipeline.
     _scope_match_ids: dict[TimestampCoverageKey, list[str]] = field(default_factory=lambda: {})
     _record_keys: dict[Path, RecordCoverageKey] = field(default_factory=lambda: {})
-    _timestamp_keys: dict[tuple[Path, TimestampKind], TimestampCoverageKey] = field(default_factory=lambda: {})
+    _timestamp_keys: dict[tuple[Path, EntryType, TimestampKind], TimestampCoverageKey] = field(
+        default_factory=lambda: {}
+    )
     _pruned_ignored_subtrees: int = 0
 
     def _record_key(self, root: Path) -> RecordCoverageKey:
@@ -42,21 +44,22 @@ class AccountingBuilder:
             self._record_keys[root] = key
         return key
 
-    def _timestamp_key(self, root: Path, kind: TimestampKind) -> TimestampCoverageKey:
-        partition = (root, kind)
+    def _timestamp_key(self, root: Path, entry_type: EntryType, kind: TimestampKind) -> TimestampCoverageKey:
+        partition = (root, entry_type, kind)
         key = self._timestamp_keys.get(partition)
         if key is None:
-            key = timestamp_key(root, kind)
+            key = timestamp_key(root, entry_type, kind)
             self._timestamp_keys[partition] = key
         return key
 
-    def ensure_root(self, root: Path, kinds: Sequence[TimestampKind]) -> None:
+    def ensure_root(self, root: Path, selection: Mapping[EntryType, Sequence[TimestampKind]]) -> None:
         record = self._record_key(root)
         self._discovered.setdefault(record, 0)
-        for kind in kinds:
-            key = self._timestamp_key(root, kind)
-            self._requested.setdefault(key, 0)
-            self._scope_match_ids.setdefault(key, [])
+        for entry_type, kinds in selection.items():
+            for kind in kinds:
+                key = self._timestamp_key(root, entry_type, kind)
+                self._requested.setdefault(key, 0)
+                self._scope_match_ids.setdefault(key, [])
 
     def discover(self, root: Path, count: int = 1) -> None:
         if count < 0:
@@ -64,7 +67,12 @@ class AccountingBuilder:
         key = self._record_key(root)
         self._discovered[key] = self._discovered.get(key, 0) + count
 
-    def record(self, root: Path, disposition: RecordDisposition, count: int = 1) -> None:
+    def record(
+        self,
+        root: Path,
+        disposition: RecordDisposition,
+        count: int = 1,
+    ) -> None:
         if count < 0:
             raise ValueError("filesystem record count must be non-negative")
         key = (self._record_key(root), disposition)
@@ -75,24 +83,31 @@ class AccountingBuilder:
 
         self._pruned_ignored_subtrees += 1
 
-    def request(self, root: Path, kind: TimestampKind) -> None:
-        key = self._timestamp_key(root, kind)
+    def request(self, root: Path, entry_type: EntryType, kind: TimestampKind) -> None:
+        key = self._timestamp_key(root, entry_type, kind)
         self._requested[key] = self._requested.get(key, 0) + 1
 
     def extraction(
         self,
         root: Path,
+        entry_type: EntryType,
         kind: TimestampKind,
         disposition: ExtractionDisposition,
     ) -> None:
-        key = self._timestamp_key(root, kind)
+        key = self._timestamp_key(root, entry_type, kind)
         outcome = (key, disposition)
         self._extractions[outcome] = self._extractions.get(outcome, 0) + 1
 
-    def match_scope(self, root: Path, kind: TimestampKind, observation_id: str | None = None) -> None:
+    def match_scope(
+        self,
+        root: Path,
+        entry_type: EntryType,
+        kind: TimestampKind,
+        observation_id: str | None = None,
+    ) -> None:
         """Record one extracted filesystem timestamp matching query scope."""
 
-        key = self._timestamp_key(root, kind)
+        key = self._timestamp_key(root, entry_type, kind)
         self._scope_matches[key] = self._scope_matches.get(key, 0) + 1
         if observation_id is not None and self.retain_scope_match_ids:
             self._scope_match_ids.setdefault(key, []).append(observation_id)
@@ -129,7 +144,14 @@ class AccountingBuilder:
                 scope_match_ids=tuple(self._scope_match_ids.get(key, ())),
                 scope_match_ids_complete=self.retain_scope_match_ids,
             )
-            for key in sorted(timestamp_keys, key=lambda item: (item.target, item.timestamp_kind.value))
+            for key in sorted(
+                timestamp_keys,
+                key=lambda item: (
+                    item.target,
+                    item.entry_type.value if item.entry_type else "",
+                    item.timestamp_kind.value,
+                ),
+            )
         )
         return FilesystemAccounting(records, timestamps, self._pruned_ignored_subtrees)
 
@@ -138,5 +160,11 @@ def record_key(root: Path) -> RecordCoverageKey:
     return RecordCoverageKey(Source.FILESYSTEM, os.fspath(root), RecordKind.FILESYSTEM_ENTRY)
 
 
-def timestamp_key(root: Path, kind: TimestampKind) -> TimestampCoverageKey:
-    return TimestampCoverageKey(Source.FILESYSTEM, os.fspath(root), RecordKind.FILESYSTEM_ENTRY, kind)
+def timestamp_key(root: Path, entry_type: EntryType, kind: TimestampKind) -> TimestampCoverageKey:
+    return TimestampCoverageKey(
+        Source.FILESYSTEM,
+        os.fspath(root),
+        RecordKind.FILESYSTEM_ENTRY,
+        kind,
+        entry_type,
+    )

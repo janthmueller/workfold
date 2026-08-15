@@ -11,10 +11,10 @@ from rich.text import Text
 
 from workfold.application.report import Report
 from workfold.reporting.terminal.chart import render_chart
+from workfold.reporting.terminal.event_list import render_event_list
 from workfold.reporting.terminal.layout import plain_section
 from workfold.reporting.terminal.legend import render_legend
 from workfold.reporting.terminal.options import TerminalOptions
-from workfold.reporting.terminal.outside import render_outside
 from workfold.reporting.terminal.summary import render_details, render_summary
 
 
@@ -61,8 +61,8 @@ def write_terminal(
                 heading=True,
             )
         )
-    if resolved.list_outside:
-        sections.append(plain_section(render_outside(report, resolved.width), heading=True))
+    if resolved.show_event_list:
+        sections.append(plain_section(render_event_list(report, resolved.width), heading=True))
 
     wrote_section = False
     for section in sections:

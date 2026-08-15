@@ -258,16 +258,6 @@ def discover_entries(
                             if candidate_origin is not None:
                                 retain_entry(entries, candidate_origin, RecordDisposition.EXPLICITLY_EXCLUDED)
                             continue
-                        if candidate_type is EntryType.DIRECTORY and is_nested_repository_boundary(
-                            path,
-                            selected_root=root,
-                        ):
-                            # A nested worktree is user data, not Git administrative
-                            # storage. Give it a separate scan context so its own
-                            # tracked/untracked and ignore semantics apply. Its .git
-                            # entry will still be excluded by that context.
-                            nested_repository_consumer(RootSnapshot(path, snapshot), excluder.scoped(relative))
-                            continue
                         if inventory_ignored or (candidate_type is EntryType.DIRECTORY and inventory_directory):
                             if candidate_type is not EntryType.DIRECTORY or include_directories:
                                 if candidate_type is EntryType.DIRECTORY:
@@ -276,6 +266,21 @@ def discover_entries(
                                 accounting.record(root, RecordDisposition.IGNORED)
                                 if candidate_origin is not None:
                                     retain_entry(entries, candidate_origin, RecordDisposition.IGNORED)
+                            continue
+                        if candidate_type is EntryType.DIRECTORY and is_nested_repository_boundary(
+                            path,
+                            selected_root=root,
+                        ):
+                            # A visible nested worktree owns its descendants and
+                            # applies its own ignore semantics. An outer ignored
+                            # boundary was handled above and is never entered.
+                            if pending_consumer is None:
+                                # The fallback check-ignore path has not decided
+                                # visibility yet. Retain only the boundary and
+                                # defer repository handoff with that decision.
+                                pending.append(PendingEntry(root, path, snapshot, candidate_origin, candidate_type))
+                            else:
+                                nested_repository_consumer(RootSnapshot(path, snapshot), excluder.scoped(relative))
                             continue
                         _queue_or_consume(
                             PendingEntry(root, path, snapshot, candidate_origin, candidate_type),

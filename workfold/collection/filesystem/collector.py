@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from functools import partial
 from pathlib import Path
 
@@ -32,7 +32,7 @@ from workfold.collection.filesystem.scan import (
 )
 from workfold.collection.filesystem.traversal import scandir_no_follow
 from workfold.domain.coverage import Capability
-from workfold.domain.observations import Source, TimestampKind, TimestampObservation
+from workfold.domain.observations import EntryType, Source, TimestampKind, TimestampObservation
 from workfold.domain.provenance import lexical_absolute
 from workfold.domain.scope import ObservationScope
 
@@ -57,10 +57,7 @@ class FilesystemCollector:
         self,
         paths: Sequence[Path],
         *,
-        timestamp_kinds: Sequence[TimestampKind],
-        include_regular_files: bool = True,
-        include_directories: bool = False,
-        include_symlinks: bool = False,
+        entry_timestamps: Sequence[tuple[EntryType, Sequence[TimestampKind]]],
         respect_gitignore: bool = True,
         include_ignored: bool = False,
         exclusions: Sequence[str] = (),
@@ -76,11 +73,10 @@ class FilesystemCollector:
             raise ValueError("filesystem collection needs at least one path")
         if respect_gitignore == include_ignored:
             raise ValueError("select exactly one filesystem ignore policy")
-        kinds = tuple(dict.fromkeys(timestamp_kinds))
-        if not kinds:
-            raise ValueError("filesystem collection needs at least one timestamp kind")
-        if any(kind.source is not Source.FILESYSTEM for kind in kinds):
-            raise ValueError("filesystem collector accepts only filesystem timestamp kinds")
+        selection = _normalize_entry_timestamps(entry_timestamps)
+        kinds = tuple(
+            kind for kind in TimestampKind if any(kind in selected_kinds for selected_kinds in selection.values())
+        )
         excluder = ExplicitExcluder.compile(exclusions)
         base = lexical_absolute(cwd or Path.cwd())
         requested = tuple(lexical_absolute(path.expanduser(), base=base) for path in paths)
@@ -124,7 +120,7 @@ class FilesystemCollector:
         for root_snapshot, root_excluder in queued_roots:
             root = root_snapshot.path
             successful_roots.append(root)
-            accounting.ensure_root(root, kinds)
+            accounting.ensure_root(root, selection)
             capabilities.extend(
                 self._timestamp_adapter.capability(
                     kind,
@@ -135,10 +131,7 @@ class FilesystemCollector:
             )
             collect_root(
                 root_snapshot,
-                kinds=kinds,
-                include_regular_files=include_regular_files,
-                include_directories=include_directories,
-                include_symlinks=include_symlinks,
+                entry_timestamps=selection,
                 respect_gitignore=respect_gitignore,
                 excluder=root_excluder,
                 accounting=accounting,
@@ -206,6 +199,41 @@ class FilesystemCollector:
             if stat.S_ISDIR(snapshot.st_mode):
                 covering_directories.append(path)
         return roots, tuple(scan_roots), overlap_count
+
+
+def _normalize_entry_timestamps(
+    values: Sequence[tuple[EntryType, Sequence[TimestampKind]]],
+) -> Mapping[EntryType, tuple[TimestampKind, ...]]:
+    """Validate and canonicalize an exact entry-type/timestamp matrix."""
+
+    selected: dict[EntryType, set[TimestampKind]] = {}
+    for raw_entry_type, timestamp_kinds in values:
+        entry_type = _require_entry_type(raw_entry_type)
+        kinds = tuple(_require_timestamp_kind(kind) for kind in timestamp_kinds)
+        if not kinds:
+            raise ValueError(f"filesystem entry type {entry_type.value!r} needs at least one timestamp kind")
+        if any(kind.source is not Source.FILESYSTEM for kind in kinds):
+            raise ValueError("filesystem collector accepts only filesystem timestamp kinds")
+        selected.setdefault(entry_type, set()).update(kinds)
+    if not selected:
+        raise ValueError("filesystem collection needs at least one entry/timestamp selection")
+    return {
+        entry_type: tuple(kind for kind in TimestampKind if kind in selected[entry_type])
+        for entry_type in EntryType
+        if entry_type in selected
+    }
+
+
+def _require_entry_type(value: object) -> EntryType:
+    if not isinstance(value, EntryType):
+        raise TypeError("filesystem entry types must be EntryType values")
+    return value
+
+
+def _require_timestamp_kind(value: object) -> TimestampKind:
+    if not isinstance(value, TimestampKind):
+        raise TypeError("filesystem timestamp kinds must be TimestampKind values")
+    return value
 
 
 __all__ = [

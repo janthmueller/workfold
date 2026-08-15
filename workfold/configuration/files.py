@@ -37,7 +37,6 @@ _BOOLEAN_KEYS = frozenset(
     {
         "include-ignored",
         "no-color",
-        "list-outside",
         "coverage",
         "strict",
         "verbose",
@@ -47,14 +46,12 @@ _BOOLEAN_KEYS = frozenset(
 _INTEGER_KEYS = frozenset({"limit"})
 _ARRAY_KEYS = frozenset(
     {
-        "git-records",
-        "git-commit-times",
+        "events",
         "git-identity",
-        "fs-times",
-        "fs-entries",
-        "exclude",
+        "fs-exclude",
         "hide-days",
         "hide-empty-days",
+        "list",
     }
 )
 _SCALAR_ARRAY_KEYS = frozenset({"mode", "profile"})
@@ -62,11 +59,7 @@ _CONFIG_KEYS = frozenset(DEFAULT_SETTINGS)
 _CHOICES: dict[str, frozenset[str]] = {
     "mode": frozenset({"git", "fs", "both"}),
     "profile": frozenset({"standard", "portable", "full"}),
-    "git-records": frozenset({"commit", "file-change", "tag", "reflog"}),
-    "git-commit-times": frozenset({"author", "committer"}),
     "git-commits-from": frozenset({"head", "local-branches", "all-refs"}),
-    "fs-times": frozenset({"birth", "modified", "metadata-changed", "accessed"}),
-    "fs-entries": frozenset({"file", "directory", "symlink"}),
     "cluster-anchor": frozenset({"event", "midnight"}),
     "band-label": frozenset({"range", "start"}),
     "marker-style": frozenset({"source", "identity"}),
@@ -292,6 +285,10 @@ def _validate_table(table: Mapping[str, object], *, path: Path) -> dict[str, Set
     if unknown:
         label = ", ".join(repr(key) for key in unknown)
         raise UsageError(f"unknown Workfold configuration key(s) in {path}: {label}")
+    preset_keys = tuple(key for key in ("mode", "profile") if key in table)
+    if "events" in table and preset_keys:
+        conflicts = ", ".join(preset_keys)
+        raise UsageError(f"{path}: events cannot be combined with {conflicts} in the same precedence layer")
     return {key: _validate_value(key, value, path=path) for key, value in table.items()}
 
 

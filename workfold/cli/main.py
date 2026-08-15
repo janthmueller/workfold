@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -13,10 +14,11 @@ from workfold.application.resolution import validate_without_collection
 from workfold.cli.config_display import format_resolved_settings
 from workfold.cli.parser import SafeArgumentParser, build_parser, cli_setting_values
 from workfold.configuration import (
+    EffectiveSettings,
     ResolvedSettings,
     RunOptions,
     UsageError,
-    options_from_settings,
+    materialize_settings,
     resolve_settings,
 )
 from workfold.reporting.sanitization import sanitize_terminal_text
@@ -30,9 +32,15 @@ class _ReconfigurableTextIO(Protocol):
 class Invocation:
     """One validated invocation and the settings used to build it."""
 
-    options: RunOptions
     settings: ResolvedSettings
+    effective: EffectiveSettings
     show_config: bool
+
+    @property
+    def options(self) -> RunOptions:
+        """Return the fully materialized run options."""
+
+        return self.effective.options
 
 
 def configure_windows_stdio(streams: Sequence[TextIO], *, platform_name: str) -> None:
@@ -77,11 +85,11 @@ def parse_invocation(
         environ=environment,
         platform_name=platform,
     )
-    options = options_from_settings(resolution, selected_paths)
+    effective = materialize_settings(resolution, selected_paths)
     show_config = bool(getattr(namespace, "show_config", False))
     if show_config:
-        validate_without_collection(options, environ=environment)
-    return Invocation(options=options, settings=resolution, show_config=show_config)
+        validate_without_collection(effective.options, environ=environment)
+    return Invocation(settings=resolution, effective=effective, show_config=show_config)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -91,7 +99,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         invocation = parse_invocation(argv)
         if invocation.show_config:
-            sys.stdout.write(format_resolved_settings(invocation.settings, invocation.options))
+            width = shutil.get_terminal_size(fallback=(80, 24)).columns
+            sys.stdout.write(format_resolved_settings(invocation.settings, invocation.effective, width=width))
             return 0
 
         from workfold.cli.runner import run
