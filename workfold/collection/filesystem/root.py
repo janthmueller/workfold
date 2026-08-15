@@ -29,14 +29,17 @@ from workfold.collection.filesystem.ignore import (
     is_within_git_admin,
     looks_like_bare_repository,
 )
+from workfold.collection.filesystem.linux import LinuxStatxReader
 from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter
 from workfold.collection.filesystem.models import CollectedFilesystemEntry
+from workfold.collection.filesystem.root_schedule import RootOwnershipScope
 from workfold.collection.filesystem.scan import (
     FilesystemObservationConsumer,
     LstatReader,
     PendingEntry,
     RootSnapshot,
     ScandirReader,
+    revalidate_directory_snapshot,
 )
 from workfold.collection.filesystem.timestamps import extract_entry
 from workfold.collection.filesystem.traversal import discover_entries
@@ -62,7 +65,11 @@ def collect_root(
     timestamp_adapter: FilesystemTimestampAdapter,
     ignore_service: GitIgnoreService,
     lstat_reader: LstatReader,
+    root_identity_reader: LstatReader,
     scandir_reader: ScandirReader,
+    fast_inventory_supported: bool,
+    inventory_statx_reader: LinuxStatxReader | None,
+    ownership: RootOwnershipScope,
 ) -> None:
     """Apply metadata, entry, and ignore semantics to one root."""
 
@@ -71,6 +78,13 @@ def collect_root(
     include_regular_files = EntryType.REGULAR_FILE in entry_timestamps
     include_directories = EntryType.DIRECTORY in entry_timestamps
     include_symlinks = EntryType.SYMLINK in entry_timestamps
+
+    def validate_root() -> None:
+        if root_type is EntryType.DIRECTORY:
+            # Root identity checks need only portable no-follow inode metadata;
+            # do not repeat an optional statx birth-time request at every
+            # orchestration boundary.
+            revalidate_directory_snapshot(root, root_snapshot.snapshot, root_identity_reader)
 
     def consume_eligible(item: PendingEntry) -> None:
         if item.entry_type is None:
@@ -89,7 +103,12 @@ def collect_root(
             observation_scope=observation_scope,
         )
 
-    if has_git_admin_ancestor(root) or (root_type is EntryType.DIRECTORY and looks_like_bare_repository(root)):
+    validate_root()
+    semantic_git_admin = has_git_admin_ancestor(root) or (
+        root_type is EntryType.DIRECTORY and looks_like_bare_repository(root)
+    )
+    validate_root()
+    if semantic_git_admin:
         accounting.discover(root)
         accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
         if entries is not None:
@@ -104,6 +123,7 @@ def collect_root(
         )
         return
     probe = ignore_service.probe(root, is_directory=root_type is EntryType.DIRECTORY)
+    validate_root()
     if probe.repository is not None and (probe.repository.is_bare or is_within_git_admin(root, probe.repository)):
         accounting.discover(root)
         accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
@@ -133,7 +153,7 @@ def collect_root(
             consume_eligible(item)
 
     if respect_gitignore and probe.repository is not None and root_type is EntryType.DIRECTORY:
-        if not include_directories:
+        if not include_directories and fast_inventory_supported:
             visit = collect_git_inventory_stream(
                 root_snapshot,
                 repository=probe.repository,
@@ -144,7 +164,9 @@ def collect_root(
                 entries=entries,
                 diagnostics=diagnostics,
                 ignore_service=ignore_service,
-                lstat_reader=lstat_reader,
+                statx_reader=inventory_statx_reader,
+                root_validator=validate_root,
+                ownership=ownership,
                 eligible_consumer=consume_eligible,
                 nested_repository_consumer=nested_repository_consumer,
             )
@@ -172,12 +194,15 @@ def collect_root(
                     inventory=inventory,
                     pending_consumer=process_visible_entry,
                     nested_repository_consumer=nested_repository_consumer,
-                    include_directories=True,
+                    ownership=ownership,
+                    include_directories=include_directories,
                 )
                 if pending:
                     raise RuntimeError("streamed directory traversal unexpectedly retained entries")
 
             def account_unseen_ignored(relative_path: str, is_directory: bool) -> None:
+                if ownership.delegates(PurePosixPath(relative_path)):
+                    return
                 disposition = (
                     RecordDisposition.EXPLICITLY_EXCLUDED
                     if excluder.matches(relative_path, is_directory=is_directory)
@@ -219,6 +244,7 @@ def collect_root(
         inventory=None,
         pending_consumer=None if defer_ignore_evaluation else process_visible_entry,
         nested_repository_consumer=nested_repository_consumer,
+        ownership=ownership,
         include_directories=include_directories,
     )
     ignored: frozenset[Path] = frozenset()

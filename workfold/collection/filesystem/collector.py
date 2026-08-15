@@ -10,8 +10,14 @@ from pathlib import Path
 
 from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticBuffer
 from workfold.collection.filesystem.accounting import AccountingBuilder
-from workfold.collection.filesystem.entries import crosses_nested_repository, is_lexical_descendant, stat_diagnostic
+from workfold.collection.filesystem.entries import (
+    crosses_nested_repository,
+    is_lexical_descendant,
+    stat_diagnostic,
+    traversal_diagnostic,
+)
 from workfold.collection.filesystem.ignore import ExplicitExcluder, GitIgnoreService
+from workfold.collection.filesystem.inventory_metadata import anchored_inventory_metadata_supported
 from workfold.collection.filesystem.linux import LinuxStatxReader
 from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter
 from workfold.collection.filesystem.models import (
@@ -21,6 +27,7 @@ from workfold.collection.filesystem.models import (
     TimestampExtractionCoverage,
 )
 from workfold.collection.filesystem.root import collect_root
+from workfold.collection.filesystem.root_schedule import ExplicitRootOwnership, RootScanSchedule
 from workfold.collection.filesystem.scan import (
     DirectorySafetyError,
     FilesystemObservationConsumer,
@@ -31,7 +38,7 @@ from workfold.collection.filesystem.scan import (
     lstat_with_birthtime,
 )
 from workfold.collection.filesystem.traversal import scandir_no_follow
-from workfold.domain.coverage import Capability
+from workfold.domain.coverage import Capability, RecordDisposition
 from workfold.domain.observations import EntryType, Source, TimestampKind, TimestampObservation
 from workfold.domain.provenance import lexical_absolute
 from workfold.domain.scope import ObservationScope
@@ -104,20 +111,20 @@ class FilesystemCollector:
         capabilities: list[Capability] = []
         accounting = AccountingBuilder(retain_scope_match_ids=retain_observations)
 
-        queued_roots = [(item, excluder) for item in roots]
-        scheduled_roots = {os.path.normcase(os.fspath(item.path)) for item in roots}
-        actual_scan_roots = list(scan_roots)
+        prepared_roots = tuple(roots)
+        ownership = ExplicitRootOwnership(prepared_roots)
+        schedule = RootScanSchedule(prepared_roots, scan_roots, excluder)
         successful_roots: list[Path] = []
+        fast_inventory_supported = self._lstat is lstat and anchored_inventory_metadata_supported()
 
-        def queue_nested_repository(root_snapshot: RootSnapshot, nested_excluder: ExplicitExcluder) -> None:
-            key = os.path.normcase(os.fspath(root_snapshot.path))
-            if key in scheduled_roots:
-                return
-            scheduled_roots.add(key)
-            queued_roots.append((root_snapshot, nested_excluder))
-            actual_scan_roots.append(root_snapshot.path)
+        while (task := schedule.take()) is not None:
+            root_snapshot = task.snapshot
+            root_excluder = task.excluder
+            nested_roots: list[tuple[RootSnapshot, ExplicitExcluder]] = []
 
-        for root_snapshot, root_excluder in queued_roots:
+            def queue_nested_repository(root_snapshot: RootSnapshot, nested_excluder: ExplicitExcluder) -> None:
+                nested_roots.append((root_snapshot, nested_excluder))
+
             root = root_snapshot.path
             successful_roots.append(root)
             accounting.ensure_root(root, selection)
@@ -129,24 +136,34 @@ class FilesystemCollector:
                 )
                 for kind in kinds
             )
-            collect_root(
-                root_snapshot,
-                entry_timestamps=selection,
-                respect_gitignore=respect_gitignore,
-                excluder=root_excluder,
-                accounting=accounting,
-                entries=entries,
-                observations=observations,
-                capabilities=capabilities,
-                diagnostics=diagnostics,
-                observation_consumer=observation_consumer,
-                observation_scope=observation_scope,
-                nested_repository_consumer=queue_nested_repository,
-                timestamp_adapter=self._timestamp_adapter,
-                ignore_service=self._ignore_service,
-                lstat_reader=lstat_reader,
-                scandir_reader=scandir_reader,
-            )
+            try:
+                collect_root(
+                    root_snapshot,
+                    entry_timestamps=selection,
+                    respect_gitignore=respect_gitignore,
+                    excluder=root_excluder,
+                    accounting=accounting,
+                    entries=entries,
+                    observations=observations,
+                    capabilities=capabilities,
+                    diagnostics=diagnostics,
+                    observation_consumer=observation_consumer,
+                    observation_scope=observation_scope,
+                    nested_repository_consumer=queue_nested_repository,
+                    timestamp_adapter=self._timestamp_adapter,
+                    ignore_service=self._ignore_service,
+                    lstat_reader=lstat_reader,
+                    root_identity_reader=self._lstat,
+                    scandir_reader=scandir_reader,
+                    fast_inventory_supported=fast_inventory_supported,
+                    inventory_statx_reader=combined_statx_reader,
+                    ownership=ownership.scope_for(root),
+                )
+            except DirectorySafetyError as error:
+                accounting.discover(root)
+                accounting.record(root, RecordDisposition.RECORD_ERROR)
+                diagnostics.append(traversal_diagnostic(root, root, error))
+            schedule.add_discovered(tuple(nested_roots))
 
         return FilesystemCollectionResult(
             entries=tuple(entries or ()),
@@ -155,7 +172,7 @@ class FilesystemCollector:
             capabilities=tuple(capabilities),
             diagnostics=diagnostics.snapshot(),
             requested_roots=requested,
-            scan_roots=tuple(actual_scan_roots),
+            scan_roots=schedule.scan_roots,
             successful_roots=tuple(successful_roots),
             overlapping_roots_deduplicated=overlap_count,
         )

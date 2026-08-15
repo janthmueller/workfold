@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import errno
 import os
-import stat
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -29,6 +28,7 @@ from workfold.collection.filesystem.ignore import (
 )
 from workfold.collection.filesystem.linux import LinuxStatxReader
 from workfold.collection.filesystem.models import CollectedFilesystemEntry
+from workfold.collection.filesystem.root_schedule import RootOwnershipScope
 from workfold.collection.filesystem.scan import (
     DirectoryEntry,
     DirectorySafetyError,
@@ -37,7 +37,9 @@ from workfold.collection.filesystem.scan import (
     RootSnapshot,
     ScandirReader,
     StatSnapshot,
+    directory_identity,
     statx_fallback_snapshot,
+    validate_directory_snapshot_identity,
 )
 from workfold.domain.coverage import RecordDisposition
 from workfold.domain.observations import EntryType
@@ -69,25 +71,25 @@ def scandir_no_follow(
             raise
         try:
             opened_snapshot = os.fstat(descriptor)
-            _validate_directory_identity(path, opened_snapshot, expected_snapshot)
+            validate_directory_snapshot_identity(path, opened_snapshot, expected_snapshot)
             with os.scandir(descriptor) as iterator:
                 if statx_reader is None:
                     yield iterator
                 else:
                     yield (_StatxDirectoryEntry(entry, descriptor, path, statx_reader) for entry in iterator)
-            _validate_directory_identity(path, _revalidated_directory(path), opened_snapshot)
+            validate_directory_snapshot_identity(path, _revalidated_directory(path), opened_snapshot)
         finally:
             os.close(descriptor)
         return
 
     before = _revalidated_directory(path)
-    _validate_directory_identity(path, before, expected_snapshot)
+    validate_directory_snapshot_identity(path, before, expected_snapshot)
     iterator = os.scandir(path)
     try:
-        _validate_directory_identity(path, _revalidated_directory(path), before)
+        validate_directory_snapshot_identity(path, _revalidated_directory(path), before)
         with iterator:
             yield iterator
-        _validate_directory_identity(path, _revalidated_directory(path), before)
+        validate_directory_snapshot_identity(path, _revalidated_directory(path), before)
     finally:
         iterator.close()
 
@@ -101,29 +103,6 @@ def _revalidated_directory(path: Path) -> os.stat_result:
             "queued directory could not be revalidated during traversal",
             os.fspath(path),
         ) from error
-
-
-def _validate_directory_identity(path: Path, actual: StatSnapshot, expected: StatSnapshot) -> None:
-    actual_identity = _directory_identity(actual)
-    expected_identity = _directory_identity(expected)
-    if (
-        stat.S_ISDIR(actual.st_mode)
-        and stat.S_ISDIR(expected.st_mode)
-        and (actual_identity is None or expected_identity is None or actual_identity == expected_identity)
-    ):
-        return
-    raise DirectorySafetyError(
-        getattr(errno, "ESTALE", errno.EIO),
-        "queued directory identity changed before or during traversal",
-        os.fspath(path),
-    )
-
-
-def _directory_identity(snapshot: StatSnapshot) -> tuple[int, int] | None:
-    """Return a comparable identity when the metadata source exposes one."""
-
-    identity = (snapshot.st_dev, snapshot.st_ino)
-    return None if identity == (0, 0) else identity
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +146,7 @@ def discover_entries(
     inventory: GitFilesystemInventoryView | None,
     pending_consumer: Callable[[PendingEntry], None] | None,
     nested_repository_consumer: Callable[[RootSnapshot, ExplicitExcluder], None],
+    ownership: RootOwnershipScope,
     include_directories: bool,
 ) -> list[PendingEntry]:
     """Discover current entries lexically without following symlink targets."""
@@ -219,7 +199,7 @@ def discover_entries(
                             continue
 
                         candidate_type = entry_type(snapshot.st_mode)
-                        if candidate_type is EntryType.DIRECTORY and _directory_identity(snapshot) is None:
+                        if candidate_type is EntryType.DIRECTORY and directory_identity(snapshot) is None:
                             # Windows DirEntry.stat() deliberately leaves device
                             # and inode identity at zero. Refresh directories
                             # through the same path-based API used to revalidate
@@ -238,6 +218,11 @@ def discover_entries(
                             PurePosixPath(name) if directory_relative == root_relative else directory_relative / name
                         )
                         relative_text = relative.as_posix()
+                        if ownership.delegates(relative):
+                            # Explicit roots partition otherwise overlapping
+                            # repository scopes and account for their own
+                            # records. A delegated directory is pruned here.
+                            continue
                         inventory_ignored, inventory_directory = (
                             inventory.ignore_state(relative_text) if inventory is not None else (False, False)
                         )
@@ -258,19 +243,21 @@ def discover_entries(
                             if candidate_origin is not None:
                                 retain_entry(entries, candidate_origin, RecordDisposition.EXPLICITLY_EXCLUDED)
                             continue
+                        nested_boundary = candidate_type is EntryType.DIRECTORY and is_nested_repository_boundary(
+                            path,
+                            selected_root=root,
+                        )
                         if inventory_ignored or (candidate_type is EntryType.DIRECTORY and inventory_directory):
-                            if candidate_type is not EntryType.DIRECTORY or include_directories:
+                            if candidate_type is not EntryType.DIRECTORY or include_directories or nested_boundary:
                                 if candidate_type is EntryType.DIRECTORY:
-                                    accounting.prune_ignored_subtree()
+                                    if include_directories:
+                                        accounting.prune_ignored_subtree()
                                 accounting.discover(root)
                                 accounting.record(root, RecordDisposition.IGNORED)
                                 if candidate_origin is not None:
                                     retain_entry(entries, candidate_origin, RecordDisposition.IGNORED)
                             continue
-                        if candidate_type is EntryType.DIRECTORY and is_nested_repository_boundary(
-                            path,
-                            selected_root=root,
-                        ):
+                        if nested_boundary:
                             # A visible nested worktree owns its descendants and
                             # applies its own ignore semantics. An outer ignored
                             # boundary was handled above and is never entered.

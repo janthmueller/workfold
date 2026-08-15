@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import os
+import stat
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -71,6 +73,49 @@ LstatReader = Callable[[Path], StatSnapshot]
 ScandirContext = AbstractContextManager[Iterator[DirectoryEntry]]
 ScandirReader = Callable[[Path, StatSnapshot], ScandirContext]
 FilesystemObservationConsumer = Callable[[tuple[TimestampObservation, ...]], None]
+
+
+def revalidate_directory_snapshot(
+    path: Path,
+    expected_snapshot: StatSnapshot,
+    lstat_reader: LstatReader,
+) -> None:
+    """Require *path* to remain the same no-follow directory snapshot."""
+
+    try:
+        actual = lstat_reader(path)
+    except OSError as error:
+        raise DirectorySafetyError(
+            error.errno or errno.EIO,
+            "queued directory could not be revalidated before filesystem discovery",
+            os.fspath(path),
+        ) from error
+    validate_directory_snapshot_identity(path, actual, expected_snapshot)
+
+
+def validate_directory_snapshot_identity(path: Path, actual: StatSnapshot, expected: StatSnapshot) -> None:
+    """Require two snapshots to identify the same no-follow directory."""
+
+    actual_identity = directory_identity(actual)
+    expected_identity = directory_identity(expected)
+    if (
+        stat.S_ISDIR(actual.st_mode)
+        and stat.S_ISDIR(expected.st_mode)
+        and (actual_identity is None or expected_identity is None or actual_identity == expected_identity)
+    ):
+        return
+    raise DirectorySafetyError(
+        getattr(errno, "ESTALE", errno.EIO),
+        "queued directory identity changed before or during traversal",
+        os.fspath(path),
+    )
+
+
+def directory_identity(snapshot: StatSnapshot) -> tuple[int, int] | None:
+    """Return a comparable identity when the metadata source exposes one."""
+
+    identity = (snapshot.st_dev, snapshot.st_ino)
+    return None if identity == (0, 0) else identity
 
 
 def lstat(path: Path) -> StatSnapshot:

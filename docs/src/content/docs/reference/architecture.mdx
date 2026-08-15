@@ -161,6 +161,15 @@ parallel `git_core` hierarchy.
 integration is nested under this adapter because ignore rules affect only
 filesystem discovery; they never filter historical Git records. Native Linux
 birth-time access is an implementation detail of filesystem metadata.
+`root_schedule` gives explicit paths stable, non-overlapping ownership and
+orders dynamically discovered repository roots without letting callbacks
+invalidate pending work. `inventory_metadata` resolves Git-inventory paths
+component by component beneath an opened root descriptor; when that capability
+is unavailable, the collector retains bounded Git ignore membership but uses
+native traversal. `scan` defines the shared metadata protocols and directory
+identity invariant used by both strategies. These boundaries keep ownership
+decisions out of traversal callbacks and operating-system safety decisions out
+of root orchestration.
 
 ### Folding
 

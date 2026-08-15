@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import NoReturn, cast
 
 import pytest
@@ -21,6 +21,7 @@ from workfold.collection.filesystem import (
 from workfold.collection.filesystem.accounting import AccountingBuilder
 from workfold.collection.filesystem.ignore import (
     GitFilesystemInventory,
+    GitFilesystemInventoryVisit,
     GitIgnoreCommandError,
     GitIgnoreMatches,
     GitIgnoreProbe,
@@ -28,6 +29,10 @@ from workfold.collection.filesystem.ignore import (
     GitIgnoreRunner,
     GitIgnoreService,
     IgnoreCandidate,
+)
+from workfold.collection.filesystem.inventory_metadata import (
+    AnchoredInventoryMetadata,
+    anchored_inventory_metadata_supported,
 )
 from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter
 from workfold.collection.filesystem.scan import DirectoryEntry, StatSnapshot
@@ -266,7 +271,14 @@ def test_quick_scan_accounts_for_regular_ignored_excluded_and_admin_entries(tmp_
     assert result.accounting.timestamps[0].requested == result.accounting.records[0].eligible
 
 
-def test_git_inventory_validates_current_files_without_statting_ignored_tree(tmp_path: Path) -> None:
+@pytest.mark.skipif(
+    not anchored_inventory_metadata_supported(),
+    reason="Git's path-driven inventory is disabled without component-safe descriptor lookup",
+)
+def test_git_inventory_validates_current_files_without_statting_ignored_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     repo = GitRepo.create(tmp_path / "repo")
     ignored = repo.path / "ignored"
     ignored.mkdir()
@@ -290,13 +302,20 @@ def test_git_inventory_validates_current_files_without_statting_ignored_tree(tmp
     for index in range(200):
         (ignored / f"generated-{index}.txt").write_text("ignored", encoding="utf-8")
 
-    lstat_calls: list[Path] = []
+    metadata_calls: list[Path] = []
+    original_read = AnchoredInventoryMetadata.read
 
-    def counting_lstat(path: Path) -> os.stat_result:
-        lstat_calls.append(path)
-        return os.lstat(path)
+    def recording_read(
+        self: AnchoredInventoryMetadata,
+        relative: PurePosixPath,
+        *,
+        display_path: Path,
+    ) -> StatSnapshot:
+        metadata_calls.append(display_path)
+        return original_read(self, relative, display_path=display_path)
 
-    result = FilesystemCollector(lstat_reader=counting_lstat).collect(
+    monkeypatch.setattr(AnchoredInventoryMetadata, "read", recording_read)
+    result = FilesystemCollector().collect(
         (repo.path,),
         entry_timestamps=fs_selection(FS_MODIFIED),
     )
@@ -311,11 +330,60 @@ def test_git_inventory_validates_current_files_without_statting_ignored_tree(tmp
         untracked,
     }
     assert deleted not in {item.origin.path for item in result.entries}
-    assert {path for path in lstat_calls if ignored == path or ignored in path.parents} == {tracked_inside_ignored}
+    assert {path for path in metadata_calls if ignored == path or ignored in path.parents} == {tracked_inside_ignored}
     assert result.accounting.records[0].ignored == 200
     assert len(result.observations) == 6
     assert not result.diagnostics
     result.accounting.records[0].validate()
+
+
+def test_unanchored_inventory_fallback_does_not_poll_the_root_per_entry(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    for index in range(100):
+        (repo.path / f"file-{index:03}.txt").write_text("work", encoding="utf-8")
+    calls: list[Path] = []
+
+    def recording_lstat(path: Path) -> os.stat_result:
+        calls.append(path)
+        return os.lstat(path)
+
+    def forbidden_inventory(*_args: object, **_kwargs: object) -> GitFilesystemInventoryVisit:
+        raise AssertionError("unsafe Git inventory fast path must not run without anchored metadata")
+
+    result = FilesystemCollector(
+        lstat_reader=recording_lstat,
+        ignore_service=GitIgnoreService(inventory_visitor=forbidden_inventory),
+    ).collect(
+        (repo.path,),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+    )
+
+    assert len(result.observations) == 100
+    assert calls.count(repo.path) < 10
+    assert not result.diagnostics
+
+
+def test_unanchored_inventory_fallback_preserves_explicit_root_ownership(tmp_path: Path) -> None:
+    outer = GitRepo.create(tmp_path / "outer")
+    (outer.path / ".gitignore").write_text("nested/\n", encoding="utf-8")
+    nested = GitRepo.create(outer.path / "nested")
+    explicit = nested.path / "work.txt"
+    explicit.write_text("work", encoding="utf-8")
+
+    reference = FilesystemCollector().collect(
+        (outer.path, explicit),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+    )
+    fallback = FilesystemCollector(lstat_reader=os.lstat).collect(
+        (outer.path, explicit),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+    )
+
+    assert fallback.accounting == reference.accounting
+    assert [item.origin.path for item in fallback.observations].count(explicit) == 1
+    explicit_observation = next(item for item in fallback.observations if item.origin.path == explicit)
+    assert explicit_observation.origin.repository_or_root == explicit
+    assert not fallback.diagnostics
 
 
 def test_git_inventory_restricts_candidates_to_literal_selected_subdirectory(tmp_path: Path) -> None:
@@ -679,6 +747,80 @@ def test_lexical_overlaps_deduplicate_and_nested_repository_uses_its_own_context
     assert sum(item.origin.path == nested.path / "nested.txt" for item in result.entries) == 1
 
 
+def test_visible_nested_repository_subsumes_an_explicit_descendant_without_duplicate_evidence(
+    tmp_path: Path,
+) -> None:
+    outer = GitRepo.create(tmp_path / "outer")
+    outer_file = outer.path / "outer.txt"
+    outer_file.write_text("outer", encoding="utf-8")
+    nested = GitRepo.create(outer.path / "nested")
+    nested_file = nested.path / "nested.txt"
+    nested_file.write_text("nested", encoding="utf-8")
+
+    result = FilesystemCollector().collect(
+        (outer.path, nested_file),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+    )
+
+    assert result.scan_roots == (outer.path, nested.path, nested_file)
+    assert result.successful_roots == (outer.path, nested.path, nested_file)
+    assert result.overlapping_roots_deduplicated == 0
+    assert [item.origin.path for item in result.observations].count(nested_file) == 1
+    assert {item.origin.path for item in result.observations} == {outer_file, nested_file}
+
+
+def test_nested_repository_handoffs_precede_deeper_explicit_descendants(tmp_path: Path) -> None:
+    outer = GitRepo.create(tmp_path / "outer")
+    middle = GitRepo.create(outer.path / "middle")
+    inner = GitRepo.create(middle.path / "inner")
+    inner_file = inner.path / "work.txt"
+    inner_file.write_text("nested", encoding="utf-8")
+
+    result = FilesystemCollector().collect(
+        (outer.path, inner_file),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+    )
+
+    assert result.scan_roots == (outer.path, middle.path, inner.path, inner_file)
+    assert result.successful_roots == (outer.path, middle.path, inner.path, inner_file)
+    assert result.overlapping_roots_deduplicated == 0
+    assert [item.origin.path for item in result.observations].count(inner_file) == 1
+
+
+def test_failed_discovered_repository_cannot_displace_an_explicit_descendant(tmp_path: Path) -> None:
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    nested = GitRepo.create(outer / "nested")
+    nested_file = nested.path / "work.txt"
+    nested_file.write_text("nested", encoding="utf-8")
+
+    @contextmanager
+    def failing_nested_scandir(
+        path: Path,
+        expected_snapshot: StatSnapshot,
+    ) -> Generator[Iterator[DirectoryEntry], None, None]:
+        if path == nested.path:
+            raise PermissionError("nested repository is unreadable")
+        with scandir_no_follow(path, expected_snapshot) as iterator:
+            yield iterator
+
+    result = FilesystemCollector(scandir_reader=failing_nested_scandir).collect(
+        (outer, nested_file),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+        respect_gitignore=False,
+        include_ignored=True,
+    )
+
+    assert result.scan_roots == (outer, nested.path, nested_file)
+    assert result.successful_roots == (outer, nested.path, nested_file)
+    assert result.overlapping_roots_deduplicated == 0
+    assert [item.origin.path for item in result.observations] == [nested_file]
+    assert result.observations[0].origin.repository_or_root == nested_file
+    assert any(
+        item.code == "filesystem_traversal_error" and item.path == os.fspath(nested.path) for item in result.diagnostics
+    )
+
+
 def test_explicit_nested_repository_remains_scannable_when_covering_root_fails(tmp_path: Path) -> None:
     outer = tmp_path / "outer"
     outer.mkdir()
@@ -788,6 +930,28 @@ def test_explicit_ignored_nested_repository_is_scanned_with_its_own_ignore_seman
         and item.origin.path == nested.path / ".git"
         and item.disposition is RecordDisposition.SEMANTIC_GIT_ADMIN
         for item in result.entries
+    )
+
+
+def test_explicit_descendant_of_an_ignored_nested_repository_remains_scannable(tmp_path: Path) -> None:
+    outer = GitRepo.create(tmp_path / "outer")
+    (outer.path / ".gitignore").write_text("nested/\n", encoding="utf-8")
+    nested = GitRepo.create(outer.path / "nested")
+    nested_file = nested.path / "work.txt"
+    nested_file.write_text("nested", encoding="utf-8")
+
+    result = FilesystemCollector().collect(
+        (outer.path, nested_file),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+    )
+
+    assert result.scan_roots == (outer.path, nested_file)
+    assert result.successful_roots == (outer.path, nested_file)
+    assert result.overlapping_roots_deduplicated == 0
+    assert [item.origin.path for item in result.observations].count(nested_file) == 1
+    assert any(
+        item.origin.repository_or_root == nested_file and item.origin.path == nested_file
+        for item in result.observations
     )
 
 
@@ -1383,6 +1547,96 @@ def test_queued_directory_replaced_by_another_directory_is_reported(tmp_path: Pa
     assert injected not in {item.origin.path for item in result.entries}
     assert all(item.origin.path != queued / injected.name for item in result.entries)
     assert result.is_partial
+    assert any(item.code == "filesystem_concurrent_mutation" for item in result.diagnostics)
+
+
+@pytest.mark.skipif(
+    not anchored_inventory_metadata_supported(),
+    reason="Git's path-driven inventory is disabled without component-safe descriptor lookup",
+)
+def test_git_inventory_cannot_follow_a_selected_root_replaced_by_a_symlink(tmp_path: Path) -> None:
+    selected = GitRepo.create(tmp_path / "selected")
+    (selected.path / "original.txt").write_text("inside", encoding="utf-8")
+    external = GitRepo.create(tmp_path / "external")
+    outside = external.path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    displaced = tmp_path / "displaced"
+    swapped = False
+
+    def swapping_inventory(
+        _runner: GitIgnoreRunner,
+        _repository: GitIgnoreRepository,
+        _selected_root: Path,
+        *,
+        included_consumer: Callable[[str], None],
+        ignored_consumer: Callable[[str, bool], None],
+    ) -> GitFilesystemInventoryVisit:
+        nonlocal swapped
+        del ignored_consumer
+        selected.path.rename(displaced)
+        selected.path.symlink_to(external.path, target_is_directory=True)
+        swapped = True
+        included_consumer(outside.name)
+        return GitFilesystemInventoryVisit(included_paths=1)
+
+    result = FilesystemCollector(
+        ignore_service=GitIgnoreService(inventory_visitor=swapping_inventory),
+    ).collect(
+        (selected.path,),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+    )
+
+    assert swapped
+    assert not result.observations
+    assert all(item.origin.path != selected.path / outside.name for item in result.entries)
+    assert result.is_partial
+    assert sum(item.record_errors for item in result.accounting.records) == 1
+    assert any(item.code == "filesystem_concurrent_mutation" for item in result.diagnostics)
+
+
+@pytest.mark.skipif(
+    not anchored_inventory_metadata_supported(),
+    reason="Git's path-driven inventory is disabled without component-safe descriptor lookup",
+)
+def test_git_inventory_cannot_follow_an_intermediate_directory_replaced_by_a_symlink(tmp_path: Path) -> None:
+    selected = GitRepo.create(tmp_path / "selected")
+    inside_directory = selected.path / "escape"
+    inside_directory.mkdir()
+    inside = inside_directory / "secret.txt"
+    inside.write_text("inside", encoding="utf-8")
+    external = tmp_path / "external"
+    external.mkdir()
+    outside = external / inside.name
+    outside.write_text("outside", encoding="utf-8")
+    os.utime(inside, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(outside, ns=(9_000_000_000, 9_000_000_000))
+    displaced = selected.path / "displaced"
+
+    def swapping_inventory(
+        _runner: GitIgnoreRunner,
+        _repository: GitIgnoreRepository,
+        _selected_root: Path,
+        *,
+        included_consumer: Callable[[str], None],
+        ignored_consumer: Callable[[str, bool], None],
+    ) -> GitFilesystemInventoryVisit:
+        del ignored_consumer
+        inside_directory.rename(displaced)
+        inside_directory.symlink_to(external, target_is_directory=True)
+        included_consumer("escape/secret.txt")
+        return GitFilesystemInventoryVisit(included_paths=1)
+
+    result = FilesystemCollector(
+        ignore_service=GitIgnoreService(inventory_visitor=swapping_inventory),
+    ).collect(
+        (selected.path,),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+    )
+
+    assert not result.observations
+    assert all(item.origin.path != selected.path / "escape" / outside.name for item in result.entries)
+    assert result.is_partial
+    assert sum(item.record_errors for item in result.accounting.records) == 1
     assert any(item.code == "filesystem_concurrent_mutation" for item in result.diagnostics)
 
 

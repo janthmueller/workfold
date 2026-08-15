@@ -144,8 +144,11 @@ weeks, dates, or months.
   observation for it.
 - Inside a Git worktree, the normal respect-ignore scan uses local Git plumbing
   only to inventory tracked and untracked path candidates. A successful current
-  no-follow filesystem stat—not the Git index—determines whether an included
-  path exists, its entry type, and all of its timestamps. Never-staged,
+  component-safe no-follow filesystem stat—not the Git index—determines whether
+  an included path exists, its entry type, and all of its timestamps. Parent
+  components are resolved beneath an opened root without following symlinks;
+  unsupported platforms use native traversal instead of an unsafe path-driven
+  shortcut. Never-staged,
   non-ignored files are included; index-only paths absent from the worktree are
   not filesystem events.
 - Ignored leaf candidates and ignored subtree boundaries are counted without
@@ -156,7 +159,9 @@ weeks, dates, or months.
 - A repository embedded below a selected root is not an escape from that
   root's ignore policy. An ignored repository boundary is pruned; a visible
   boundary receives its own repository context. A nested repository supplied
-  explicitly as another input root remains independently selected.
+  explicitly as another input root remains independently selected. More
+  generally, every explicit descendant root owns its exact path or subtree, so
+  failure of an automatically discovered repository scan cannot suppress it.
 - A directory visited only so a file-only scan can reach descendant files is
   traversal structure, not a discovered metadata record. It enters record and
   timestamp coverage when directories are requested; explicit exclusion and

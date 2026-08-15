@@ -15,6 +15,7 @@ from workfold.collection.filesystem.entries import (
     origin,
     retain_entry,
     stat_diagnostic,
+    traversal_diagnostic,
 )
 from workfold.collection.filesystem.ignore import (
     ExplicitExcluder,
@@ -23,8 +24,11 @@ from workfold.collection.filesystem.ignore import (
     GitIgnoreService,
     is_nested_repository_boundary,
 )
+from workfold.collection.filesystem.inventory_metadata import AnchoredInventoryMetadata
+from workfold.collection.filesystem.linux import LinuxStatxReader
 from workfold.collection.filesystem.models import CollectedFilesystemEntry
-from workfold.collection.filesystem.scan import LstatReader, PendingEntry, RootSnapshot
+from workfold.collection.filesystem.root_schedule import RootOwnershipScope
+from workfold.collection.filesystem.scan import DirectorySafetyError, PendingEntry, RootSnapshot
 from workfold.domain.coverage import RecordDisposition
 from workfold.domain.observations import EntryType
 
@@ -40,19 +44,68 @@ def collect_git_inventory_stream(
     entries: list[CollectedFilesystemEntry] | None,
     diagnostics: list[CollectorDiagnostic],
     ignore_service: GitIgnoreService,
-    lstat_reader: LstatReader,
+    statx_reader: LinuxStatxReader | None,
+    root_validator: Callable[[], None],
+    ownership: RootOwnershipScope,
     eligible_consumer: Callable[[PendingEntry], None],
     nested_repository_consumer: Callable[[RootSnapshot, ExplicitExcluder], None],
 ) -> GitFilesystemInventoryVisit:
     """Consume the default Git inventory through its bounded disk spool."""
 
+    with AnchoredInventoryMetadata(
+        root_snapshot,
+        statx_reader=statx_reader,
+    ) as metadata:
+        return _collect_git_inventory_stream(
+            root_snapshot,
+            repository=repository,
+            include_regular_files=include_regular_files,
+            include_symlinks=include_symlinks,
+            excluder=excluder,
+            accounting=accounting,
+            entries=entries,
+            diagnostics=diagnostics,
+            ignore_service=ignore_service,
+            metadata=metadata,
+            root_validator=root_validator,
+            ownership=ownership,
+            eligible_consumer=eligible_consumer,
+            nested_repository_consumer=nested_repository_consumer,
+        )
+
+
+def _collect_git_inventory_stream(
+    root_snapshot: RootSnapshot,
+    *,
+    repository: GitIgnoreRepository,
+    include_regular_files: bool,
+    include_symlinks: bool,
+    excluder: ExplicitExcluder,
+    accounting: AccountingBuilder,
+    entries: list[CollectedFilesystemEntry] | None,
+    diagnostics: list[CollectorDiagnostic],
+    ignore_service: GitIgnoreService,
+    metadata: AnchoredInventoryMetadata,
+    root_validator: Callable[[], None],
+    ownership: RootOwnershipScope,
+    eligible_consumer: Callable[[PendingEntry], None],
+    nested_repository_consumer: Callable[[RootSnapshot, ExplicitExcluder], None],
+) -> GitFilesystemInventoryVisit:
     root = root_snapshot.path
 
     def consume_included(relative_path: str) -> None:
-        path = root if relative_path == "." else root / relative_path
+        relative = PurePosixPath(relative_path)
+        path = root if not relative.parts else root / relative_path
+        if ownership.delegates(relative):
+            return
         try:
-            snapshot = lstat_reader(path)
+            snapshot = metadata.read(relative, display_path=path)
         except (FileNotFoundError, NotADirectoryError):
+            return
+        except DirectorySafetyError as error:
+            accounting.discover(root)
+            accounting.record(root, RecordDisposition.RECORD_ERROR)
+            diagnostics.append(traversal_diagnostic(root, path, error))
             return
         except OSError as error:
             accounting.discover(root)
@@ -62,8 +115,15 @@ def collect_git_inventory_stream(
 
         candidate_type = entry_type(snapshot.st_mode)
         candidate_origin = origin(root, path, candidate_type) if entries is not None else None
-        relative = PurePosixPath(relative_path)
-        if is_semantic_git_admin(path, repository):
+        semantic_git_admin = (
+            bool(relative.parts)
+            and relative.parts[-1] == ".git"
+            and is_semantic_git_admin(
+                path,
+                repository,
+            )
+        )
+        if semantic_git_admin:
             disposition = RecordDisposition.SEMANTIC_GIT_ADMIN
         elif excluder.matches(relative, is_directory=candidate_type is EntryType.DIRECTORY):
             disposition = RecordDisposition.EXPLICITLY_EXCLUDED
@@ -89,6 +149,9 @@ def collect_git_inventory_stream(
             eligible_consumer(PendingEntry(root, path, snapshot, candidate_origin, candidate_type))
 
     def consume_ignored(relative_path: str, is_directory: bool) -> None:
+        relative = PurePosixPath(relative_path)
+        if ownership.delegates(relative):
+            return
         disposition = (
             RecordDisposition.EXPLICITLY_EXCLUDED
             if excluder.matches(relative_path, is_directory=is_directory)
@@ -97,12 +160,14 @@ def collect_git_inventory_stream(
         accounting.discover(root)
         accounting.record(root, disposition)
 
+    root_validator()
     visit = ignore_service.visit_inventory(
         repository,
         root,
         included_consumer=consume_included,
         ignored_consumer=consume_ignored,
     )
+    root_validator()
     if visit.error is not None:
         return visit
 
@@ -110,12 +175,17 @@ def collect_git_inventory_stream(
         selected_is_worktree_root = root.resolve(strict=True) == repository.root.resolve(strict=True)
     except (OSError, RuntimeError):
         selected_is_worktree_root = False
+    root_validator()
     if selected_is_worktree_root:
         admin_path = root / ".git"
         try:
-            admin_snapshot = lstat_reader(admin_path)
+            admin_snapshot = metadata.read(PurePosixPath(".git"), display_path=admin_path)
         except FileNotFoundError:
             pass
+        except DirectorySafetyError as error:
+            accounting.discover(root)
+            accounting.record(root, RecordDisposition.RECORD_ERROR)
+            diagnostics.append(traversal_diagnostic(root, admin_path, error))
         except OSError as error:
             accounting.discover(root)
             accounting.record(root, RecordDisposition.RECORD_ERROR)
@@ -132,4 +202,5 @@ def collect_git_inventory_stream(
         accounting.discover(root)
         accounting.record(root, RecordDisposition.RECORD_ERROR)
         diagnostics.append(ignore_diagnostic(root, visit.warning, warning=False))
+    root_validator()
     return visit

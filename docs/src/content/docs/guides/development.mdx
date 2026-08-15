@@ -62,7 +62,7 @@ uv run pyright
 Tests use temporary repositories with controlled timestamps for Git integration
 behavior. Filesystem capability tests must report or skip unavailable creation
 time rather than substituting POSIX ctime. Linux tests exercise the native
-`statx` adapter, nanosecond provenance, identity validation, and final-symlink
+`statx` adapter, nanosecond provenance, identity validation, and component-safe
 no-follow behavior.
 
 ## Measure performance
@@ -220,15 +220,19 @@ boundaries. For a file/symlink scan that respects ignore rules inside a Git
 worktree, local NUL-delimited `git ls-files` plumbing supplies tracked,
 untracked, and ignored path candidates using Git's standard ignore semantics.
 Git never supplies filesystem types or timestamps: every included candidate
-must still pass a current no-follow filesystem metadata read through the same
-adapter used by native traversal. On Linux, a combined `statx` snapshot may
+must still pass a current no-follow filesystem metadata read. The fast inventory
+reader opens every parent component relative to a validated root descriptor,
+never follows intermediate or final symlinks, and keeps only a bounded LRU of
+directory descriptors. On Linux, a combined `statx` snapshot may
 supply both portable fields and birth time in one call. A failed combined read
 falls back to `lstat` for portable fields while retaining the original
 birth-time failure without an immediate retry, so it cannot hide otherwise
-readable metadata. Native traversal resolves that combined read relative to the
-safely opened directory descriptor, preserving its no-follow replacement
-protection without adding a second path-based metadata lookup. An index-only
-path absent from the current worktree is therefore not filesystem evidence.
+readable metadata. Native traversal resolves the same read relative to safely
+opened directory descriptors. Platforms without component-safe descriptor
+lookup do not use the path-driven fast reader; they combine the bounded Git
+inventory with native traversal instead of polling the selected root around
+every entry. An index-only path absent from the current worktree is therefore
+not filesystem evidence.
 Directory scans combine the same inventory's ignored-directory boundaries with
 the native no-follow walker,
 so current and empty directories remain discoverable without entering ignored
@@ -241,10 +245,17 @@ reintroduce per-entry path resolution for repository/admin containment.
 Apply the containing repository's ignore result before transferring ownership
 to an embedded repository: ignored boundaries are pruned, visible boundaries
 receive their own scan context, and separately requested nested roots remain
-independent members of the requested root union.
+independent members of the requested root union. Explicit roots statically own
+their exact path or subtree; automatically discovered repository roots skip
+those scopes rather than speculatively replacing them. A later failure can
+therefore never erase an explicit request, and successful scans cannot produce
+duplicate evidence.
 
-`FilesystemCollector` resolves and schedules roots; `collection/filesystem/root`
-applies entry, ignore, and extraction policy to one prepared root.
+`FilesystemCollector` resolves roots, `collection/filesystem/root_schedule`
+partitions ownership and orders dynamic repository handoffs,
+`collection/filesystem/inventory_metadata` owns safe inventory-path lookup, and
+`collection/filesystem/root` applies entry, ignore, and extraction policy to one
+prepared root.
 
 Filesystem record discovery is defined by requested metadata-bearing entry
 kinds, not by walker implementation details. A directory used only to reach
