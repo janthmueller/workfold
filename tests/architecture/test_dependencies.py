@@ -83,6 +83,35 @@ def test_collection_adapters_do_not_import_each_other() -> None:
     assert not violations, "collection adapters import each other:\n" + "\n".join(violations)
 
 
+def test_application_uses_the_git_source_boundary() -> None:
+    violations: list[str] = []
+    allowed_prefix = "workfold.collection.git.evidence"
+    for path in sorted((PACKAGE_ROOT / "application").rglob("*.py")):
+        for dependency, line in _imports(path):
+            if dependency.startswith("workfold.collection.git.") and not dependency.startswith(allowed_prefix):
+                relative = path.relative_to(PACKAGE_ROOT.parent)
+                violations.append(f"{relative}:{line}: imports {dependency}")
+
+    assert not violations, "application bypasses the Git source boundary:\n" + "\n".join(violations)
+
+
+def test_reporting_consumes_only_the_stable_report_contract() -> None:
+    forbidden = (
+        "workfold.application.collection",
+        "workfold.application.execution",
+        "workfold.application.report_context",
+        "workfold.collection",
+    )
+    violations: list[str] = []
+    for path in sorted((PACKAGE_ROOT / "reporting").rglob("*.py")):
+        for dependency, line in _imports(path):
+            if any(dependency == prefix or dependency.startswith(prefix + ".") for prefix in forbidden):
+                relative = path.relative_to(PACKAGE_ROOT.parent)
+                violations.append(f"{relative}:{line}: imports {dependency}")
+
+    assert not violations, "reporting bypasses the report contract:\n" + "\n".join(violations)
+
+
 def test_workfold_module_graph_is_acyclic() -> None:
     graph = _module_graph()
     cycle = _find_cycle(graph)

@@ -1,7 +1,7 @@
 from dataclasses import replace
 
 import pytest
-from workfold.collection.diagnostics import CollectorDiagnostic
+from workfold.application.report import DiagnosticFacts
 from workfold.configuration import BandLabel, ClusterAnchor, EventListSelection, GridStyle, MarkerStyle
 from workfold.domain.evidence import EvidenceKind
 from workfold.domain.observations import Source
@@ -110,7 +110,7 @@ def test_zero_event_summary_uses_na_percentages() -> None:
 
 def test_verbose_renderer_restores_operational_and_exact_scope_details() -> None:
     value = report(classified_marker("event", 8, 0, source=Source.GIT, within_schedule=True))
-    context = replace(value.context, options=replace(value.context.options, exclusions=("*.tmp",)))
+    context = replace(value.context, scope=replace(value.context.scope, exclusions=("*.tmp",)))
     rendered = render_terminal(replace(value, context=context), options=TerminalOptions(width=80, verbose=True))
 
     assert rendered.index("Events") < rendered.index("Details")
@@ -158,7 +158,7 @@ def test_requested_coverage_details_remain_visible_without_verbose_configuration
 def test_long_scope_facts_wrap_between_words() -> None:
     value = report()
     exclusion = "generated artifacts in deeply nested output directories"
-    context = replace(value.context, options=replace(value.context.options, exclusions=(exclusion,)))
+    context = replace(value.context, scope=replace(value.context.scope, exclusions=(exclusion,)))
     rendered = render_terminal(replace(value, context=context), options=TerminalOptions(width=80, verbose=True))
     assert "Coverage" in rendered
     assert "gene\nrated" not in rendered
@@ -167,11 +167,10 @@ def test_long_scope_facts_wrap_between_words() -> None:
 
 def test_partial_coverage_status_remains_intact_in_default_summary() -> None:
     value = report()
-    diagnostic = CollectorDiagnostic("failure", "test", "/repo", "failed")
     context = replace(
         value.context,
-        collection=replace(value.context.collection, diagnostics=(diagnostic,)),
-        options=replace(value.context.options, exclusions=("*.tmp",)),
+        collection=replace(value.context.collection, diagnostics=DiagnosticFacts(errors=1)),
+        scope=replace(value.context.scope, exclusions=("*.tmp",)),
     )
     rendered = render_terminal(replace(value, context=context), options=TerminalOptions(width=80))
     assert "Coverage  partial · 1 collection error; explicit exclusions active" in rendered

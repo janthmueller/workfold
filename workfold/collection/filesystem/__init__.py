@@ -5,6 +5,7 @@ from workfold.collection.filesystem.models import (
     CollectedFilesystemEntry,
     FilesystemAccounting,
     FilesystemCollectionResult,
+    FilesystemCollectionSummary,
     TimestampExtractionCoverage,
 )
 from workfold.collection.filesystem.scan import DirectorySafetyError, FilesystemObservationConsumer
@@ -15,6 +16,7 @@ __all__ = [
     "DirectorySafetyError",
     "FilesystemAccounting",
     "FilesystemCollectionResult",
+    "FilesystemCollectionSummary",
     "FilesystemCollector",
     "FilesystemObservationConsumer",
     "TimestampExtractionCoverage",

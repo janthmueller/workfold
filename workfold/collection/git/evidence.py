@@ -65,17 +65,85 @@ class GitEvidenceRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class GitCommitInputTargetSummary:
+    root: Path
+    reachable: int
+    examined: int
+    candidates: int
+    hydrated: int
+    selected: int
+    scope_evaluation_errors: int
+    unavailable: int
+    parse_failures: int
+    operational_errors: int
+
+
+@dataclass(frozen=True, slots=True)
+class GitCommitInputSummary:
+    reachable: int
+    examined: int
+    candidates: int
+    hydrated: int
+    selected: int
+    scope_evaluation_errors: int
+    record_errors: int
+    targets: tuple[GitCommitInputTargetSummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GitFileChangeTargetSummary:
+    root: Path
+    commits_requested: int
+    successfully_parsed: int
+    parse_failures: int
+    subprocess_failures: int
+    changes_discovered: int
+
+
+@dataclass(frozen=True, slots=True)
+class GitFileChangeSummary:
+    commits_requested: int
+    successfully_parsed: int
+    parse_failures: int
+    subprocess_failures: int
+    changes_discovered: int
+    targets: tuple[GitFileChangeTargetSummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GitTagSummary:
+    annotated: int
+    lightweight: int
+
+
+@dataclass(frozen=True, slots=True)
+class GitReflogSummary:
+    available: int
+    unavailable: int
+
+
+@dataclass(frozen=True, slots=True)
+class GitEvidenceSummary:
+    """Stable source-level facts independent of individual Git collectors."""
+
+    roots: tuple[Path, ...] = ()
+    commit_inputs: GitCommitInputSummary | None = None
+    file_changes: GitFileChangeSummary | None = None
+    duplicate_commit_ids: int = 0
+    duplicate_targets: int = 0
+    linked_worktree_contexts: int = 0
+    tags: GitTagSummary | None = None
+    reflogs: GitReflogSummary | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class GitEvidenceCollectionResult:
     """One coherent Git source outcome with its collector-owned accounting."""
 
     diagnostics: tuple[CollectorDiagnostic, ...]
     successful: bool
     coverage: CoverageFragment
-    commit_result: GitCollectionResult | None = None
-    file_change_result: GitFileChangeCollectionResult | None = None
-    tag_result: GitTagCollectionResult | None = None
-    reflog_result: GitReflogCollectionResult | None = None
-    repository_resolution: GitRepositoryResolutionResult | None = None
+    summary: GitEvidenceSummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,16 +285,129 @@ class GitEvidenceCollector:
             commit_timestamps=request.commit_timestamps,
             file_change_timestamps=request.file_change_timestamps,
         )
-        return GitEvidenceCollectionResult(
-            diagnostics=tuple(diagnostics),
-            successful=successful,
-            coverage=coverage,
+        summary = _build_summary(
+            request=request,
             commit_result=commit_result,
             file_change_result=file_result,
             tag_result=tag_result,
             reflog_result=reflog_result,
             repository_resolution=repository_resolution,
         )
+        return GitEvidenceCollectionResult(
+            diagnostics=tuple(diagnostics),
+            successful=successful,
+            coverage=coverage,
+            summary=summary,
+        )
+
+
+def _build_summary(
+    *,
+    request: GitEvidenceRequest,
+    commit_result: GitCollectionResult | None,
+    file_change_result: GitFileChangeCollectionResult | None,
+    tag_result: GitTagCollectionResult | None,
+    reflog_result: GitReflogCollectionResult | None,
+    repository_resolution: GitRepositoryResolutionResult | None,
+) -> GitEvidenceSummary:
+    repositories = (
+        commit_result.repositories
+        if commit_result is not None
+        else (repository_resolution.repositories if repository_resolution is not None else ())
+    )
+    roots = tuple(dict.fromkeys(item.root for item in repositories))
+    duplicate_targets = 0
+    linked_worktree_contexts = 0
+    if commit_result is not None:
+        duplicate_targets += commit_result.duplicate_targets
+        if commit_result.repository_accounting:
+            linked_worktree_contexts = max(
+                0,
+                len(commit_result.repositories) - len(commit_result.repository_accounting),
+            )
+    if repository_resolution is not None:
+        duplicate_targets += repository_resolution.duplicate_targets
+    return GitEvidenceSummary(
+        roots=roots,
+        commit_inputs=(
+            _commit_input_summary(commit_result)
+            if request.file_change_timestamps and commit_result is not None
+            else None
+        ),
+        file_changes=(
+            _file_change_summary(file_change_result) if file_change_result is not None else None
+        ),
+        duplicate_commit_ids=commit_result.duplicate_commit_ids if commit_result is not None else 0,
+        duplicate_targets=duplicate_targets,
+        linked_worktree_contexts=linked_worktree_contexts,
+        tags=(
+            GitTagSummary(tag_result.annotated_tags, tag_result.lightweight_tags)
+            if tag_result is not None
+            else None
+        ),
+        reflogs=(
+            GitReflogSummary(len(reflog_result.available_refs), len(reflog_result.refs_without_reflog))
+            if reflog_result is not None
+            else None
+        ),
+    )
+
+
+def _commit_input_summary(result: GitCollectionResult) -> GitCommitInputSummary:
+    accounting = result.repository_accounting
+    examined = sum(item.examined_commits for item in accounting)
+    candidates = sum(item.candidate_commits for item in accounting)
+    selected = sum(item.selected_commits for item in accounting)
+    hydrated = sum(item.hydrated_commits for item in accounting)
+    if not accounting:
+        examined = candidates = selected = hydrated = len(result.commits)
+    return GitCommitInputSummary(
+        reachable=result.discovered_commit_ids,
+        examined=examined,
+        candidates=candidates,
+        hydrated=hydrated,
+        selected=selected,
+        scope_evaluation_errors=sum(
+            count for item in accounting for _role, count in item.scope_evaluation_errors
+        ),
+        record_errors=sum(item.record_errors for item in accounting),
+        targets=tuple(
+            GitCommitInputTargetSummary(
+                root=item.repository.root,
+                reachable=item.discovered_commit_ids,
+                examined=item.examined_commits,
+                candidates=item.candidate_commits,
+                hydrated=item.hydrated_commits,
+                selected=item.selected_commits,
+                scope_evaluation_errors=sum(count for _role, count in item.scope_evaluation_errors),
+                unavailable=item.unavailable_objects,
+                parse_failures=item.parse_errors,
+                operational_errors=item.operational_errors,
+            )
+            for item in accounting
+        ),
+    )
+
+
+def _file_change_summary(result: GitFileChangeCollectionResult) -> GitFileChangeSummary:
+    return GitFileChangeSummary(
+        commits_requested=result.requested_commits,
+        successfully_parsed=result.successful_commits,
+        parse_failures=result.parse_errors,
+        subprocess_failures=result.subprocess_errors,
+        changes_discovered=result.discovered_changes,
+        targets=tuple(
+            GitFileChangeTargetSummary(
+                root=item.repository.root,
+                commits_requested=item.requested_commits,
+                successfully_parsed=item.successful_commits,
+                parse_failures=item.parse_errors,
+                subprocess_failures=item.subprocess_errors,
+                changes_discovered=item.discovered_changes,
+            )
+            for item in result.repository_accounting
+        ),
+    )
 
 
 def _commit_matches_scope(
@@ -299,9 +480,16 @@ def _validate_commit_timestamps(kinds: tuple[TimestampKind, ...], *, label: str)
 
 
 __all__ = [
+    "GitCommitInputSummary",
+    "GitCommitInputTargetSummary",
     "GitEvidenceCollectionResult",
     "GitEvidenceCollector",
     "GitEvidenceRequest",
+    "GitEvidenceSummary",
+    "GitFileChangeSummary",
+    "GitFileChangeTargetSummary",
     "GitObservationConsumer",
+    "GitReflogSummary",
+    "GitTagSummary",
     "merge_file_change_results",
 ]

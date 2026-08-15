@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from workfold.configuration.options import RunOptions
+from workfold.application.report import ReportScope
 from workfold.domain.observations import RecordKind, Source, TimestampKind
 
 
-def enabled_sources(options: RunOptions) -> tuple[Source, ...]:
-    return options.evidence.sources
+def enabled_sources(scope: ReportScope) -> tuple[Source, ...]:
+    return scope.sources
 
 
-def coverage_scope_details(options: RunOptions) -> tuple[str, ...]:
-    requested = ", ".join(kind.value for kind in options.evidence.kinds)
+def coverage_scope_details(scope: ReportScope) -> tuple[str, ...]:
+    requested = ", ".join(kind.value for kind in scope.evidence.kinds)
     return (f"scope event kinds: requested={requested}",)
 
 

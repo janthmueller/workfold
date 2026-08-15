@@ -65,7 +65,7 @@ def render_legend(report: Report, options: TerminalOptions) -> tuple[Text, ...]:
         items.append(Text("×N exact count", style="dim"))
 
     lines = list(_pack_legend_items(items, options.width))
-    schedule = f"Working hours: {sanitize_terminal_text(report.context.schedule)}"
+    schedule = f"Working hours: {sanitize_terminal_text(report.context.scope.schedule)}"
     lines.extend(Text(chunk) for chunk in column_chunks(schedule, options.width))
     return tuple(lines)
 

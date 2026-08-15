@@ -11,11 +11,11 @@ from workfold.application.collection import Collection, CollectorServices, colle
 from workfold.application.coverage import build_coverage
 from workfold.application.report import (
     Report,
-    ReportContext,
     ReportRequirements,
     build_report,
     matches_event_list,
 )
+from workfold.application.report_context import build_report_context
 from workfold.application.resolution import resolve_date_range, resolve_schedule, resolve_timezone_selection
 from workfold.collection.diagnostics import diagnostics_are_partial
 from workfold.configuration.options import RunOptions
@@ -104,7 +104,7 @@ def execute(
             raise RuntimeError("coverage marker totals do not match the classified marker stream")
         report = build_report(
             chart,
-            ReportContext(
+            build_report_context(
                 options=options,
                 collection=collection,
                 time_selection=time_selection,

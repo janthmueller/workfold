@@ -5,7 +5,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from workfold.application.collection import Collection
-from workfold.application.report import Report, ReportContext, build_report, matches_event_list
+from workfold.application.report import Report, build_report, matches_event_list
+from workfold.application.report_context import build_report_context
 from workfold.application.resolution import ResolvedTimeSelection
 from workfold.cli import parse_options
 from workfold.configuration import ClusterAnchor, EventListSelection, ListSchedule
@@ -106,7 +107,7 @@ def report(
         hide_empty_days=hide_empty_days,
     )
     options = parse_options(["--mode", "both", "--time", "2026-W32", "--timezone", "UTC"])
-    context = ReportContext(
+    context = build_report_context(
         options=options,
         collection=Collection((), (), True),
         time_selection=ResolvedTimeSelection(all_time_range(), "2026-W32"),

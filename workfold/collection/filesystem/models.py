@@ -188,6 +188,15 @@ class CollectedFilesystemEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class FilesystemCollectionSummary:
+    """Stable source-level facts independent of scan implementation details."""
+
+    roots: tuple[Path, ...]
+    pruned_ignored_subtrees: int = 0
+    overlapping_roots_deduplicated: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class FilesystemCollectionResult:
     """Domain observations plus honest filesystem-specific accounting."""
 
@@ -218,6 +227,14 @@ class FilesystemCollectionResult:
         """Return whether an operational error prevented complete collection."""
 
         return diagnostics_are_partial(self.diagnostics)
+
+    @property
+    def summary(self) -> FilesystemCollectionSummary:
+        return FilesystemCollectionSummary(
+            roots=self.scan_roots,
+            pruned_ignored_subtrees=self.accounting.pruned_ignored_subtrees,
+            overlapping_roots_deduplicated=self.overlapping_roots_deduplicated,
+        )
 
     def build_coverage(
         self,

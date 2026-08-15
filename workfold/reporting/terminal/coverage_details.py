@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from workfold.application.collection import Collection
-from workfold.application.collection_plan import CollectionPlan
-from workfold.configuration.options import RunOptions
+from workfold.application.report import CollectionFacts, ReportScope
 from workfold.domain.coverage import CapabilityStatus, CoverageLedger
 from workfold.domain.evidence import EvidenceKind
 from workfold.domain.observations import RecordKind
@@ -19,8 +17,8 @@ from workfold.reporting.terminal.coverage_scope import (
 
 def coverage_details(
     ledger: CoverageLedger,
-    collection: Collection,
-    options: RunOptions,
+    collection: CollectionFacts,
+    scope: ReportScope,
 ) -> tuple[str, ...]:
     """Render verbose coverage accounting for terminal presentation."""
 
@@ -30,7 +28,7 @@ def coverage_details(
         f"timestamp values matching scope: {ledger.timestamp_values_matching_scope:,}",
         f"timestamp observations selected: {ledger.observations_selected:,}",
         f"activity markers plotted: {ledger.markers_plotted:,}",
-        *coverage_scope_details(options),
+        *coverage_scope_details(scope),
     ]
     coalesced_total = sum(item.coalesced_into_markers for item in ledger.timestamps)
     if coalesced_total:
@@ -60,10 +58,8 @@ def coverage_details(
         )
         extras = [f"{label}={counts[name]:,}" for name, label in outcomes if counts[name]]
         details.append(line + ("; " + ", ".join(extras) if extras else ""))
-    if collection.filesystem_result is not None:
-        pruned = collection.filesystem_result.accounting.pruned_ignored_subtrees
-        if pruned:
-            details.append(pruned_ignored_subtree_label(pruned))
+    if collection.pruned_ignored_subtrees:
+        details.append(pruned_ignored_subtree_label(collection.pruned_ignored_subtrees))
 
     timestamp_counts: dict[EvidenceKind, Counter[str]] = {}
     for item in ledger.timestamps:
@@ -109,59 +105,48 @@ def coverage_details(
         ]
         details.append(line + ("; " + ", ".join(extras) if extras else ""))
 
-    plan = CollectionPlan.from_selection(options.evidence)
-    if collection.commit_result is not None and plan.file_change_timestamps:
-        commit_result = collection.commit_result
-        examined_commits = sum(item.examined_commits for item in commit_result.repository_accounting)
-        candidate_commits = sum(item.candidate_commits for item in commit_result.repository_accounting)
-        selected_commits = sum(item.selected_commits for item in commit_result.repository_accounting)
-        hydrated_commits = sum(item.hydrated_commits for item in commit_result.repository_accounting)
-        scope_evaluation_errors = sum(
-            count for item in commit_result.repository_accounting for _role, count in item.scope_evaluation_errors
-        )
-        if not commit_result.repository_accounting:
-            examined_commits = candidate_commits = selected_commits = hydrated_commits = len(commit_result.commits)
+    if collection.commit_inputs is not None:
+        commit_inputs = collection.commit_inputs
         details.append(
             "Git commit inputs for file-change derivation: "
-            f"reachable={commit_result.discovered_commit_ids:,}, "
-            f"examined={examined_commits:,}, candidates={candidate_commits:,}, "
-            f"hydrated={hydrated_commits:,}, selected={selected_commits:,}, "
-            f"scope evaluation errors={scope_evaluation_errors:,}, "
-            f"record errors={sum(item.record_errors for item in commit_result.repository_accounting):,}"
+            f"reachable={commit_inputs.reachable:,}, "
+            f"examined={commit_inputs.examined:,}, candidates={commit_inputs.candidates:,}, "
+            f"hydrated={commit_inputs.hydrated:,}, selected={commit_inputs.selected:,}, "
+            f"scope evaluation errors={commit_inputs.scope_evaluation_errors:,}, "
+            f"record errors={commit_inputs.record_errors:,}"
         )
-        for accounting in commit_result.repository_accounting:
-            target_scope_errors = sum(count for _role, count in accounting.scope_evaluation_errors)
+        for target in commit_inputs.targets:
             details.append(
-                f"target Git commit inputs [git] {accounting.repository.root}: "
-                f"reachable={accounting.discovered_commit_ids:,}, "
-                f"examined={accounting.examined_commits:,}, "
-                f"candidates={accounting.candidate_commits:,}, "
-                f"hydrated={accounting.hydrated_commits:,}, "
-                f"selected={accounting.selected_commits:,}, "
-                f"scope evaluation errors={target_scope_errors:,}, "
-                f"unavailable={accounting.unavailable_objects:,}, "
-                f"parse failures={accounting.parse_errors:,}, "
-                f"operational errors={accounting.operational_errors:,}"
+                f"target Git commit inputs [git] {target.root}: "
+                f"reachable={target.reachable:,}, "
+                f"examined={target.examined:,}, "
+                f"candidates={target.candidates:,}, "
+                f"hydrated={target.hydrated:,}, "
+                f"selected={target.selected:,}, "
+                f"scope evaluation errors={target.scope_evaluation_errors:,}, "
+                f"unavailable={target.unavailable:,}, "
+                f"parse failures={target.parse_failures:,}, "
+                f"operational errors={target.operational_errors:,}"
             )
 
-    if collection.file_change_result is not None:
-        file_result = collection.file_change_result
+    if collection.file_changes is not None:
+        file_changes = collection.file_changes
         details.append(
             "Git file-change derivation: "
-            f"commits requested={file_result.requested_commits:,}, "
-            f"successfully parsed={file_result.successful_commits:,}, "
-            f"parse failures={file_result.parse_errors:,}, "
-            f"subprocess failures={file_result.subprocess_errors:,}, "
-            f"file changes discovered={file_result.discovered_changes:,}"
+            f"commits requested={file_changes.commits_requested:,}, "
+            f"successfully parsed={file_changes.successfully_parsed:,}, "
+            f"parse failures={file_changes.parse_failures:,}, "
+            f"subprocess failures={file_changes.subprocess_failures:,}, "
+            f"file changes discovered={file_changes.changes_discovered:,}"
         )
-        for accounting in file_result.repository_accounting:
+        for target in file_changes.targets:
             details.append(
-                f"target Git file-change derivation [git] {accounting.repository.root}: "
-                f"commits requested={accounting.requested_commits:,}, "
-                f"successfully parsed={accounting.successful_commits:,}, "
-                f"parse failures={accounting.parse_errors:,}, "
-                f"subprocess failures={accounting.subprocess_errors:,}, "
-                f"file changes discovered={accounting.discovered_changes:,}"
+                f"target Git file-change derivation [git] {target.root}: "
+                f"commits requested={target.commits_requested:,}, "
+                f"successfully parsed={target.successfully_parsed:,}, "
+                f"parse failures={target.parse_failures:,}, "
+                f"subprocess failures={target.subprocess_failures:,}, "
+                f"file changes discovered={target.changes_discovered:,}"
             )
 
     for item in ledger.records:
@@ -192,42 +177,36 @@ def coverage_details(
             f"target timestamps [{item.key.source.value}] {item.key.target} {evidence_kind.value}: {outcomes}"
         )
 
-    if collection.commit_result is not None and collection.commit_result.duplicate_commit_ids:
-        details.append(f"duplicate commit IDs deduplicated: {collection.commit_result.duplicate_commit_ids:,}")
-    duplicate_targets = 0
-    if collection.commit_result is not None:
-        duplicate_targets += collection.commit_result.duplicate_targets
-        if collection.commit_result.repository_accounting:
-            shared_contexts = len(collection.commit_result.repositories) - len(
-                collection.commit_result.repository_accounting
-            )
-            if shared_contexts > 0:
-                details.append(f"linked worktree contexts sharing commit history: {shared_contexts:,}")
-    if collection.repository_resolution is not None:
-        duplicate_targets += collection.repository_resolution.duplicate_targets
-    if duplicate_targets:
-        details.append(f"duplicate selected Git targets deduplicated: {duplicate_targets:,}")
-    if collection.tag_result is not None:
+    if collection.duplicate_commit_ids:
+        details.append(f"duplicate commit IDs deduplicated: {collection.duplicate_commit_ids:,}")
+    if collection.linked_worktree_contexts:
         details.append(
-            f"tags: {collection.tag_result.annotated_tags:,} annotated, "
-            f"{collection.tag_result.lightweight_tags:,} lightweight"
+            f"linked worktree contexts sharing commit history: {collection.linked_worktree_contexts:,}"
         )
-    if collection.reflog_result is not None:
+    if collection.duplicate_git_targets:
+        details.append(f"duplicate selected Git targets deduplicated: {collection.duplicate_git_targets:,}")
+    if collection.tags is not None:
         details.append(
-            f"reflogs: {len(collection.reflog_result.available_refs):,} available, "
-            f"{len(collection.reflog_result.refs_without_reflog):,} unavailable"
+            f"tags: {collection.tags.annotated:,} annotated, "
+            f"{collection.tags.lightweight:,} lightweight"
         )
-    if collection.filesystem_result is not None and collection.filesystem_result.overlapping_roots_deduplicated:
+    if collection.reflogs is not None:
+        details.append(
+            f"reflogs: {collection.reflogs.available:,} available, "
+            f"{collection.reflogs.unavailable:,} unavailable"
+        )
+    if collection.overlapping_filesystem_roots:
         details.append(
             "overlapping filesystem roots deduplicated: "
-            f"{collection.filesystem_result.overlapping_roots_deduplicated:,}"
+            f"{collection.overlapping_filesystem_roots:,}"
         )
     for capability in collection.capabilities:
         if capability.status is not CapabilityStatus.SUPPORTED or capability.note:
             note = f" ({capability.note})" if capability.note else ""
             details.append(f"{capability.name}: {capability.status.value}{note}")
-    if collection.diagnostics:
-        errors, warnings, infos = collection.diagnostic_counts
+    diagnostic_facts = collection.diagnostics
+    if diagnostic_facts.errors or diagnostic_facts.warnings or diagnostic_facts.infos:
+        errors, warnings, infos = diagnostic_facts.errors, diagnostic_facts.warnings, diagnostic_facts.infos
         counts = [f"{errors:,} error(s)", f"{warnings:,} warning(s)"]
         if infos:
             counts.append(f"{infos:,} info message(s)")

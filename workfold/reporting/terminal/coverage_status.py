@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping
 
-from workfold.application.collection import Collection
-from workfold.configuration.options import RunOptions
+from workfold.application.report import CollectionFacts, ReportScope
 from workfold.domain.coverage import CapabilityStatus, CoverageLedger
 from workfold.domain.observations import TimestampKind
 from workfold.reporting.terminal.coverage_scope import pruned_ignored_subtree_label, timestamp_label
@@ -15,23 +14,15 @@ COMPLETE_COVERAGE_STATUS = "complete for all discoverable timestamps in the requ
 
 
 def coverage_status_label(
-    collection: Collection,
+    collection: CollectionFacts,
     ledger: CoverageLedger,
-    options: RunOptions,
+    scope: ReportScope,
 ) -> str:
     """Summarize whether enabled collectors completed their requested scope."""
 
-    error_count, _warning_count, _info_count = collection.diagnostic_counts
-    filesystem_inventory_incomplete = sum(
-        item.completeness_failure_count
-        for item in collection.diagnostics
-        if item.code == "git_filesystem_inventory_incomplete"
-    )
-    other_partial_warning_count = sum(
-        item.completeness_failure_count
-        for item in collection.diagnostics
-        if item.code != "git_filesystem_inventory_incomplete"
-    )
+    error_count = collection.diagnostics.errors
+    filesystem_inventory_incomplete = collection.diagnostics.filesystem_inventory_failures
+    other_partial_warning_count = collection.diagnostics.other_completeness_failures
     if error_count or filesystem_inventory_incomplete or other_partial_warning_count or ledger.has_operational_errors:
         reasons: list[str] = []
         if filesystem_inventory_incomplete:
@@ -50,15 +41,11 @@ def coverage_status_label(
     else:
         label = COMPLETE_COVERAGE_STATUS
     qualifiers: list[str] = []
-    if options.git_identities:
+    if scope.git_identities:
         qualifiers.append("Git identity scope active")
-    if options.exclusions:
+    if scope.exclusions:
         qualifiers.append("explicit exclusions active")
-    pruned_ignored_subtrees = (
-        collection.filesystem_result.accounting.pruned_ignored_subtrees
-        if collection.filesystem_result is not None
-        else 0
-    )
+    pruned_ignored_subtrees = collection.pruned_ignored_subtrees
     if pruned_ignored_subtrees:
         qualifiers.append(pruned_ignored_subtree_label(pruned_ignored_subtrees))
     unsupported_capabilities: dict[str, str | None] = {}

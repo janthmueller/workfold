@@ -4,16 +4,151 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
-from workfold.application.collection import Collection
-from workfold.application.resolution import ResolvedTimeSelection
-from workfold.configuration.options import EventListSelection, RunOptions
-from workfold.domain.coverage import CoverageLedger
-from workfold.domain.evidence import EvidenceKind
-from workfold.domain.observations import ClassifiedMarker, RecordOrigin, TimestampKind
+from workfold.configuration.options import EventListSelection
+from workfold.domain.coverage import Capability, CoverageLedger
+from workfold.domain.evidence import EvidenceKind, EvidenceSelection
+from workfold.domain.observations import ClassifiedMarker, RecordOrigin, Source, TimestampKind
 from workfold.domain.schedule import Schedule
+from workfold.domain.scope import RefScope
 from workfold.folding import Aggregation
+
+
+@dataclass(frozen=True, slots=True)
+class ReportScope:
+    """Resolved user-facing scope needed by any report renderer."""
+
+    period_label: str
+    timezone_name: str
+    schedule: Schedule
+    profile_name: str
+    evidence: EvidenceSelection
+    ref_scope: RefScope
+    git_identities: tuple[str, ...]
+    include_ignored: bool
+    exclusions: tuple[str, ...]
+
+    @property
+    def sources(self) -> tuple[Source, ...]:
+        return self.evidence.sources
+
+    def includes_source(self, source: Source) -> bool:
+        return self.evidence.includes_source(source)
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticFacts:
+    """Counts needed to describe collection completeness without raw diagnostics."""
+
+    errors: int = 0
+    warnings: int = 0
+    infos: int = 0
+    filesystem_inventory_failures: int = 0
+    other_completeness_failures: int = 0
+
+    def __post_init__(self) -> None:
+        if min(
+            self.errors,
+            self.warnings,
+            self.infos,
+            self.filesystem_inventory_failures,
+            self.other_completeness_failures,
+        ) < 0:
+            raise ValueError("diagnostic report counts must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class GitCommitInputTargetFacts:
+    """Commit-scan facts for one file-change derivation target."""
+
+    root: str
+    reachable: int
+    examined: int
+    candidates: int
+    hydrated: int
+    selected: int
+    scope_evaluation_errors: int
+    unavailable: int
+    parse_failures: int
+    operational_errors: int
+
+
+@dataclass(frozen=True, slots=True)
+class GitCommitInputFacts:
+    """Aggregate commit inputs used to derive requested file-change evidence."""
+
+    reachable: int
+    examined: int
+    candidates: int
+    hydrated: int
+    selected: int
+    scope_evaluation_errors: int
+    record_errors: int
+    targets: tuple[GitCommitInputTargetFacts, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GitFileChangeTargetFacts:
+    """File-change derivation facts for one Git repository."""
+
+    root: str
+    commits_requested: int
+    successfully_parsed: int
+    parse_failures: int
+    subprocess_failures: int
+    changes_discovered: int
+
+
+@dataclass(frozen=True, slots=True)
+class GitFileChangeFacts:
+    """Aggregate Git file-change derivation facts."""
+
+    commits_requested: int
+    successfully_parsed: int
+    parse_failures: int
+    subprocess_failures: int
+    changes_discovered: int
+    targets: tuple[GitFileChangeTargetFacts, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GitTagFacts:
+    annotated: int
+    lightweight: int
+
+
+@dataclass(frozen=True, slots=True)
+class GitReflogFacts:
+    available: int
+    unavailable: int
+
+
+@dataclass(frozen=True, slots=True)
+class CollectionFacts:
+    """Stable report projection of collection outcomes and capabilities."""
+
+    diagnostics: DiagnosticFacts = DiagnosticFacts()
+    capabilities: tuple[Capability, ...] = ()
+    git_roots: tuple[str, ...] = ()
+    filesystem_roots: tuple[str, ...] = ()
+    pruned_ignored_subtrees: int = 0
+    commit_inputs: GitCommitInputFacts | None = None
+    file_changes: GitFileChangeFacts | None = None
+    duplicate_commit_ids: int = 0
+    duplicate_git_targets: int = 0
+    linked_worktree_contexts: int = 0
+    tags: GitTagFacts | None = None
+    reflogs: GitReflogFacts | None = None
+    overlapping_filesystem_roots: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ReportContext:
+    """Structured scope and accounting facts shared by report renderers."""
+
+    scope: ReportScope
+    collection: CollectionFacts
+    coverage: CoverageLedger
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,18 +162,6 @@ class ReportRequirements:
     def __post_init__(self) -> None:
         if self.event_limit < 0:
             raise ValueError("event_limit must not be negative")
-
-
-@dataclass(frozen=True, slots=True)
-class ReportContext:
-    """Structured scope and accounting facts shared by report renderers."""
-
-    options: RunOptions
-    collection: Collection
-    time_selection: ResolvedTimeSelection
-    timezone: ZoneInfo
-    schedule: Schedule
-    coverage: CoverageLedger
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,10 +237,19 @@ def _listed_event(classified: ClassifiedMarker, selection: EventListSelection | 
 
 
 __all__ = [
+    "CollectionFacts",
+    "DiagnosticFacts",
+    "GitCommitInputFacts",
+    "GitCommitInputTargetFacts",
+    "GitFileChangeFacts",
+    "GitFileChangeTargetFacts",
+    "GitReflogFacts",
+    "GitTagFacts",
     "ListedEvent",
     "Report",
     "ReportContext",
     "ReportRequirements",
+    "ReportScope",
     "build_report",
     "matches_event_list",
 ]

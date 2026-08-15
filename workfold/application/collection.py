@@ -7,16 +7,17 @@ from dataclasses import dataclass
 
 from workfold.application.collection_plan import CollectionPlan
 from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticSeverity
-from workfold.collection.filesystem import FilesystemCollectionResult, FilesystemCollector
-from workfold.collection.git import GitCollectionResult, GitRepositoryResolutionResult
-from workfold.collection.git.changes import GitFileChangeCollectionResult
+from workfold.collection.filesystem import (
+    FilesystemCollectionResult,
+    FilesystemCollectionSummary,
+    FilesystemCollector,
+)
 from workfold.collection.git.evidence import (
     GitEvidenceCollectionResult,
     GitEvidenceCollector,
     GitEvidenceRequest,
+    GitEvidenceSummary,
 )
-from workfold.collection.git.reflogs import GitReflogCollectionResult
-from workfold.collection.git.tags import GitTagCollectionResult
 from workfold.configuration.options import RunOptions, UsageError
 from workfold.domain.coverage import Capability, CoverageFragment
 from workfold.domain.observations import Source, TimestampObservation
@@ -31,39 +32,9 @@ class Collection:
     diagnostics: tuple[CollectorDiagnostic, ...]
     capabilities: tuple[Capability, ...]
     any_collector_succeeded: bool
-    git_result: GitEvidenceCollectionResult | None = None
-    filesystem_result: FilesystemCollectionResult | None = None
+    git_summary: GitEvidenceSummary | None = None
+    filesystem_summary: FilesystemCollectionSummary | None = None
     coverage_fragments: tuple[CoverageFragment, ...] = ()
-
-    @property
-    def commit_result(self) -> GitCollectionResult | None:
-        """Expose commit details until report scope is detached from collectors."""
-
-        return self.git_result.commit_result if self.git_result is not None else None
-
-    @property
-    def file_change_result(self) -> GitFileChangeCollectionResult | None:
-        """Expose file-change details until report scope is detached from collectors."""
-
-        return self.git_result.file_change_result if self.git_result is not None else None
-
-    @property
-    def tag_result(self) -> GitTagCollectionResult | None:
-        """Expose tag details until report scope is detached from collectors."""
-
-        return self.git_result.tag_result if self.git_result is not None else None
-
-    @property
-    def reflog_result(self) -> GitReflogCollectionResult | None:
-        """Expose reflog details until report scope is detached from collectors."""
-
-        return self.git_result.reflog_result if self.git_result is not None else None
-
-    @property
-    def repository_resolution(self) -> GitRepositoryResolutionResult | None:
-        """Expose resolution details until report scope is detached from collectors."""
-
-        return self.git_result.repository_resolution if self.git_result is not None else None
 
     @property
     def diagnostic_counts(self) -> tuple[int, int, int]:
@@ -152,8 +123,8 @@ def collect(
         diagnostics=tuple(diagnostics),
         capabilities=tuple(capabilities),
         any_collector_succeeded=any_succeeded,
-        git_result=git_result,
-        filesystem_result=filesystem_result,
+        git_summary=git_result.summary if git_result is not None else None,
+        filesystem_summary=filesystem_result.summary if filesystem_result is not None else None,
         coverage_fragments=tuple(coverage_fragments),
     )
 

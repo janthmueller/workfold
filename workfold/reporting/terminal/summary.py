@@ -22,14 +22,14 @@ def render_summary(report: Report, options: TerminalOptions) -> str:
     if hidden_parts:
         facts.append(("Hidden", " · ".join(hidden_parts)))
     context = report.context
-    status = coverage_status_label(context.collection, context.coverage, context.options)
+    status = coverage_status_label(context.collection, context.coverage, context.scope)
     coverage_status = _default_coverage_status(status)
     if coverage_status is not None:
         facts.append(("Coverage", coverage_status))
     lines = aligned_fact_lines(facts, width)
     if options.coverage or options.verbose:
         lines.append("Coverage details:")
-        for detail in coverage_details(context.coverage, context.collection, context.options):
+        for detail in coverage_details(context.coverage, context.collection, context.scope):
             lines.extend(fact_lines("  -", detail, width))
     return "\n".join(fit_plain(line, width) for line in lines)
 
@@ -42,14 +42,14 @@ def render_details(
     show_empty_bands: bool = False,
 ) -> str:
     context = report.context
-    run_options = context.options
+    scope = context.scope
     aggregation = report.aggregation
-    sources = _enabled_sources(enabled_sources(run_options), aggregation.source_counts)
-    status = coverage_status_label(context.collection, context.coverage, run_options)
+    sources = _enabled_sources(enabled_sources(scope), aggregation.source_counts)
+    status = coverage_status_label(context.collection, context.coverage, scope)
     lines = ["Details"]
-    lines.extend(fact_lines("Scope", _scope_label(sources, run_options.profile.value), width))
-    lines.extend(fact_lines("Period", f"{context.time_selection.label} · {context.timezone.key}", width))
-    lines.extend(fact_lines("Schedule", str(context.schedule), width))
+    lines.extend(fact_lines("Scope", _scope_label(sources, scope.profile_name), width))
+    lines.extend(fact_lines("Period", f"{scope.period_label} · {scope.timezone_name}", width))
+    lines.extend(fact_lines("Schedule", str(scope.schedule), width))
     lines.extend(fact_lines("Coverage", status, width))
 
     hidden_parts = _hidden_event_parts(report)
@@ -69,18 +69,18 @@ def render_details(
         else "empty time omitted; gaps of at least one cluster window marked; busy cells use exact symbol×count"
     )
     lines.extend(fact_lines("Compression", compression, width))
-    lines.extend(fact_lines("Collector selectors", source_label(run_options), width))
-    identities = identity_label(run_options)
+    lines.extend(fact_lines("Collector selectors", source_label(scope), width))
+    identities = identity_label(scope)
     if identities is not None:
         lines.extend(fact_lines("Git identities", identities, width))
-    extents = extent_label(context.collection, run_options)
+    extents = extent_label(context.collection, scope)
     if extents is not None:
         lines.extend(fact_lines("Extents", extents, width))
-    ignore_policy = ignore_label(run_options, context.collection)
+    ignore_policy = ignore_label(scope, context.collection)
     if ignore_policy is not None:
         lines.extend(fact_lines("Filesystem policy", ignore_policy, width))
-    if run_options.exclusions:
-        lines.extend(fact_lines("Explicit exclusions", ", ".join(run_options.exclusions), width))
+    if scope.exclusions:
+        lines.extend(fact_lines("Explicit exclusions", ", ".join(scope.exclusions), width))
     return "\n".join(fit_plain(line, width) for line in lines)
 
 
