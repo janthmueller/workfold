@@ -178,9 +178,11 @@ sizes are memory controls, never collection, query, or chart semantics.
 Git implementation lives under `collection/git/`. Its `commits`, `changes`,
 `objects`, `tags`, and `reflogs` subpackages own independently named protocol
 and accounting decisions while sharing repository and process machinery. Do
-not recreate parallel top-level Git façades or a catch-all `git_core` tree.
-Keep protocol state machines independent from normalized domain conversion and
-coverage accounting.
+not recreate a parallel facade or a catch-all `git_core` tree.
+`collection/git/evidence` is the one source-level coordinator presented to the
+application; it owns ordering between those capabilities and publishes a
+normalized source summary and coverage fragment. Keep protocol state machines
+independent from normalized domain conversion and report construction.
 
 Configuration resolves time independently from evidence scope. Common evidence
 scope uses the mode/profile preset pair; exact `--events` selectors are a
@@ -211,12 +213,13 @@ cannot be silently ignored. Do not recreate parallel key/type/destination maps
 outside `configuration/schema`.
 
 Coverage data and coverage prose are also separate. `domain/coverage/models`
-defines immutable partitions and reconciliation invariants, while
-`domain/coverage/builder` owns mutable collection-time accumulation and ledger
-merging. `application/coverage/reconciliation` combines collector and pipeline
-accounting without choosing words for it. The terminal adapter owns requested
-scope descriptions, the compact completeness statement, and verbose coverage
-text.
+defines immutable source fragments, final partitions, capability kinds, and
+reconciliation invariants, while `domain/coverage/builder` owns mutable
+construction and generic fragment finalization. Every source accounts through
+the same fragment contract; `application/coverage/reconciliation` only joins
+those fragments with independently counted pipeline outcomes. The terminal
+adapter owns requested scope descriptions, the compact completeness statement,
+and verbose coverage text.
 
 Filesystem path inventory and filesystem metadata extraction are distinct
 boundaries. For a file/symlink scan that respects ignore rules inside a Git
@@ -258,7 +261,9 @@ duplicate evidence.
 partitions ownership and orders dynamic repository handoffs,
 `collection/filesystem/inventory_metadata` owns safe inventory-path lookup, and
 `collection/filesystem/root` applies entry, ignore, and extraction policy to one
-prepared root.
+prepared root. Its `RootScanRequest`, `RootScanSinks`, and `RootScanServices`
+separate immutable policy, mutable outputs, and shared platform mechanisms;
+do not expand `collect_root` back into an independently ordered parameter list.
 
 Filesystem record discovery is defined by requested metadata-bearing entry
 kinds, not by walker implementation details. A directory used only to reach
@@ -295,6 +300,13 @@ when aggregation finishes. Only the renderer creates Rich
 objects or assigns green/blue/red styles. Optional grid lines are likewise
 terminal-only presentation state and never enter the normalized event,
 classification, aggregation, or report model.
+
+Report construction projects execution state once into a stable contract:
+resolved `ReportScope`, source-neutral `CollectionFacts`, coverage, aggregation,
+and bounded provenance. Terminal modules consume that contract and must not
+reach into `RunOptions`, `Collection`, source adapters, or the execution result.
+The architecture tests enforce both this renderer boundary and the Git
+source-facade boundary.
 
 Identity-marker mode projects each visible Git marker to a compact registry ID
 before chart sorting. Full recorded names/emails are retained once per distinct

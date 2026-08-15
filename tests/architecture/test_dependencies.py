@@ -112,6 +112,17 @@ def test_reporting_consumes_only_the_stable_report_contract() -> None:
     assert not violations, "reporting bypasses the report contract:\n" + "\n".join(violations)
 
 
+def test_filesystem_root_scan_has_explicit_boundary_bundles() -> None:
+    path = PACKAGE_ROOT / "collection" / "filesystem" / "root.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    function = next(
+        node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "collect_root"
+    )
+
+    assert [item.arg for item in function.args.args] == ["root_snapshot"]
+    assert [item.arg for item in function.args.kwonlyargs] == ["request", "sinks", "services"]
+
+
 def test_workfold_module_graph_is_acyclic() -> None:
     graph = _module_graph()
     cycle = _find_cycle(graph)

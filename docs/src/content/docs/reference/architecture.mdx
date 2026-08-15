@@ -37,10 +37,10 @@ workfold/
 ├── domain/                 # observations, provenance, time, schedule, coverage
 ├── collection/
 │   ├── filesystem/         # current metadata, discovery, ignore rules, statx
-│   └── git/                # commits, changes, objects, tags, reflogs, processes
+│   └── git/                # source facade, commits, changes, tags, reflogs
 ├── folding/                # classify, cluster, aggregate, and lay out markers
 ├── application/            # execute a request and build a neutral report
-│   └── coverage/           # reconcile collector and pipeline accounting
+│   └── coverage/           # finalize source fragments with pipeline outcomes
 └── reporting/
     └── terminal/           # Rich chart, prose, summary, and event list
 ```
@@ -112,6 +112,13 @@ the rest of the program. Collection-specific records may contain additional
 implementation state, but that state cannot leak into folding or terminal
 formatting.
 
+Each source also returns an immutable coverage fragment. The fragment owns
+record discovery, timestamp extraction, scope matches, and materialization
+failures. The shared pipeline independently counts received observations and
+plotting outcomes, then a generic finalizer checks both sides of the boundary.
+Adding a source therefore does not require a new application-level coverage
+switch statement.
+
 The report is also renderer-neutral. A future renderer may consume it, but the
 MVP exposes only terminal output and does not contain a web server or browser
 application.
@@ -155,7 +162,10 @@ performs no source discovery and produces no terminal text.
 `collection.git` owns local Git subprocess protocols and Git-derived records.
 Its subpackages separate commits, file changes, raw objects, tags, and reflogs.
 They share repository and process machinery without exposing a second
-parallel `git_core` hierarchy.
+parallel `git_core` hierarchy. `collection.git.evidence` is the single
+source-level facade: it coordinates commit discovery, file-change derivation,
+tag and reflog collection, exact Git selection, source coverage, and a compact
+operational summary. Application code does not reproduce those dependencies.
 
 `collection.filesystem` owns current-snapshot discovery and metadata. Ignore
 integration is nested under this adapter because ignore rules affect only
@@ -169,7 +179,14 @@ is unavailable, the collector retains bounded Git ignore membership but uses
 native traversal. `scan` defines the shared metadata protocols and directory
 identity invariant used by both strategies. These boundaries keep ownership
 decisions out of traversal callbacks and operating-system safety decisions out
-of root orchestration.
+of root orchestration. One prepared root is passed through explicit request,
+sink, and service bundles, so scan policy, mutable accounting, and platform
+mechanisms cannot be confused by a long positional interface.
+
+Capabilities carry a typed semantic kind separately from their human-readable
+label. Diagnostics likewise separate source-specific codes, policy category,
+semantic kind, severity, and completeness impact. Exit-status and report
+policy never depend on matching diagnostic prose or an ad hoc code allowlist.
 
 ### Folding
 
@@ -183,24 +200,26 @@ know how timestamps were collected or how Rich will display the result.
 `application` coordinates one use case: resolve the request, run enabled
 collectors, classify observations, aggregate markers, reconcile coverage, and
 construct the neutral report. A `CollectorServices` bundle supplies its
-collector ports. Application code neither constructs production adapters nor
-uses optional collaborators with hidden defaults.
+two source-level ports (Git and filesystem). Application code neither
+constructs production adapters nor coordinates Git subcollectors nor uses
+optional collaborators with hidden defaults.
 
 The resolved `EvidenceSelection` is the single semantic event scope.
-`CollectionPlan` projects it into exact commit, file-change, tag, reflog, and
-filesystem entry-type/timestamp work; collectors do not reinterpret CLI
-presets or keep a second scope model. Filesystem record discovery remains one
+`CollectionPlan` projects it into an exact Git source request and filesystem
+entry-type/timestamp work; source adapters do not reinterpret CLI presets or
+keep a second scope model. Filesystem record discovery remains one
 root-level accounting partition because ignored candidates can be counted
 without an extra stat and may therefore have an intentionally unknown entry
 type. Timestamp extraction is partitioned by entry type, where the type is
 necessarily known, preserving exact coverage without sacrificing the fast Git
 inventory path.
 
-The report retains structured options, resolved time selection, timezone,
-schedule, collection accounting, coverage, and provenance. It does not flatten
-those facts into terminal labels. `ReportRequirements` makes the bounded detail
-needed by a renderer explicit without importing terminal choices into the
-application layer.
+The report contract retains only resolved scope, stable collection facts,
+coverage, aggregation, and provenance. It does not retain `RunOptions` or raw
+Git/filesystem results, and it does not flatten facts into terminal labels.
+`ReportRequirements` makes the bounded detail needed by a renderer explicit
+without importing terminal choices into the application layer. Architecture
+tests prevent reporting code from bypassing this contract.
 
 ### Reporting and CLI
 
