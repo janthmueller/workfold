@@ -6,11 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import TypeAlias
 
-from workfold.configuration.options import DEFAULT_HOURS
-
-SettingValue: TypeAlias = str | bool | int | tuple[str, ...] | None
+from workfold.configuration.schema import SettingValue
 
 
 class OriginKind(str, Enum):
@@ -59,38 +56,8 @@ class ResolvedSettings:
 
 BUILTIN_ORIGIN = SettingOrigin(OriginKind.BUILTIN, 0)
 
-DEFAULT_SETTINGS: dict[str, SettingValue] = {
-    "time": ("this-week",),
-    "mode": ("git",),
-    "profile": ("standard",),
-    "events": None,
-    "git-commits-from": None,
-    "git-identity": (),
-    "include-ignored": False,
-    "fs-exclude": (),
-    "hours": DEFAULT_HOURS,
-    "timezone": None,
-    "cluster-window": "1h",
-    "cluster-anchor": "event",
-    "band-label": "range",
-    "show-empty-bands": False,
-    "marker-style": "source",
-    "grid": "none",
-    "display-hours": None,
-    "hide-days": (),
-    "hide-empty-days": (),
-    "no-color": False,
-    "list": (),
-    "limit": 50,
-    "coverage": False,
-    "strict": False,
-    "verbose": False,
-}
-
-
 __all__ = [
     "BUILTIN_ORIGIN",
-    "DEFAULT_SETTINGS",
     "ConfigLayer",
     "OriginKind",
     "ResolvedSettings",

@@ -8,16 +8,14 @@ from pathlib import Path
 from typing import NoReturn
 
 from workfold.configuration.layers import (
-    DEFAULT_SETTINGS,
     OriginKind,
     ResolvedSettings,
     SettingOrigin,
-    SettingValue,
 )
 from workfold.configuration.options import RunOptions, UnresolvedOptions, UsageError
 from workfold.configuration.parsing import parse_event_selectors
 from workfold.configuration.resolution import resolve_options
-from workfold.configuration.validation import validate_setting_values
+from workfold.configuration.schema import DEFAULT_SETTINGS, SETTING_BY_KEY, SettingValue
 from workfold.domain.observations import RecordKind, Source
 
 
@@ -61,7 +59,6 @@ def materialize_settings(resolution: ResolvedSettings, paths: Sequence[Path]) ->
     """Materialize merged settings and retain the provenance of the result."""
 
     try:
-        validate_setting_values(resolution)
         values = dict(resolution.values)
         origins = {key: EffectiveOrigin.direct(origin) for key, origin in resolution.origins.items()}
         explicit_keys = {key for key, origin in resolution.origins.items() if origin.kind is not OriginKind.BUILTIN}
@@ -93,7 +90,14 @@ def _raise_with_setting_origins(error: UsageError, resolution: ResolvedSettings)
             keys = ", ".join(key for key, _origin in keyed_origins)
             message = f"{path}: {keys}: {error}"
         else:
-            details = "; ".join(f"{key} ({_format_setting_origin(origin)})" for key, origin in keyed_origins)
+            details = "; ".join(
+                (
+                    f"{key}={_format_setting_value(resolution.values[key])} ({_format_setting_origin(origin)})"
+                    if error.include_setting_values
+                    else f"{key} ({_format_setting_origin(origin)})"
+                )
+                for key, origin in keyed_origins
+            )
             message = f"{error}; setting origins: {details}"
         raise UsageError(message, setting_keys=error.setting_keys) from error
     raise error
@@ -103,6 +107,14 @@ def _format_setting_origin(origin: SettingOrigin) -> str:
     if origin.path is not None:
         return f"{origin.label} {origin.path}"
     return origin.label
+
+
+def _format_setting_value(value: SettingValue) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, tuple):
+        return "[" + ", ".join(value) + "]"
+    return "none" if value is None else str(value)
 
 
 def options_from_settings(resolution: ResolvedSettings, paths: Sequence[Path]) -> RunOptions:
@@ -116,34 +128,7 @@ def _unresolved_options(
     explicit_keys: set[str],
     paths: Sequence[Path],
 ) -> UnresolvedOptions:
-    key_to_destination = {
-        "time": "time_selectors",
-        "mode": "modes",
-        "profile": "profiles",
-        "events": "event_selectors",
-        "git-commits-from": "commits_from",
-        "git-identity": "git_identities",
-        "include-ignored": "include_ignored",
-        "fs-exclude": "exclusions",
-        "hours": "hours",
-        "timezone": "timezone_name",
-        "cluster-window": "cluster_window",
-        "cluster-anchor": "cluster_anchor",
-        "band-label": "band_label",
-        "show-empty-bands": "show_empty_bands",
-        "marker-style": "marker_style",
-        "grid": "grid_style",
-        "display-hours": "display_hours",
-        "hide-days": "hide_days",
-        "hide-empty-days": "hide_empty_days",
-        "no-color": "no_color",
-        "list": "list_selectors",
-        "limit": "limit",
-        "coverage": "coverage",
-        "strict": "strict",
-        "verbose": "verbose",
-    }
-    explicit_destinations = {key_to_destination[key] for key in explicit_keys}
+    explicit_destinations = {SETTING_BY_KEY[key].cli_destination for key in explicit_keys}
     return UnresolvedOptions(
         paths=tuple(paths),
         time_selectors=_tuple_value(values, "time"),

@@ -7,7 +7,7 @@ from workfold.configuration.effective import (
     options_from_settings,
 )
 from workfold.configuration.files import global_config_path, resolve_settings
-from workfold.configuration.layers import OriginKind, ResolvedSettings, SettingValue
+from workfold.configuration.layers import OriginKind, ResolvedSettings
 from workfold.configuration.options import (
     DEFAULT_CLUSTER_WINDOW,
     DEFAULT_HOURS,
@@ -37,6 +37,7 @@ from workfold.configuration.parsing import (
     validate_iso_week,
 )
 from workfold.configuration.resolution import resolve_options
+from workfold.configuration.schema import SettingValue
 from workfold.domain.scope import RefScope
 from workfold.folding.bands import ClusterAnchor
 

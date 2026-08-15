@@ -11,60 +11,15 @@ from typing import cast
 
 from workfold.configuration.layers import (
     BUILTIN_ORIGIN,
-    DEFAULT_SETTINGS,
     ConfigLayer,
     OriginKind,
     ResolvedSettings,
     SettingOrigin,
-    SettingValue,
 )
 from workfold.configuration.options import UsageError
+from workfold.configuration.schema import DEFAULT_SETTINGS, SETTING_BY_KEY, ConfigShape, SettingValue
 
-_STRING_KEYS = frozenset(
-    {
-        "git-commits-from",
-        "hours",
-        "timezone",
-        "cluster-window",
-        "cluster-anchor",
-        "band-label",
-        "marker-style",
-        "grid",
-        "display-hours",
-    }
-)
-_BOOLEAN_KEYS = frozenset(
-    {
-        "include-ignored",
-        "no-color",
-        "coverage",
-        "strict",
-        "verbose",
-        "show-empty-bands",
-    }
-)
-_INTEGER_KEYS = frozenset({"limit"})
-_ARRAY_KEYS = frozenset(
-    {
-        "events",
-        "git-identity",
-        "fs-exclude",
-        "hide-days",
-        "hide-empty-days",
-        "list",
-    }
-)
-_SCALAR_ARRAY_KEYS = frozenset({"mode", "profile"})
-_CONFIG_KEYS = frozenset(DEFAULT_SETTINGS)
-_CHOICES: dict[str, frozenset[str]] = {
-    "mode": frozenset({"git", "fs", "both"}),
-    "profile": frozenset({"standard", "portable", "full"}),
-    "git-commits-from": frozenset({"head", "local-branches", "all-refs"}),
-    "cluster-anchor": frozenset({"event", "midnight"}),
-    "band-label": frozenset({"range", "start"}),
-    "marker-style": frozenset({"source", "identity"}),
-    "grid": frozenset({"none", "vertical", "horizontal", "both"}),
-}
+_CONFIG_KEYS = frozenset(SETTING_BY_KEY)
 _PYPROJECT_TABLE_HEADER = re.compile(rb"(?m)^[ \t]*\[[ \t]*tool[ \t]*\.[ \t]*workfold[ \t]*\]")
 
 
@@ -294,32 +249,34 @@ def _validate_table(table: Mapping[str, object], *, path: Path) -> dict[str, Set
 
 def _validate_value(key: str, value: object, *, path: Path) -> SettingValue:
     location = f"{path}: {key}"
-    if key == "time":
+    spec = SETTING_BY_KEY[key]
+    shape = spec.config_shape
+    if shape is ConfigShape.STRING_OR_ARRAY:
         if isinstance(value, str):
             return (value,)
         return _string_array(value, location=location)
-    if key in _SCALAR_ARRAY_KEYS:
+    if shape is ConfigShape.SINGLE_STRING_TUPLE:
         if not isinstance(value, str):
             raise UsageError(f"{location} must be a string")
-        _validate_choice(key, value, location=location)
+        _validate_choice(spec.choices, value, location=location)
         return (value,)
-    if key in _STRING_KEYS:
+    if shape is ConfigShape.STRING:
         if not isinstance(value, str):
             raise UsageError(f"{location} must be a string")
-        _validate_choice(key, value, location=location)
+        _validate_choice(spec.choices, value, location=location)
         return value
-    if key in _BOOLEAN_KEYS:
+    if shape is ConfigShape.BOOLEAN:
         if not isinstance(value, bool):
             raise UsageError(f"{location} must be true or false")
         return value
-    if key in _INTEGER_KEYS:
+    if shape is ConfigShape.INTEGER:
         if not isinstance(value, int) or isinstance(value, bool):
             raise UsageError(f"{location} must be an integer")
         return value
-    if key in _ARRAY_KEYS:
+    if shape is ConfigShape.STRING_ARRAY:
         items = _string_array(value, location=location)
         for item in items:
-            _validate_choice(key, item, location=location)
+            _validate_choice(spec.choices, item, location=location)
         return items
     raise AssertionError(f"unhandled Workfold configuration key: {key}")
 
@@ -333,9 +290,8 @@ def _string_array(value: object, *, location: str) -> tuple[str, ...]:
     return tuple(cast(str, item) for item in items)
 
 
-def _validate_choice(key: str, value: str, *, location: str) -> None:
-    choices = _CHOICES.get(key)
-    if choices is not None and value not in choices:
+def _validate_choice(choices: tuple[str, ...], value: str, *, location: str) -> None:
+    if choices and value not in choices:
         raise UsageError(f"{location} must be one of {', '.join(sorted(choices))}; got {value!r}")
 
 

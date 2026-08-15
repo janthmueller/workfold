@@ -190,9 +190,11 @@ resolution, and the application derives its exact collector activation through
 preset defaults to `standard` and never rewrites time or mode; `portable` is
 intentionally valid only with Git mode.
 
-Within `configuration/`, `options` owns immutable option values and built-in
-defaults, `parsing` owns individual value grammars, `files` and `layers` own
-TOML discovery and precedence, and `resolution` owns cross-option validation.
+Within `configuration/`, `schema` is the single catalog of setting keys,
+built-in defaults, TOML shapes, simple choices, and CLI destinations. `options`
+owns immutable parsed values, `parsing` owns individual value grammars,
+`files` and `layers` own TOML discovery and precedence, and `resolution` parses
+each effective value once while applying explicit cross-option policy.
 `cli/parser` declares argparse presentation while `cli/main` performs runtime
 dispatch. `RunOptions` groups collection and folding choices while its nested
 terminal preferences remain presentation input. Keep argparse details out of
@@ -204,8 +206,9 @@ values. Each setting retains its origin for `--show-config`; configuration is
 merged as typed data and is never converted into synthetic command-line
 arguments. Standalone `workfold.toml` and `[tool.workfold]` use the same strict
 schema. Keep discovery, parsing, precedence, CLI materialization, and final
-domain validation separate so unknown keys and invalid cross-option states
-cannot be silently ignored.
+semantic resolution separate so unknown keys and invalid cross-option states
+cannot be silently ignored. Do not recreate parallel key/type/destination maps
+outside `configuration/schema`.
 
 Coverage data and coverage prose are also separate. `domain/coverage/models`
 defines immutable partitions and reconciliation invariants, while

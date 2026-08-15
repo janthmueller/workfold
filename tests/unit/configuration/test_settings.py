@@ -18,6 +18,7 @@ from workfold.configuration import (
     UsageError,
     global_config_path,
 )
+from workfold.configuration.schema import DEFAULT_SETTINGS, SETTING_BY_DESTINATION, SETTING_BY_KEY, SETTING_SPECS
 from workfold.domain.evidence import EvidenceKind, EvidenceSelection
 from workfold.reporting.sanitization import display_width
 
@@ -34,6 +35,13 @@ def _write(path: Path, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
+
+
+def test_setting_schema_is_the_complete_ordered_config_and_cli_catalog() -> None:
+    assert tuple(DEFAULT_SETTINGS) == tuple(spec.key for spec in SETTING_SPECS)
+    assert tuple(SETTING_BY_KEY) == tuple(DEFAULT_SETTINGS)
+    assert set(SETTING_BY_DESTINATION) == {spec.cli_destination for spec in SETTING_SPECS}
+    assert all(spec.default == DEFAULT_SETTINGS[spec.key] for spec in SETTING_SPECS)
 
 
 @pytest.mark.parametrize(

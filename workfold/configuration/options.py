@@ -6,9 +6,11 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import Enum
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from workfold.domain.evidence import EvidenceKind, EvidenceSelection
 from workfold.domain.observations import Source, Weekday
+from workfold.domain.schedule import Schedule
 from workfold.domain.scope import RefScope
 from workfold.folding.bands import ClusterAnchor
 
@@ -16,11 +18,18 @@ from workfold.folding.bands import ClusterAnchor
 class UsageError(ValueError):
     """Raised when command-line values are individually or jointly invalid."""
 
-    def __init__(self, message: str, *, setting_keys: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        setting_keys: tuple[str, ...] = (),
+        include_setting_values: bool = False,
+    ) -> None:
         super().__init__(message)
         if any(not key for key in setting_keys):
             raise ValueError("usage-error setting keys must not be empty")
         self.setting_keys = tuple(dict.fromkeys(setting_keys))
+        self.include_setting_values = include_setting_values
 
 
 class SourceMode(str, Enum):
@@ -169,7 +178,9 @@ class RunOptions:
     respect_gitignore: bool
     exclusions: tuple[str, ...]
     hours: str
+    schedule: Schedule
     timezone_name: str | None
+    timezone: ZoneInfo | None
     cluster_window: timedelta
     display_hours: DisplayHours | None
     hide_days: tuple[Weekday, ...]
@@ -186,7 +197,6 @@ class RunOptions:
         if includes_git and includes_filesystem:
             return SourceMode.BOTH
         return SourceMode.GIT if includes_git else SourceMode.FILESYSTEM
-
 
 @dataclass(frozen=True, slots=True)
 class UnresolvedOptions:

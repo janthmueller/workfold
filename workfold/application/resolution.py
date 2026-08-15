@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from workfold.configuration.local_timezone import resolve_local_timezone
 from workfold.configuration.options import RunOptions, UsageError
-from workfold.domain.schedule import Schedule, parse_schedule
+from workfold.domain.schedule import Schedule
 from workfold.domain.time import (
     InstantRangeUnion,
     TimeRangeError,
@@ -17,7 +17,6 @@ from workfold.domain.time import (
     calendar_date_range,
     current_week_range,
     iso_week_union,
-    resolve_timezone,
     rolling_duration_range,
 )
 
@@ -34,8 +33,8 @@ def resolve_timezone_selection(options: RunOptions, environ: Mapping[str, str]) 
     """Resolve the configured or operating-system-local timezone."""
 
     try:
-        if options.timezone_name is not None:
-            return resolve_timezone(options.timezone_name)
+        if options.timezone is not None:
+            return options.timezone
         return resolve_local_timezone(environ=environ)
     except TimeRangeError as error:
         raise UsageError(str(error)) from error
@@ -73,12 +72,9 @@ def resolve_date_range(
 
 
 def resolve_schedule(options: RunOptions) -> Schedule:
-    """Parse the configured working-hours expression."""
+    """Return the schedule parsed during configuration materialization."""
 
-    try:
-        return parse_schedule(options.hours)
-    except ValueError as error:
-        raise UsageError(str(error)) from error
+    return options.schedule
 
 
 def validate_without_collection(options: RunOptions, *, environ: Mapping[str, str]) -> None:

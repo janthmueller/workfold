@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import NoReturn, cast
 
 from workfold import __version__
-from workfold.configuration.layers import SettingValue
+from workfold.configuration.schema import SETTING_SPECS, SettingValue
 from workfold.reporting.sanitization import sanitize_terminal_text
 
 
@@ -26,42 +26,15 @@ def cli_setting_values(namespace: argparse.Namespace) -> dict[str, SettingValue]
 
     raw = vars(namespace)
     values: dict[str, SettingValue] = {}
-    sequence_mapping = {
-        "time_selectors": "time",
-        "modes": "mode",
-        "profiles": "profile",
-        "event_selectors": "events",
-        "git_identities": "git-identity",
-        "exclusions": "fs-exclude",
-        "hide_days": "hide-days",
-        "hide_empty_days": "hide-empty-days",
-        "list_selectors": "list",
-    }
-    for destination, key in sequence_mapping.items():
-        if destination in raw:
-            values[key] = tuple(cast(Sequence[str], raw[destination]))
-
-    scalar_mapping = {
-        "commits_from": "git-commits-from",
-        "include_ignored": "include-ignored",
-        "hours": "hours",
-        "timezone_name": "timezone",
-        "cluster_window": "cluster-window",
-        "cluster_anchor": "cluster-anchor",
-        "band_label": "band-label",
-        "show_empty_bands": "show-empty-bands",
-        "marker_style": "marker-style",
-        "grid_style": "grid",
-        "display_hours": "display-hours",
-        "no_color": "no-color",
-        "limit": "limit",
-        "coverage": "coverage",
-        "strict": "strict",
-        "verbose": "verbose",
-    }
-    for destination, key in scalar_mapping.items():
-        if destination in raw:
-            values[key] = cast(SettingValue, raw[destination])
+    for spec in SETTING_SPECS:
+        if spec.cli_destination not in raw:
+            continue
+        raw_value = raw[spec.cli_destination]
+        values[spec.key] = (
+            tuple(cast(Sequence[str], raw_value))
+            if spec.config_shape.cli_sequence
+            else cast(SettingValue, raw_value)
+        )
     return values
 
 

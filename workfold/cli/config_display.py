@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from workfold.configuration.effective import EffectiveSettings
-from workfold.configuration.layers import DEFAULT_SETTINGS, ResolvedSettings, SettingValue
+from workfold.configuration.layers import ResolvedSettings
 from workfold.configuration.options import ListSchedule, RunOptions
+from workfold.configuration.schema import DEFAULT_SETTINGS, SettingValue
 from workfold.reporting.sanitization import display_width, pad_right, sanitize_terminal_text
 from workfold.reporting.terminal.layout import aligned_fact_lines, column_chunks
 

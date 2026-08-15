@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 from workfold.configuration.options import (
     DEFAULT_CLUSTER_WINDOW,
-    DEFAULT_HOURS,
     BandLabel,
     CollectionProfile,
     DisplayHours,
@@ -22,20 +23,21 @@ from workfold.configuration.options import (
     UsageError,
 )
 from workfold.configuration.parsing import (
-    parse_clock_minutes,
     parse_cluster_window,
     parse_display_hours,
     parse_event_list,
     parse_event_selectors,
-    parse_rolling_duration,
     parse_time_selectors,
     parse_weekday_scopes,
     validate_cluster_options,
-    validate_iso_week,
 )
 from workfold.domain.evidence import EvidenceKind, EvidenceSelection
 from workfold.domain.observations import RecordKind, Source, Weekday
+from workfold.domain.schedule import parse_schedule
+from workfold.domain.time import resolve_timezone
 from workfold.folding.bands import ClusterAnchor
+
+_Parsed = TypeVar("_Parsed")
 
 
 def _explicit(values: UnresolvedOptions, name: str) -> bool:
@@ -45,7 +47,13 @@ def _explicit(values: UnresolvedOptions, name: str) -> bool:
 def resolve_options(values: UnresolvedOptions) -> RunOptions:
     """Validate typed setting values and expand evidence presets."""
 
-    weeks, from_date, to_date, all_dates, rolling_duration = parse_time_selectors(values.time_selectors)
+    weeks, from_date, to_date, all_dates, rolling_duration = _parse_settings(
+        ("time",),
+        lambda: parse_time_selectors(values.time_selectors),
+    )
+    schedule = _parse_settings(("hours",), lambda: parse_schedule(values.hours))
+    timezone_name = values.timezone_name
+    timezone_value = _parse_settings(("timezone",), lambda: resolve_timezone(timezone_name)) if timezone_name else None
     modes = values.modes
     if len(modes) > 1:
         raise UsageError("--mode may be supplied only once", setting_keys=("mode",))
@@ -61,6 +69,7 @@ def resolve_options(values: UnresolvedOptions) -> RunOptions:
     }[mode]
 
     if values.event_selectors is not None:
+        event_selectors = values.event_selectors
         if _explicit(values, "modes") or _explicit(values, "profiles"):
             preset_keys = (
                 *(("mode",) if _explicit(values, "modes") else ()),
@@ -70,7 +79,7 @@ def resolve_options(values: UnresolvedOptions) -> RunOptions:
                 "--events cannot be combined with --mode or --profile",
                 setting_keys=("events", *preset_keys),
             )
-        evidence = parse_event_selectors(values.event_selectors)
+        evidence = _parse_settings(("events",), lambda: parse_event_selectors(event_selectors))
         profile = CollectionProfile.CUSTOM
     else:
         if selected_profile is CollectionProfile.PORTABLE and selected_source is not SourceMode.GIT:
@@ -156,7 +165,8 @@ def resolve_options(values: UnresolvedOptions) -> RunOptions:
             setting_keys=("fs-exclude",),
         )
 
-    event_list = parse_event_list(values.list_selectors) if values.list_selectors is not None else None
+    list_selectors = values.list_selectors
+    event_list = _parse_settings(("list",), lambda: parse_event_list(list_selectors)) if list_selectors else None
     if event_list is not None and event_list.evidence_kinds:
         assert values.list_selectors is not None
         event_list = _resolve_list_selection(values.list_selectors, event_list, evidence)
@@ -169,17 +179,39 @@ def resolve_options(values: UnresolvedOptions) -> RunOptions:
     include_ignored = bool((profile is CollectionProfile.FULL and source.includes_filesystem) or values.include_ignored)
     respect_gitignore = not include_ignored
 
-    hide_days = parse_weekday_scopes(values.hide_days, option="--hide-days")
+    hide_days = _parse_settings(
+        ("hide-days",),
+        lambda: parse_weekday_scopes(values.hide_days, option="--hide-days"),
+    )
     if hide_days == tuple(Weekday):
         raise UsageError("--hide-days cannot hide all seven weekday columns", setting_keys=("hide-days",))
-    hide_empty_days = parse_weekday_scopes(values.hide_empty_days, option="--hide-empty-days")
+    hide_empty_days = _parse_settings(
+        ("hide-empty-days",),
+        lambda: parse_weekday_scopes(values.hide_empty_days, option="--hide-empty-days"),
+    )
 
-    cluster_window = parse_cluster_window(values.cluster_window)
-    cluster_anchor = ClusterAnchor(values.cluster_anchor)
-    validate_cluster_options(
-        cluster_window,
-        cluster_anchor,
-        show_empty_bands=values.show_empty_bands,
+    cluster_window = _parse_settings(
+        ("cluster-window",),
+        lambda: parse_cluster_window(values.cluster_window),
+    )
+    cluster_anchor = _parse_settings(
+        ("cluster-anchor",),
+        lambda: ClusterAnchor(values.cluster_anchor),
+    )
+    _parse_settings(
+        ("cluster-window", "cluster-anchor", "show-empty-bands"),
+        lambda: validate_cluster_options(
+            cluster_window,
+            cluster_anchor,
+            show_empty_bands=values.show_empty_bands,
+        ),
+        include_values=True,
+    )
+    display_hours_text = values.display_hours
+    display_hours = (
+        _parse_settings(("display-hours",), lambda: parse_display_hours(display_hours_text))
+        if display_hours_text
+        else None
     )
 
     paths = values.paths or (Path("."),)
@@ -197,11 +229,13 @@ def resolve_options(values: UnresolvedOptions) -> RunOptions:
         include_ignored=include_ignored,
         respect_gitignore=respect_gitignore,
         exclusions=exclusions,
-        hours=values.hours or DEFAULT_HOURS,
-        timezone_name=values.timezone_name,
+        hours=values.hours,
+        schedule=schedule,
+        timezone_name=timezone_name,
+        timezone=timezone_value,
         cluster_window=cluster_window,
         cluster_anchor=cluster_anchor,
-        display_hours=parse_display_hours(values.display_hours) if values.display_hours else None,
+        display_hours=display_hours,
         hide_days=hide_days,
         hide_empty_days=hide_empty_days,
         terminal=TerminalPreferences(
@@ -217,6 +251,24 @@ def resolve_options(values: UnresolvedOptions) -> RunOptions:
             verbose=values.verbose,
         ),
     )
+
+
+def _parse_settings(
+    keys: tuple[str, ...],
+    operation: Callable[[], _Parsed],
+    *,
+    include_values: bool = False,
+) -> _Parsed:
+    """Parse one effective value and retain its setting provenance on failure."""
+
+    try:
+        return operation()
+    except UsageError as error:
+        if error.setting_keys:
+            raise
+        raise UsageError(str(error), setting_keys=keys, include_setting_values=include_values) from error
+    except ValueError as error:
+        raise UsageError(str(error), setting_keys=keys, include_setting_values=include_values) from error
 
 
 def _preset_evidence(source: SourceMode, profile: CollectionProfile) -> EvidenceSelection:
@@ -282,7 +334,6 @@ def _resolve_list_selection(
 
 __all__ = [
     "DEFAULT_CLUSTER_WINDOW",
-    "DEFAULT_HOURS",
     "BandLabel",
     "ClusterAnchor",
     "CollectionProfile",
@@ -296,14 +347,11 @@ __all__ = [
     "TerminalPreferences",
     "UnresolvedOptions",
     "UsageError",
-    "parse_clock_minutes",
     "parse_cluster_window",
     "parse_display_hours",
     "parse_event_list",
     "parse_event_selectors",
-    "parse_rolling_duration",
     "parse_time_selectors",
     "parse_weekday_scopes",
     "resolve_options",
-    "validate_iso_week",
 ]
