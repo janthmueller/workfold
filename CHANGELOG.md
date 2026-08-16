@@ -2,6 +2,48 @@
 
 <!-- version list -->
 
+## v0.1.0-alpha.5 (2026-08-16)
+
+### Bug Fixes
+
+- Align filesystem inventory across platforms
+  ([`dc21812`](https://github.com/janthmueller/workfold/commit/dc2181271b4ad02c20f17230c4b19f0fcb2a5f4e))
+
+- Compose all event list filters
+  ([`ba8f268`](https://github.com/janthmueller/workfold/commit/ba8f26845b7761106e849c6b1289e33abb84ecb9))
+
+### Features
+
+- Add canonical event selection
+  ([`8f9978d`](https://github.com/janthmueller/workfold/commit/8f9978de643207b638e1caac5174bda2bbc54870))
+
+### Refactoring
+
+- Centralize configuration schema
+  ([`4acfef6`](https://github.com/janthmueller/workfold/commit/4acfef6436f1e5f2fcdfdcfb04939c3fafda70b6))
+
+- Harden filesystem scan ownership
+  ([`6c0ad62`](https://github.com/janthmueller/workfold/commit/6c0ad623e103d5e23c5d61b06ccd1d51eb22e076))
+
+- Harden runtime and release boundaries
+  ([`a76347b`](https://github.com/janthmueller/workfold/commit/a76347bf0d1b9828e8aff053cc1eb315bf8a76a9))
+
+- Isolate evidence source coordination
+  ([`06d00dc`](https://github.com/janthmueller/workfold/commit/06d00dc6cadc9289e4850c733b532dd6cb86c285))
+
+- Make collection publication transactional
+  ([`de3fbfb`](https://github.com/janthmueller/workfold/commit/de3fbfb9f20dfb5748a3cada4a20e380d0118931))
+
+- Organize source architecture
+  ([`7ac95c3`](https://github.com/janthmueller/workfold/commit/7ac95c3eaa4a18ddbe926e4b604bd62640d5d6f6))
+
+- Stabilize the report boundary
+  ([`018a0cd`](https://github.com/janthmueller/workfold/commit/018a0cd5a9fb674cb90e37497c59b04029d51cc4))
+
+- Type collection policy boundaries
+  ([`40f68d0`](https://github.com/janthmueller/workfold/commit/40f68d01993183c957aebbd2a65dc44a74e8f7e3))
+
+
 ## v0.1.0-alpha.4 (2026-08-13)
 
 ### Bug Fixes
