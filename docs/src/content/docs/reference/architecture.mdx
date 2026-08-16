@@ -188,6 +188,9 @@ decisions out of traversal callbacks and operating-system safety decisions out
 of root orchestration. One prepared root is passed through explicit request,
 sink, and service bundles, so scan policy, mutable accounting, and platform
 mechanisms cannot be confused by a long positional interface.
+`ignore.service` receives one complete inventory backend covering materialized,
+streaming, and directory-aware views. Production and test adapters therefore
+cannot accidentally replace only the view selected on one operating system.
 Production Git-aware discovery is fail-closed: once its authoritative inventory
 strategy is selected, an inventory failure becomes partial coverage rather
 than a silent semantic switch to native discovery. The native strategy remains

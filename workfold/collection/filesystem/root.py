@@ -31,6 +31,7 @@ from workfold.collection.filesystem.ignore import (
     is_within_git_admin,
     looks_like_bare_repository,
 )
+from workfold.collection.filesystem.ignore.exclusions import filtered_inventory_disposition
 from workfold.collection.filesystem.linux import LinuxStatxReader
 from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter
 from workfold.collection.filesystem.models import CollectedFilesystemEntry
@@ -255,10 +256,10 @@ def collect_root(
             def account_unseen_ignored(relative_path: str, is_directory: bool) -> None:
                 if ownership.delegates(PurePosixPath(relative_path)):
                     return
-                disposition = (
-                    RecordDisposition.EXPLICITLY_EXCLUDED
-                    if excluder.matches(relative_path, is_directory=is_directory)
-                    else RecordDisposition.IGNORED
+                disposition = filtered_inventory_disposition(
+                    excluder,
+                    relative_path,
+                    is_directory=is_directory,
                 )
                 accounting.discover(root)
                 accounting.record(root, disposition)

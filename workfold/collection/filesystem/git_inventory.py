@@ -24,6 +24,7 @@ from workfold.collection.filesystem.ignore import (
     GitIgnoreService,
     is_nested_repository_boundary,
 )
+from workfold.collection.filesystem.ignore.exclusions import filtered_inventory_disposition
 from workfold.collection.filesystem.inventory_metadata import AnchoredInventoryMetadata
 from workfold.collection.filesystem.linux import LinuxStatxReader
 from workfold.collection.filesystem.models import CollectedFilesystemEntry
@@ -221,10 +222,10 @@ def _collect_git_inventory_stream(
         relative = PurePosixPath(relative_path)
         if ownership.delegates(relative):
             return
-        disposition = (
-            RecordDisposition.EXPLICITLY_EXCLUDED
-            if excluder.matches(relative_path, is_directory=is_directory)
-            else RecordDisposition.IGNORED
+        disposition = filtered_inventory_disposition(
+            excluder,
+            relative,
+            is_directory=is_directory,
         )
         accounting.discover(root)
         accounting.record(root, disposition)

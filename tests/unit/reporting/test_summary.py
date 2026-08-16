@@ -1,4 +1,5 @@
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from workfold.application.report import DiagnosticFacts
@@ -69,8 +70,8 @@ def test_outside_list_preserves_fractional_nanoseconds() -> None:
     )
     assert "2026-08-03T20:00:00.123456789+00:00" in rendered
     assert "  fs:file:modified\n" in rendered
-    assert "  /work/repository\n" in rendered
-    assert "  files/precise\n" in rendered
+    assert f"  {Path('/work/repository')}\n" in rendered
+    assert f"  {Path('files/precise')}\n" in rendered
 
 
 def test_all_event_list_shows_each_rows_schedule_state() -> None:

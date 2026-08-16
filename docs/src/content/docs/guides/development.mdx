@@ -262,6 +262,11 @@ entries traverse them instead. Scans outside Git and scans that include ignored
 entries use the native walker alone. Keep the fast inventory and native
 reference behavior equivalent for requested regular files, and never
 reintroduce per-entry path resolution for repository/admin containment.
+Both paths use the same filtered-entry classifier: an explicit exclusion wins
+coverage accounting when it also matches a Git-ignored path, while neither
+path invents retained metadata for an inventory-only entry. Contract tests
+force both discovery paths on capable hosts so this parity is checked without
+waiting for platform CI.
 Apply the containing repository's ignore result before transferring ownership
 to an embedded repository: ignored boundaries are pruned, visible boundaries
 receive their own scan context, and separately requested nested roots remain

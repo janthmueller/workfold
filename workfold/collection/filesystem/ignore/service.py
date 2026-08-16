@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from workfold.collection.filesystem.ignore.exclusions import ExplicitExcluder
@@ -39,6 +40,28 @@ InventoryVisitor = Callable[..., GitFilesystemInventoryVisit]
 InventoryInspector = Callable[..., GitFilesystemInventoryVisit]
 
 
+@dataclass(frozen=True, slots=True)
+class GitFilesystemInventoryBackend:
+    """Complete implementation boundary for Git filesystem inventories.
+
+    Production uses bounded streaming and SQLite-backed inspection. Tests that
+    need a synthetic inventory can select :meth:`materialized`, which makes
+    both callback-driven operations consume the same materialized snapshot.
+    Grouping the three operations prevents a fake from accidentally replacing
+    only the code path used on one operating system.
+    """
+
+    builder: InventoryBuilder = build_inventory
+    visitor: InventoryVisitor | None = visit_inventory
+    inspector: InventoryInspector | None = inspect_inventory
+
+    @classmethod
+    def materialized(cls, builder: InventoryBuilder) -> GitFilesystemInventoryBackend:
+        """Build every inventory view from one injected materializer."""
+
+        return cls(builder=builder, visitor=None, inspector=None)
+
+
 class GitIgnoreService:
     """Discover worktrees and ask Git for its authoritative ignore decisions."""
 
@@ -46,21 +69,11 @@ class GitIgnoreService:
         self,
         runner: GitIgnoreRunner | None = None,
         *,
-        inventory_builder: InventoryBuilder = build_inventory,
-        inventory_visitor: InventoryVisitor | None = visit_inventory,
-        inventory_inspector: InventoryInspector | None = None,
+        inventory_backend: GitFilesystemInventoryBackend | None = None,
         inventory_strategy: InventoryStrategy = InventoryStrategy.GIT,
     ) -> None:
         self._runner = runner or GitIgnoreRunner()
-        self._inventory_builder = inventory_builder
-        self._inventory_visitor = inventory_visitor
-        self._inventory_inspector = (
-            inventory_inspector
-            if inventory_inspector is not None
-            else inspect_inventory
-            if inventory_strategy is InventoryStrategy.GIT
-            else None
-        )
+        self._inventory_backend = inventory_backend or GitFilesystemInventoryBackend()
         self._inventory_strategy = inventory_strategy
 
     @property
@@ -232,7 +245,7 @@ class GitIgnoreService:
         must validate every included path with a current no-follow stat.
         """
 
-        return self._inventory_builder(self._runner, repository, selected_root)
+        return self._inventory_backend.builder(self._runner, repository, selected_root)
 
     def visit_inventory(
         self,
@@ -251,7 +264,8 @@ class GitIgnoreService:
         the native strategy instead.
         """
 
-        if self._inventory_visitor is None:
+        visitor = self._inventory_backend.visitor
+        if visitor is None:
             inventory = self.inventory(repository, selected_root)
             if inventory.error is not None:
                 return GitFilesystemInventoryVisit(error=inventory.error)
@@ -265,7 +279,7 @@ class GitIgnoreService:
                 warning=inventory.warning,
             )
 
-        return self._inventory_visitor(
+        return visitor(
             self._runner,
             repository,
             selected_root,
@@ -283,7 +297,8 @@ class GitIgnoreService:
     ) -> GitFilesystemInventoryVisit:
         """Provide bounded ignore membership while a native traversal runs."""
 
-        if self._inventory_inspector is None:
+        inspector = self._inventory_backend.inspector
+        if inspector is None:
             inventory = self.inventory(repository, selected_root)
             if inventory.error is not None:
                 return GitFilesystemInventoryVisit(error=inventory.error)
@@ -297,7 +312,7 @@ class GitIgnoreService:
                 warning=inventory.warning,
             )
 
-        return self._inventory_inspector(
+        return inspector(
             self._runner,
             repository,
             selected_root,

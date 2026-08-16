@@ -22,6 +22,7 @@ from workfold.collection.filesystem import (
 from workfold.collection.filesystem.accounting import AccountingBuilder
 from workfold.collection.filesystem.ignore import (
     GitFilesystemInventory,
+    GitFilesystemInventoryBackend,
     GitFilesystemInventoryVisit,
     GitIgnoreCommandError,
     GitIgnoreMatches,
@@ -208,6 +209,16 @@ def test_quick_scan_accounts_for_regular_ignored_excluded_and_admin_entries(tmp_
         entry_timestamps=fs_selection(FS_MODIFIED),
         exclusions=("excluded/", "*.ignored"),
     )
+    fallback = FilesystemCollector(lstat_reader=os.lstat).collect(
+        (repo.path,),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+        exclusions=("excluded/", "*.ignored"),
+    )
+
+    assert fallback.accounting == result.accounting
+    assert {(item.origin.path, item.kind) for item in fallback.observations} == {
+        (item.origin.path, item.kind) for item in result.observations
+    }
 
     by_relative: dict[str, CollectedFilesystemEntry] = {}
     for item in result.entries:
@@ -220,7 +231,10 @@ def test_quick_scan_accounts_for_regular_ignored_excluded_and_admin_entries(tmp_
     assert "ignored" not in by_relative
     assert "ignored/hidden.txt" not in by_relative
     assert "one.ignored" not in by_relative
-    assert by_relative["excluded/child.txt"].disposition is RecordDisposition.EXPLICITLY_EXCLUDED
+    explicit_paths = {
+        relative for relative, item in by_relative.items() if item.disposition is RecordDisposition.EXPLICITLY_EXCLUDED
+    }
+    assert explicit_paths in ({"excluded"}, {"excluded/child.txt"})
     assert by_relative[".git"].disposition is RecordDisposition.SEMANTIC_GIT_ADMIN
     assert by_relative["external-link"].disposition is RecordDisposition.EXCLUDED_ENTRY_TYPE
     assert "external-link/must-not-be-seen.txt" not in by_relative
@@ -320,7 +334,7 @@ def test_unanchored_inventory_fallback_does_not_poll_the_root_per_entry(tmp_path
 
     result = FilesystemCollector(
         lstat_reader=recording_lstat,
-        ignore_service=GitIgnoreService(inventory_visitor=forbidden_inventory),
+        ignore_service=GitIgnoreService(inventory_backend=GitFilesystemInventoryBackend(visitor=forbidden_inventory)),
     ).collect(
         (repo.path,),
         entry_timestamps=fs_selection(FS_MODIFIED),
@@ -448,7 +462,7 @@ def test_directory_inventory_does_not_materialize_git_paths_in_python(tmp_path: 
     ) -> GitFilesystemInventory:
         raise AssertionError("directory-aware production scans must use the disk-backed inventory")
 
-    service = GitIgnoreService(inventory_builder=reject_materialization)
+    service = GitIgnoreService(inventory_backend=GitFilesystemInventoryBackend(builder=reject_materialization))
     result = FilesystemCollector(ignore_service=service).collect(
         (repo.path,),
         entry_timestamps=fs_selection(FS_MODIFIED, directories=True),
@@ -618,13 +632,20 @@ def test_entry_types_can_request_different_timestamp_roles(tmp_path: Path) -> No
         include_ignored=True,
     )
 
-    observed = {(item.origin.entry_type, item.kind, item.origin.path) for item in result.observations}
-    assert observed == {
+    changed_supported = FilesystemTimestampAdapter().supports(TimestampKind.FS_METADATA_CHANGED)
+    expected_observations = {
         (EntryType.REGULAR_FILE, TimestampKind.FS_MODIFIED, file_path),
-        (EntryType.DIRECTORY, TimestampKind.FS_METADATA_CHANGED, root),
-        (EntryType.DIRECTORY, TimestampKind.FS_METADATA_CHANGED, child),
         (EntryType.SYMLINK, TimestampKind.FS_ACCESSED, link),
     }
+    if changed_supported:
+        expected_observations.update(
+            {
+                (EntryType.DIRECTORY, TimestampKind.FS_METADATA_CHANGED, root),
+                (EntryType.DIRECTORY, TimestampKind.FS_METADATA_CHANGED, child),
+            }
+        )
+    observed = {(item.origin.entry_type, item.kind, item.origin.path) for item in result.observations}
+    assert observed == expected_observations
     assert {
         (item.key.entry_type, item.key.timestamp_kind, item.requested) for item in result.accounting.timestamps
     } == {
@@ -632,6 +653,13 @@ def test_entry_types_can_request_different_timestamp_roles(tmp_path: Path) -> No
         (EntryType.DIRECTORY, TimestampKind.FS_METADATA_CHANGED, 2),
         (EntryType.SYMLINK, TimestampKind.FS_ACCESSED, 1),
     }
+    directory_changed = next(
+        item
+        for item in result.accounting.timestamps
+        if item.key.entry_type is EntryType.DIRECTORY and item.key.timestamp_kind is TimestampKind.FS_METADATA_CHANGED
+    )
+    assert directory_changed.captured == (2 if changed_supported else 0)
+    assert directory_changed.unsupported == (0 if changed_supported else 2)
 
 
 def test_entry_type_scope_can_exclude_regular_files(tmp_path: Path) -> None:
@@ -1647,7 +1675,7 @@ def test_git_inventory_cannot_follow_a_selected_root_replaced_by_a_symlink(tmp_p
         return GitFilesystemInventoryVisit(included_paths=1)
 
     result = FilesystemCollector(
-        ignore_service=GitIgnoreService(inventory_visitor=swapping_inventory),
+        ignore_service=GitIgnoreService(inventory_backend=GitFilesystemInventoryBackend(visitor=swapping_inventory)),
     ).collect(
         (selected.path,),
         entry_timestamps=fs_selection(FS_MODIFIED),
@@ -1694,7 +1722,7 @@ def test_git_inventory_cannot_follow_an_intermediate_directory_replaced_by_a_sym
         return GitFilesystemInventoryVisit(included_paths=1)
 
     result = FilesystemCollector(
-        ignore_service=GitIgnoreService(inventory_visitor=swapping_inventory),
+        ignore_service=GitIgnoreService(inventory_backend=GitFilesystemInventoryBackend(visitor=swapping_inventory)),
     ).collect(
         (selected.path,),
         entry_timestamps=fs_selection(FS_MODIFIED),
@@ -1737,7 +1765,7 @@ def test_git_inventory_does_not_publish_a_batch_from_a_replaced_parent(tmp_path:
         return GitFilesystemInventoryVisit(included_paths=2)
 
     result = FilesystemCollector(
-        ignore_service=GitIgnoreService(inventory_visitor=swapping_inventory),
+        ignore_service=GitIgnoreService(inventory_backend=GitFilesystemInventoryBackend(visitor=swapping_inventory)),
     ).collect(
         (selected.path,),
         entry_timestamps=fs_selection(FS_MODIFIED),

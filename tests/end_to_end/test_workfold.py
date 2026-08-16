@@ -9,11 +9,13 @@ from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 
+import pytest
 from workfold.cli import parse_options
 from workfold.cli.runner import default_collector_services, run
 from workfold.collection.filesystem import FilesystemCollector
 from workfold.collection.filesystem.ignore import (
     GitFilesystemInventory,
+    GitFilesystemInventoryBackend,
     GitIgnoreCommandError,
     GitIgnoreProbe,
     GitIgnoreRepository,
@@ -69,8 +71,7 @@ class _IncompleteInventoryService(GitIgnoreService):
             return GitFilesystemInventory(included_relative_paths=("work.txt",), warning=warning)
 
         super().__init__(
-            inventory_builder=incomplete_inventory,
-            inventory_visitor=None,
+            inventory_backend=GitFilesystemInventoryBackend.materialized(incomplete_inventory),
         )
 
     def probe(self, path: Path, *, is_directory: bool) -> GitIgnoreProbe:
@@ -202,11 +203,21 @@ def test_all_hours_and_midnight_start_labels_flow_through_the_cli(tmp_path: Path
     assert re.search(r"^Calendar\s+0 weekday \(0\.0%\) · 1 weekend \(100\.0%\)$", rendered, re.MULTILINE)
 
 
-def test_incomplete_filesystem_inventory_is_a_clean_warning_unless_strict(tmp_path: Path) -> None:
+@pytest.mark.parametrize("force_directory_aware", [False, True])
+def test_incomplete_filesystem_inventory_is_a_clean_warning_unless_strict(
+    tmp_path: Path,
+    *,
+    force_directory_aware: bool,
+) -> None:
     repo = GitRepo.create(tmp_path / "repo")
     (repo.path / "work.txt").write_text("work", encoding="utf-8")
     repository = GitIgnoreRepository(repo.path.resolve(), False)
-    collector = FilesystemCollector(ignore_service=_IncompleteInventoryService(repository))
+    ignore_service = _IncompleteInventoryService(repository)
+    collector = (
+        FilesystemCollector(ignore_service=ignore_service, lstat_reader=os.lstat)
+        if force_directory_aware
+        else FilesystemCollector(ignore_service=ignore_service)
+    )
     arguments = [
         str(repo.path),
         "--events",

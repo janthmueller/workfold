@@ -23,12 +23,13 @@ from workfold.collection.filesystem.ignore.paths import (
     looks_like_bare_repository,
 )
 from workfold.collection.filesystem.ignore.runner import GitIgnoreRunner
-from workfold.collection.filesystem.ignore.service import GitIgnoreService
+from workfold.collection.filesystem.ignore.service import GitFilesystemInventoryBackend, GitIgnoreService
 
 __all__ = [
     "ExclusionPatternError",
     "ExplicitExcluder",
     "GitFilesystemInventory",
+    "GitFilesystemInventoryBackend",
     "GitFilesystemInventoryView",
     "GitFilesystemInventoryVisit",
     "GitIgnoreCommandError",

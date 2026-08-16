@@ -26,6 +26,7 @@ from workfold.collection.filesystem.ignore import (
     GitIgnoreRepository,
     is_nested_repository_boundary,
 )
+from workfold.collection.filesystem.ignore.exclusions import filtered_inventory_disposition
 from workfold.collection.filesystem.linux import LinuxStatxReader
 from workfold.collection.filesystem.models import CollectedFilesystemEntry
 from workfold.collection.filesystem.root_schedule import RootOwnershipScope
@@ -236,12 +237,6 @@ def discover_entries(
             if candidate_origin is not None:
                 retain_entry(entries, candidate_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
             return
-        if excluder.matches(relative, is_directory=candidate_type is EntryType.DIRECTORY):
-            accounting.discover(root)
-            accounting.record(root, RecordDisposition.EXPLICITLY_EXCLUDED)
-            if candidate_origin is not None:
-                retain_entry(entries, candidate_origin, RecordDisposition.EXPLICITLY_EXCLUDED)
-            return
         nested_boundary = candidate_type is EntryType.DIRECTORY and is_nested_repository_boundary(
             path,
             selected_root=root,
@@ -250,10 +245,21 @@ def discover_entries(
             if candidate_type is not EntryType.DIRECTORY or include_directories or nested_boundary:
                 if candidate_type is EntryType.DIRECTORY and include_directories:
                     accounting.prune_ignored_subtree()
+                disposition = filtered_inventory_disposition(
+                    excluder,
+                    relative,
+                    is_directory=candidate_type is EntryType.DIRECTORY,
+                )
                 accounting.discover(root)
-                accounting.record(root, RecordDisposition.IGNORED)
-                if candidate_origin is not None:
-                    retain_entry(entries, candidate_origin, RecordDisposition.IGNORED)
+                accounting.record(root, disposition)
+                if candidate_type is EntryType.DIRECTORY and include_directories and candidate_origin is not None:
+                    retain_entry(entries, candidate_origin, disposition)
+            return
+        if excluder.matches(relative, is_directory=candidate_type is EntryType.DIRECTORY):
+            accounting.discover(root)
+            accounting.record(root, RecordDisposition.EXPLICITLY_EXCLUDED)
+            if candidate_origin is not None:
+                retain_entry(entries, candidate_origin, RecordDisposition.EXPLICITLY_EXCLUDED)
             return
         if nested_boundary:
             # A visible nested worktree owns its descendants and applies its

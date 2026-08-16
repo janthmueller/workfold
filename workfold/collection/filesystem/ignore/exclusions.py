@@ -9,6 +9,7 @@ from pathlib import PurePosixPath
 from pathspec import GitIgnoreSpec
 
 from workfold.collection.filesystem.ignore.models import ExclusionPatternError
+from workfold.domain.coverage import RecordDisposition
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,3 +59,21 @@ class ExplicitExcluder:
         if is_directory and not value.endswith("/"):
             value += "/"
         return self._spec.match_file(value)
+
+
+def filtered_inventory_disposition(
+    excluder: ExplicitExcluder,
+    relative_path: PurePosixPath | str,
+    *,
+    is_directory: bool,
+) -> RecordDisposition:
+    """Classify a Git-ignored path after applying explicit exclusions.
+
+    Explicit exclusions win in coverage accounting even when Git also ignores
+    the path. Classification alone never claims metadata evidence; each
+    discovery strategy may retain an entry only when it actually read it.
+    """
+
+    if excluder.matches(relative_path, is_directory=is_directory):
+        return RecordDisposition.EXPLICITLY_EXCLUDED
+    return RecordDisposition.IGNORED

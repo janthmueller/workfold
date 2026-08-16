@@ -10,7 +10,7 @@ import workfold.collection.filesystem.timestamps as timestamp_collection
 from workfold.collection.filesystem.accounting import AccountingBuilder
 from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter
 from workfold.collection.filesystem.scan import PendingEntry
-from workfold.domain.coverage import RecordDisposition
+from workfold.domain.coverage import ExtractionDisposition, RecordDisposition
 from workfold.domain.observations import EntryType, TimestampKind
 from workfold.domain.scope import ObservationScope
 from workfold.domain.time import InstantRange, InstantRangeUnion
@@ -49,3 +49,28 @@ def test_out_of_scope_timestamp_does_not_materialize_provenance(
     extraction = accounting.build().timestamps[0]
     assert extraction.requested == extraction.captured == 1
     assert extraction.scope_matches == 0
+
+
+def test_accounting_canonicalizes_scope_match_identity_order(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    builder = AccountingBuilder()
+    selection = {EntryType.REGULAR_FILE: (TimestampKind.FS_MODIFIED,)}
+    builder.ensure_root(root, selection)
+    builder.discover(root, 2)
+    builder.record(root, RecordDisposition.ELIGIBLE, 2)
+    for observation_id in ("z-observation", "a-observation"):
+        builder.request(root, EntryType.REGULAR_FILE, TimestampKind.FS_MODIFIED)
+        builder.extraction(
+            root,
+            EntryType.REGULAR_FILE,
+            TimestampKind.FS_MODIFIED,
+            ExtractionDisposition.CAPTURED,
+        )
+        builder.match_scope(
+            root,
+            EntryType.REGULAR_FILE,
+            TimestampKind.FS_MODIFIED,
+            observation_id,
+        )
+
+    assert builder.build().timestamps[0].scope_match_ids == ("a-observation", "z-observation")

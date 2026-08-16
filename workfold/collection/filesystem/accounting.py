@@ -141,7 +141,7 @@ class AccountingBuilder:
                 unsupported=self._extractions.get((key, ExtractionDisposition.UNSUPPORTED), 0),
                 errors=self._extractions.get((key, ExtractionDisposition.ERROR), 0),
                 scope_matches=self._scope_matches.get(key, 0),
-                scope_match_ids=tuple(self._scope_match_ids.get(key, ())),
+                scope_match_ids=tuple(sorted(self._scope_match_ids.get(key, ()))),
                 scope_match_ids_complete=self.retain_scope_match_ids,
             )
             for key in sorted(
