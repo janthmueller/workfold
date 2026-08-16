@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 
 from workfold.configuration.options import EventListSelection
-from workfold.domain.coverage import Capability, CoverageLedger
+from workfold.domain.coverage import Capability, CapabilityKind, CapabilityStatus, CoverageLedger
 from workfold.domain.evidence import EvidenceKind, EvidenceSelection
 from workfold.domain.observations import ClassifiedMarker, RecordOrigin, Source, TimestampKind
 from workfold.domain.schedule import Schedule
@@ -44,6 +45,7 @@ class DiagnosticFacts:
     warnings: int = 0
     infos: int = 0
     filesystem_inventory_failures: int = 0
+    filesystem_inventory_errors: int = 0
     other_completeness_failures: int = 0
 
     def __post_init__(self) -> None:
@@ -53,11 +55,65 @@ class DiagnosticFacts:
                 self.warnings,
                 self.infos,
                 self.filesystem_inventory_failures,
+                self.filesystem_inventory_errors,
                 self.other_completeness_failures,
             )
             < 0
         ):
             raise ValueError("diagnostic report counts must be non-negative")
+        if self.filesystem_inventory_errors > self.errors:
+            raise ValueError("filesystem inventory errors cannot exceed all diagnostic errors")
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityLimitation:
+    """One unsupported capability qualified across selected targets."""
+
+    kind: CapabilityKind
+    name: str
+    affected_targets: int
+    total_targets: int
+    notes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not 0 < self.affected_targets <= self.total_targets:
+            raise ValueError("capability limitation target counts must be positive and ordered")
+
+
+@dataclass(frozen=True, slots=True)
+class CompletenessAssessment:
+    """Application-owned verdict and qualifications for requested coverage."""
+
+    partial: bool
+    filesystem_inventory_failures: int = 0
+    collection_errors: int = 0
+    collection_warnings: int = 0
+    ledger_has_operational_errors: bool = False
+    git_identity_scope_active: bool = False
+    explicit_exclusions_active: bool = False
+    pruned_ignored_subtrees: int = 0
+    capability_limitations: tuple[CapabilityLimitation, ...] = ()
+    unavailable_timestamps: tuple[tuple[TimestampKind, int], ...] = ()
+
+    def __post_init__(self) -> None:
+        if (
+            min(
+                self.filesystem_inventory_failures,
+                self.collection_errors,
+                self.collection_warnings,
+                self.pruned_ignored_subtrees,
+            )
+            < 0
+        ):
+            raise ValueError("completeness assessment counts must be non-negative")
+        if any(count <= 0 for _kind, count in self.unavailable_timestamps):
+            raise ValueError("unavailable timestamp counts must be positive")
+
+    @property
+    def is_partial(self) -> bool:
+        """Return the single authoritative completeness verdict."""
+
+        return self.partial
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +209,12 @@ class ReportContext:
     collection: CollectionFacts
     coverage: CoverageLedger
 
+    @property
+    def completeness(self) -> CompletenessAssessment:
+        """Assess completeness once in the renderer-neutral application model."""
+
+        return assess_completeness(self.collection, self.coverage, self.scope)
+
 
 @dataclass(frozen=True, slots=True)
 class ReportRequirements:
@@ -204,6 +266,64 @@ def build_report(
     )
 
 
+def assess_completeness(
+    collection: CollectionFacts,
+    ledger: CoverageLedger,
+    scope: ReportScope,
+) -> CompletenessAssessment:
+    """Combine diagnostics, ledger failures, and qualifications consistently."""
+
+    diagnostics = collection.diagnostics
+    represented_inventory_errors = min(
+        diagnostics.filesystem_inventory_errors,
+        diagnostics.filesystem_inventory_failures,
+    )
+    collection_errors = diagnostics.errors - represented_inventory_errors
+    ledger_incomplete = ledger.has_operational_errors
+    partial = bool(
+        diagnostics.errors
+        or diagnostics.filesystem_inventory_failures
+        or diagnostics.other_completeness_failures
+        or ledger_incomplete
+    )
+
+    capabilities_by_kind: dict[CapabilityKind, list[Capability]] = {}
+    for capability in collection.capabilities:
+        capabilities_by_kind.setdefault(capability.kind, []).append(capability)
+    limitations: list[CapabilityLimitation] = []
+    for kind, capabilities in capabilities_by_kind.items():
+        unsupported = tuple(item for item in capabilities if item.status is CapabilityStatus.UNSUPPORTED)
+        if not unsupported:
+            continue
+        targets = {item.target for item in capabilities}
+        affected = {item.target for item in unsupported}
+        limitations.append(
+            CapabilityLimitation(
+                kind=kind,
+                name=unsupported[0].name,
+                affected_targets=len(affected),
+                total_targets=len(targets),
+                notes=tuple(sorted({item.note for item in unsupported if item.note})),
+            )
+        )
+
+    unavailable = Counter[TimestampKind]()
+    for item in ledger.timestamps:
+        unavailable[item.key.timestamp_kind] += item.unavailable
+    return CompletenessAssessment(
+        partial=partial,
+        filesystem_inventory_failures=diagnostics.filesystem_inventory_failures,
+        collection_errors=collection_errors,
+        collection_warnings=diagnostics.other_completeness_failures,
+        ledger_has_operational_errors=ledger_incomplete,
+        git_identity_scope_active=bool(scope.git_identities),
+        explicit_exclusions_active=bool(scope.exclusions),
+        pruned_ignored_subtrees=collection.pruned_ignored_subtrees,
+        capability_limitations=tuple(sorted(limitations, key=lambda item: item.kind.value)),
+        unavailable_timestamps=tuple(sorted((kind, count) for kind, count in unavailable.items() if count)),
+    )
+
+
 def matches_event_list(classified: ClassifiedMarker, selection: EventListSelection) -> bool:
     """Return whether one classified marker belongs in the requested detail list."""
 
@@ -241,6 +361,8 @@ def _listed_event(classified: ClassifiedMarker, selection: EventListSelection | 
 
 __all__ = [
     "CollectionFacts",
+    "CapabilityLimitation",
+    "CompletenessAssessment",
     "DiagnosticFacts",
     "GitCommitInputFacts",
     "GitCommitInputTargetFacts",
@@ -254,5 +376,6 @@ __all__ = [
     "ReportRequirements",
     "ReportScope",
     "build_report",
+    "assess_completeness",
     "matches_event_list",
 ]

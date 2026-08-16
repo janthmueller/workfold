@@ -73,7 +73,7 @@ def test_collects_annotated_alias_and_lightweight_tags_with_honest_slots(tmp_pat
     assert accounting.operational_errors == 0
     assert accounting.successful
     with pytest.raises(FrozenInstanceError):
-        setattr(accounting, "captured_tags", 2)
+        accounting.captured_tags = 2  # type: ignore[misc]
     by_ref = {item.ref.ref_name: item for item in result.tags}
     assert set(by_ref) == {"refs/tags/latest", "refs/tags/v1-alias", "refs/tags/v1.0.0"}
     assert not by_ref["refs/tags/latest"].annotated

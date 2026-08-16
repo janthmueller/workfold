@@ -203,13 +203,15 @@ def test_partial_coverage_status_remains_intact_in_default_summary() -> None:
 def test_sanitization_and_width_helpers_keep_untrusted_text_single_line() -> None:
     assert sanitize_terminal_text("a\tb\n\x1bc\u202ed\u2028e\u2029f") == (r"a\tb\n\x1bc\u202ed\u2028e\u2029f")
     assert display_width("A界") == 3
+    assert display_width("👩‍💻") == 2
+    assert truncate_end("A👩‍💻B", 3) == "A…"
     assert truncate_end("abcdef", 4) == "abc…"
     assert truncate_middle("abcdefgh", 5) == "ab…gh"
 
 
 def test_terminal_options_reject_too_narrow_layout() -> None:
-    with pytest.raises(ValueError, match="at least 60"):
-        TerminalOptions(width=59)
+    with pytest.raises(ValueError, match="at least 40"):
+        TerminalOptions(width=39)
 
 
 def test_terminal_options_preserve_existing_positional_enum_arguments() -> None:

@@ -37,26 +37,26 @@ documents the complete dependency graph and placement rules.
 
 ```bash
 nix develop
-uv sync --extra dev
+uv sync --locked --extra dev
 ```
 
 Run the checkout without installing another copy:
 
 ```bash
-uv run workfold --help
-uv run python -m workfold --version
+uv run --locked workfold --help
+uv run --locked python -m workfold --version
 ```
 
-Without Nix, install uv separately and run `uv sync --extra dev` with a
+Without Nix, install uv separately and run `uv sync --locked --extra dev` with a
 compatible Python interpreter.
 
 ## Run quality checks
 
 ```bash
-uv run pytest
-ruff check .
-ruff format --check .
-uv run pyright
+uv run --locked pytest
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pyright
 ```
 
 Tests use temporary repositories with controlled timestamps for Git integration
@@ -78,14 +78,14 @@ so an incomplete result cannot become a successful performance sample.
 Run representative current-scope cases against a real repository:
 
 ```bash
-uv run python -m benchmarks.run ~/linux --suite quick --warmups 1 --repetitions 3
+uv run --locked python -m benchmarks.run ~/linux --suite quick --warmups 1 --repetitions 3
 ```
 
 Exercise every mode, date scope, and evidence profile against a disposable
 medium fixture:
 
 ```bash
-uv run python -m benchmarks.run \
+uv run --locked python -m benchmarks.run \
   --fixture medium \
   --suite complete \
   --warmups 1 \
@@ -104,8 +104,9 @@ Linux-sized history.
 Build wheel and source distributions with:
 
 ```bash
-uv build
-uv run --extra release twine check dist/*
+uv sync --locked --extra release
+uv run --locked python -m build
+uv run --locked python -m twine check dist/*
 ```
 
 After a push to `main` passes the complete `Test` workflow, the `Release`
@@ -114,6 +115,9 @@ release, publishes it to PyPI, and attaches PyInstaller archives for the
 supported platforms to the GitHub release. A manual dispatch remains available
 as a guarded fallback. Local development does not need publishing credentials;
 GitHub uses the protected `pypi` environment and trusted publishing.
+Workflow actions are pinned to immutable commits and updated through Renovate.
+CI smoke-tests both the wheel and source distribution, and a separate Python
+3.11 job exercises the declared runtime dependency floors.
 
 ## Work on the documentation
 
@@ -127,7 +131,8 @@ nix run .#docs-dev
 ```
 
 The site documents the terminal CLI. Do not add an HTML report, web server, or
-browser renderer while those remain outside the MVP.
+browser renderer without an explicit product decision to expand Workfold's
+scope.
 
 ## Implementation boundaries
 
@@ -323,7 +328,9 @@ identity group, while in-memory and SQLite-spilled marker rows carry only that
 integer. Registry IDs are remapped into deterministic identity order before
 clustering. Initial-group numbering, composite diamond allocation, and
 identity-label formatting remain terminal-renderer concerns; collectors and
-normalized observations never store display codes.
+normalized observations never store display codes. The registry is capped at
+128 visible groups; exceeding that bound changes only presentation to ordinary
+Git markers and never discards provenance or coverage.
 Repository-controlled values must be sanitized and added as literal Rich text,
 never parsed as markup.
 

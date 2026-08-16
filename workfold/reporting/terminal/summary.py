@@ -22,7 +22,7 @@ def render_summary(report: Report, options: TerminalOptions) -> str:
     if hidden_parts:
         facts.append(("Hidden", " · ".join(hidden_parts)))
     context = report.context
-    status = coverage_status_label(context.collection, context.coverage, context.scope)
+    status = coverage_status_label(context.completeness)
     coverage_status = _default_coverage_status(status)
     if coverage_status is not None:
         facts.append(("Coverage", coverage_status))
@@ -45,7 +45,7 @@ def render_details(
     scope = context.scope
     aggregation = report.aggregation
     sources = _enabled_sources(enabled_sources(scope), aggregation.source_counts)
-    status = coverage_status_label(context.collection, context.coverage, scope)
+    status = coverage_status_label(context.completeness)
     lines = ["Details"]
     lines.extend(fact_lines("Scope", _scope_label(sources, scope.profile_name), width))
     lines.extend(fact_lines("Period", f"{scope.period_label} · {scope.timezone_name}", width))

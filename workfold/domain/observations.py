@@ -50,7 +50,7 @@ class TimestampKind(str, Enum):
 
 
 class EntryType(str, Enum):
-    """Filesystem entry types supported by the MVP."""
+    """Filesystem entry types supported by the current collector."""
 
     REGULAR_FILE = "regular_file"
     DIRECTORY = "directory"
@@ -296,7 +296,7 @@ class ActivityMarker:
 
     @property
     def sources(self) -> frozenset[Source]:
-        """Return the marker's semantic sources (one in the MVP model)."""
+        """Return the marker's semantic sources (one in the current model)."""
 
         return frozenset(item.origin.source for item in self.observations)
 

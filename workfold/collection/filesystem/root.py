@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from workfold.collection.diagnostics import CollectorDiagnostic
+from workfold.collection.diagnostics import DiagnosticSink
 from workfold.collection.filesystem.accounting import AccountingBuilder
 from workfold.collection.filesystem.entries import (
     entry_is_in_scope,
@@ -24,6 +24,7 @@ from workfold.collection.filesystem.ignore import (
     GitIgnoreProbe,
     GitIgnoreService,
     IgnoreCandidate,
+    InventoryStrategy,
     has_git_admin_ancestor,
     has_repository_marker_ancestor,
     is_nested_repository_boundary,
@@ -68,7 +69,7 @@ class RootScanSinks:
     entries: list[CollectedFilesystemEntry] | None
     observations: list[TimestampObservation] | None
     capabilities: list[Capability]
-    diagnostics: list[CollectorDiagnostic]
+    diagnostics: DiagnosticSink
     observation_consumer: FilesystemObservationConsumer | None
     nested_repository_consumer: Callable[[RootSnapshot, ExplicitExcluder], None]
 
@@ -198,7 +199,12 @@ def collect_root(
         if disposition is RecordDisposition.ELIGIBLE:
             consume_eligible(item)
 
-    if respect_gitignore and probe.repository is not None and root_type is EntryType.DIRECTORY:
+    if (
+        respect_gitignore
+        and probe.repository is not None
+        and root_type is EntryType.DIRECTORY
+        and ignore_service.inventory_strategy is InventoryStrategy.GIT
+    ):
         if not include_directories and fast_inventory_supported:
             visit = collect_git_inventory_stream(
                 root_snapshot,
@@ -219,12 +225,11 @@ def collect_root(
             if visit.error is None:
                 capabilities.append(ignore_capability(root, respect_gitignore, probe, error=visit.warning))
                 return
-            if ignore_service.transactional_inventory:
-                accounting.discover(root)
-                accounting.record(root, RecordDisposition.RECORD_ERROR)
-                diagnostics.append(ignore_diagnostic(root, visit.error, warning=False))
-                capabilities.append(ignore_capability(root, respect_gitignore, probe, error=visit.error))
-                return
+            accounting.discover(root)
+            accounting.record(root, RecordDisposition.RECORD_ERROR)
+            diagnostics.append(ignore_diagnostic(root, visit.error, warning=False))
+            capabilities.append(ignore_capability(root, respect_gitignore, probe, error=visit.error))
+            return
         else:
 
             def traverse_with_inventory(inventory: GitFilesystemInventoryView) -> None:
@@ -271,12 +276,11 @@ def collect_root(
                     diagnostics.append(ignore_diagnostic(root, visit.warning, warning=False))
                 capabilities.append(ignore_capability(root, respect_gitignore, probe, error=visit.warning))
                 return
-            if ignore_service.transactional_inventory:
-                accounting.discover(root)
-                accounting.record(root, RecordDisposition.RECORD_ERROR)
-                diagnostics.append(ignore_diagnostic(root, visit.error, warning=False))
-                capabilities.append(ignore_capability(root, respect_gitignore, probe, error=visit.error))
-                return
+            accounting.discover(root)
+            accounting.record(root, RecordDisposition.RECORD_ERROR)
+            diagnostics.append(ignore_diagnostic(root, visit.error, warning=False))
+            capabilities.append(ignore_capability(root, respect_gitignore, probe, error=visit.error))
+            return
 
     defer_ignore_evaluation = respect_gitignore and probe.repository is not None
     pending = discover_entries(

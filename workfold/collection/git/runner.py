@@ -16,11 +16,8 @@ from workfold.collection.git.process import open_git_stdout
 LOCAL_READ_COMMANDS: Final[frozenset[str]] = frozenset(
     {
         "cat-file",
-        "check-ignore",
         "diff-tree",
         "for-each-ref",
-        "log",
-        "ls-files",
         "reflog",
         "rev-list",
         "rev-parse",
@@ -248,6 +245,8 @@ class GitRunner:
             "color.ui=false",
             "-c",
             "core.pager=cat",
+            "-c",
+            "core.fsmonitor=false",
             "-c",
             "credential.helper=",
             "-c",

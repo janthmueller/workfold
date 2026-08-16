@@ -19,6 +19,8 @@ _GIT_SAFETY_OPTIONS: Final[tuple[str, ...]] = (
     "-c",
     "core.pager=cat",
     "-c",
+    "core.fsmonitor=false",
+    "-c",
     "credential.helper=",
     "-c",
     "protocol.allow=never",

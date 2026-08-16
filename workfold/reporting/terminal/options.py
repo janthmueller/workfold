@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 from workfold.configuration.options import BandLabel, GridStyle, MarkerStyle
 
+MIN_TERMINAL_WIDTH = 40
+
 
 @dataclass(frozen=True, slots=True)
 class TerminalOptions:
@@ -23,8 +25,8 @@ class TerminalOptions:
     coverage: bool = False
 
     def __post_init__(self) -> None:
-        if self.width < 60:
-            raise ValueError("terminal width must be at least 60 columns")
+        if self.width < MIN_TERMINAL_WIDTH:
+            raise ValueError(f"terminal width must be at least {MIN_TERMINAL_WIDTH} columns")
         _require_option_type(self.marker_style, MarkerStyle, "marker_style")
         _require_option_type(self.grid_style, GridStyle, "grid_style")
         _require_option_type(self.band_label, BandLabel, "band_label")

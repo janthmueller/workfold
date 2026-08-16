@@ -22,7 +22,6 @@ from workfold.domain.observations import (
     TimestampObservation,
     Weekday,
 )
-from workfold.domain.schedule import parse_schedule
 from workfold.domain.time import all_time_range
 from workfold.folding import aggregate_markers
 
@@ -90,6 +89,7 @@ def report(
     schedule_bounds: tuple[int, int] | None = None,
     display_range: tuple[int, int] | None = None,
     retain_git_identities: bool = False,
+    identity_limit: int = 128,
     hide_days: tuple[Weekday, ...] = (),
     hide_empty_days: tuple[Weekday, ...] = (),
 ) -> Report:
@@ -103,6 +103,7 @@ def report(
         listed_marker_limit=event_limit,
         listed_marker_predicate=lambda marker: matches_event_list(marker, selected_list),
         retain_git_identities=retain_git_identities,
+        identity_limit=identity_limit,
         hide_days=hide_days,
         hide_empty_days=hide_empty_days,
     )
@@ -112,7 +113,7 @@ def report(
         collection=Collection((), (), True),
         time_selection=ResolvedTimeSelection(all_time_range(), "2026-W32"),
         timezone=ZoneInfo("UTC"),
-        schedule=parse_schedule(options.hours),
+        schedule=options.schedule,
         coverage=CoverageLedger(),
     )
     return build_report(aggregation, context, selected_list)

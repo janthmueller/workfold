@@ -177,9 +177,7 @@ class RunOptions:
     include_ignored: bool
     respect_gitignore: bool
     exclusions: tuple[str, ...]
-    hours: str
     schedule: Schedule
-    timezone_name: str | None
     timezone: ZoneInfo | None
     cluster_window: timedelta
     display_hours: DisplayHours | None

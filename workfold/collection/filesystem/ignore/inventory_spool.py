@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import tempfile
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +16,7 @@ from workfold.collection.filesystem.ignore.inventory_format import (
     inventory_stderr_error,
     merge_inventory_stderr,
     normalized_inventory_path,
+    parse_error,
 )
 from workfold.collection.filesystem.ignore.models import GitIgnoreCommandError
 from workfold.collection.filesystem.ignore.runner import GitIgnoreRunner
@@ -29,6 +30,10 @@ class InventorySpool:
     warning: GitIgnoreCommandError | None
 
 
+class InventoryStorageError(RuntimeError):
+    """A local failure in the inventory's ephemeral SQLite storage."""
+
+
 class SqliteInventoryView:
     """Query and mark a validated inventory without loading its paths into RAM."""
 
@@ -37,19 +42,22 @@ class SqliteInventoryView:
 
     def ignore_state(self, relative_path: str) -> tuple[bool, bool]:
         normalized_path = normalized_inventory_path(os.fsencode(relative_path))
-        category, is_directory = self._connection.execute(
-            """
-            SELECT (SELECT category FROM inventory WHERE normalized_path = ?),
-                   EXISTS(SELECT 1 FROM ignored_directories WHERE normalized_path = ?)
-            """,
-            (normalized_path, normalized_path),
-        ).fetchone()
-        ignored = category == 1
-        if ignored:
-            self._connection.execute(
-                "UPDATE inventory SET seen = 1 WHERE normalized_path = ?",
-                (normalized_path,),
-            )
+        try:
+            category, is_directory = self._connection.execute(
+                """
+                SELECT (SELECT category FROM inventory WHERE normalized_path = ?),
+                       EXISTS(SELECT 1 FROM ignored_directories WHERE normalized_path = ?)
+                """,
+                (normalized_path, normalized_path),
+            ).fetchone()
+            ignored = category == 1
+            if ignored:
+                self._connection.execute(
+                    "UPDATE inventory SET seen = 1 WHERE normalized_path = ?",
+                    (normalized_path,),
+                )
+        except sqlite3.Error as error:
+            raise InventoryStorageError(f"could not query ignore membership: {error}") from error
         return ignored, bool(is_directory)
 
 
@@ -59,9 +67,16 @@ def open_inventory_spool(
     physical_repository_root: Path,
     selected_prefix: Path,
 ) -> Generator[InventorySpool, None, None]:
-    with tempfile.TemporaryDirectory(prefix="workfold-ignore-inventory-") as directory:
-        connection = sqlite3.connect(f"{directory}/inventory.sqlite3")
+    try:
+        directory = tempfile.TemporaryDirectory(prefix="workfold-ignore-inventory-")
+    except OSError as error:
+        raise InventoryStorageError(f"could not create its temporary directory: {error}") from error
+
+    connection: sqlite3.Connection | None = None
+    body_failed = False
+    try:
         try:
+            connection = sqlite3.connect(f"{directory.name}/inventory.sqlite3")
             _initialize_spool(connection)
             included_count, ignored_count, warning = _populate_inventory(
                 connection,
@@ -69,26 +84,64 @@ def open_inventory_spool(
                 physical_repository_root,
                 selected_prefix,
             )
-            yield InventorySpool(connection, included_count, ignored_count, warning)
-        finally:
-            connection.close()
+        except ValueError as error:
+            raise parse_error(physical_repository_root, error) from error
+        except (OSError, sqlite3.Error) as error:
+            raise InventoryStorageError(f"could not initialize it: {error}") from error
+
+        yield InventorySpool(connection, included_count, ignored_count, warning)
+    except BaseException:
+        body_failed = True
+        raise
+    finally:
+        cleanup_error = _cleanup_inventory_storage(connection, directory)
+        if cleanup_error is not None and not body_failed:
+            raise InventoryStorageError(f"could not clean it up: {cleanup_error}") from cleanup_error
+
+
+def included_rows(connection: sqlite3.Connection) -> Iterator[tuple[bytes]]:
+    try:
+        yield from connection.execute("SELECT path FROM inventory WHERE category = 0 ORDER BY ordinal")
+    except sqlite3.Error as error:
+        raise InventoryStorageError(f"could not read included paths: {error}") from error
 
 
 def ignored_rows(
     connection: sqlite3.Connection,
     *,
     unseen_only: bool = False,
-) -> sqlite3.Cursor:
+) -> Iterator[tuple[bytes, int]]:
     unseen_clause = "AND inventory.seen = 0" if unseen_only else ""
-    return connection.execute(
-        f"""
-        SELECT inventory.path, ignored_directories.normalized_path IS NOT NULL
-          FROM inventory
-          LEFT JOIN ignored_directories USING (normalized_path)
-         WHERE category = 1 {unseen_clause}
-         ORDER BY ordinal
-        """
-    )
+    try:
+        yield from connection.execute(
+            f"""
+            SELECT inventory.path, ignored_directories.normalized_path IS NOT NULL
+              FROM inventory
+              LEFT JOIN ignored_directories USING (normalized_path)
+             WHERE category = 1 {unseen_clause}
+             ORDER BY ordinal
+            """
+        )
+    except sqlite3.Error as error:
+        raise InventoryStorageError(f"could not read ignored paths: {error}") from error
+
+
+def _cleanup_inventory_storage(
+    connection: sqlite3.Connection | None,
+    directory: tempfile.TemporaryDirectory[str],
+) -> OSError | sqlite3.Error | None:
+    first_error: OSError | sqlite3.Error | None = None
+    if connection is not None:
+        try:
+            connection.close()
+        except sqlite3.Error as error:
+            first_error = error
+    try:
+        directory.cleanup()
+    except OSError as error:
+        if first_error is None:
+            first_error = error
+    return first_error
 
 
 def _populate_inventory(

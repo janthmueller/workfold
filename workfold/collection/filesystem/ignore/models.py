@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
@@ -12,6 +13,13 @@ from workfold.domain.coverage import CapabilityReason
 
 class ExclusionPatternError(ValueError):
     """Raised when an explicit exclusion exceeds the documented subset."""
+
+
+class InventoryStrategy(str, Enum):
+    """Internal path-discovery strategy for Git-aware filesystem scans."""
+
+    GIT = "git"
+    NATIVE = "native"
 
 
 class GitIgnoreCommandError(RuntimeError):

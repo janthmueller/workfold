@@ -213,6 +213,25 @@ def test_identity_mode_leaves_filesystem_symbols_unchanged() -> None:
     assert "■ Filesystem · □ Outside working hours" in rendered
 
 
+def test_identity_mode_falls_back_cleanly_when_the_registry_limit_is_exceeded() -> None:
+    report = _report(
+        _classified("ada", 8, 0, source=Source.GIT, within_schedule=True, actor_name="Ada"),
+        _classified("bob", 8, 1, source=Source.GIT, within_schedule=True, actor_name="Bob"),
+        retain_git_identities=True,
+        identity_limit=1,
+    )
+
+    rendered = render_terminal(
+        report,
+        options=TerminalOptions(width=100, color=False, marker_style=MarkerStyle.IDENTITY),
+    )
+
+    assert "●●" in rendered
+    assert "● Git" in rendered
+    assert "identity limit exceeded" in rendered
+    assert "Ada" not in rendered and "Bob" not in rendered
+
+
 def test_coalesced_different_identities_use_filled_and_hollow_diamonds() -> None:
     report = _report(
         _coalesced_git("inside", 8, within_schedule=True),

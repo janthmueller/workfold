@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from workfold.collection.diagnostics import CollectorDiagnostic
+from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticSink
 from workfold.collection.filesystem.accounting import AccountingBuilder
 from workfold.collection.filesystem.entries import pending_origin
 from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter
@@ -22,7 +22,7 @@ def extract_entry(
     adapter: FilesystemTimestampAdapter,
     accounting: AccountingBuilder,
     observations: list[TimestampObservation] | None,
-    diagnostics: list[CollectorDiagnostic],
+    diagnostics: DiagnosticSink,
     observation_consumer: FilesystemObservationConsumer | None,
     observation_scope: ObservationScope | None,
 ) -> None:

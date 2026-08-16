@@ -9,7 +9,7 @@ on:
 
 permissions:
   actions: read
-  contents: write
+  contents: read
 
 concurrency:
   group: release-main
@@ -29,7 +29,7 @@ jobs:
       should_release: ${{ steps.check.outputs.should_release }}
       target_sha: ${{ steps.check.outputs.target_sha }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           ref: main
@@ -58,11 +58,14 @@ jobs:
     needs: guard
     if: needs.guard.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
     outputs:
       released: ${{ steps.release_state.outputs.released }}
       tag: ${{ steps.release_state.outputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           ref: ${{ needs.guard.outputs.target_sha }}
@@ -81,7 +84,7 @@ jobs:
           SHA="$(git rev-parse HEAD)"
           CONCLUSION="$(gh run list --workflow test.yml --commit "$SHA" --status completed --limit 1 --json conclusion --jq '.[0].conclusion // ""')"
           test "$CONCLUSION" = success
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.14"
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -109,7 +112,7 @@ jobs:
         run: uv run --locked python -m twine check dist/*
       - name: Preserve Python distributions
         if: steps.release_state.outputs.released == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: python-distributions
           path: dist/
@@ -129,7 +132,7 @@ jobs:
       actions: read
       id-token: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: python-distributions
           path: dist/

@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from workfold.collection.diagnostics import CollectorDiagnostic
+from workfold.collection.diagnostics import DiagnosticSink
 from workfold.collection.filesystem.accounting import AccountingBuilder
 from workfold.collection.filesystem.entries import (
     entry_is_in_scope,
@@ -103,7 +103,7 @@ def collect_git_inventory_stream(
     excluder: ExplicitExcluder,
     accounting: AccountingBuilder,
     entries: list[CollectedFilesystemEntry] | None,
-    diagnostics: list[CollectorDiagnostic],
+    diagnostics: DiagnosticSink,
     ignore_service: GitIgnoreService,
     statx_reader: LinuxStatxReader | None,
     root_validator: Callable[[], None],
@@ -144,7 +144,7 @@ def _collect_git_inventory_stream(
     excluder: ExplicitExcluder,
     accounting: AccountingBuilder,
     entries: list[CollectedFilesystemEntry] | None,
-    diagnostics: list[CollectorDiagnostic],
+    diagnostics: DiagnosticSink,
     ignore_service: GitIgnoreService,
     metadata: AnchoredInventoryMetadata,
     root_validator: Callable[[], None],

@@ -24,41 +24,24 @@ For an isolated installation, use `uv tool install workfold` or
 
 ## Quick start
 
-Run `workfold` inside a Git repository for the current ISO week:
+Run `workfold` inside a Git repository to see the current ISO week:
 
 ```bash
 workfold
 ```
 
-Common views:
+The four selectors you will use most are:
 
 ```bash
-workfold . -t 2026-W31                         # one ISO week
-workfold . -t 2026-W30 -t 2026-W31            # several weeks, folded together
-workfold . -t 2w3d                             # rolling elapsed window
-workfold . -t 2026-07-01..2026-07-31          # inclusive date range
-workfold . -t all -m fs                        # filesystem metadata
-workfold . -t all -m git -p portable           # portable Git-object timestamps
-workfold . -t all -m both -p full              # exhaustive local view
-workfold . --events git:tag:tagger fs:file:modified  # exact custom evidence
-workfold . --events 'git:*:committer'           # wildcard timestamp roles
-workfold . --events 'fs:*:modified'              # mtime for files, directories, links
-workfold . --git-identity jan@example.com      # only that recorded Git identity
-workfold . --marker-style identity             # identity codes instead of circles
-workfold . --timezone Europe/Berlin
-workfold . --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
-workfold . --hours all                         # classify every time as working time
-workfold . --cluster-anchor midnight           # fixed clock-aligned intervals
-workfold . --cluster-anchor midnight --show-empty-bands  # include empty fixed intervals
-workfold . --band-label start                  # show one time per occupied row
-workfold . -E all                              # keep only occupied day columns
-workfold . -E weekend                          # remove empty weekend columns
-workfold . -H weekend                          # always hide weekend columns
-workfold . --grid vertical                     # add column separators
-workfold . --events git:tag:tagger --list outside --limit 50  # outside tag details
+workfold . -t 2w3d                    # rolling elapsed window
+workfold . -t 2026-W31                # one ISO week
+workfold . -m fs                      # current filesystem metadata
+workfold . -m both -p full -t all     # exhaustive local view
+workfold . -m git -p portable -t all  # evidence stored in Git objects
+workfold . -e git:tag:tagger fs:file:modified
 ```
 
-The main selectors control separate parts of the request:
+They control separate parts of the request:
 
 | Selector | Purpose | Values |
 | --- | --- | --- |
@@ -67,55 +50,28 @@ The main selectors control separate parts of the request:
 | `-p`, `--profile` | Evidence preset | `standard`, `portable`, `full` |
 | `-e`, `--events` | Exact event scope (alternative to mode/profile) | IDs and wildcards |
 
-Time is independent from evidence selection. For the simple path, mode chooses
-the source and profile chooses its preset; `portable` is Git-only. For exact
-control, `--events` replaces both mode and profile:
+The profiles answer different questions:
+
+- `standard`: What does the ordinary activity pattern look like?
+- `portable`: What dated evidence is stored inside Git objects?
+- `full`: What can this machine still discover for the selected mode and time?
+
+For exact control, `-e/--events` accepts identifiers such as
+`git:commit:author`, `git:tag:tagger`, and `fs:file:modified`; quote wildcards
+such as `'git:*'`. `-l/--list` appends bounded event details. Paths must appear
+before either space-separated selector, or after an option-terminating `--`.
+
+Schedules support daily intervals, breaks, overnight shifts, and `all`:
 
 ```bash
-workfold . --events git:commit:author git:tag:tagger fs:file:modified
-workfold . --events 'git:*'                     # every Git event kind
-workfold . --events '*'                         # every event kind, not full-policy defaults
+workfold . --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
+workfold . --hours 'Mo-Fr 22:00-06:00'
+workfold . --hours all
 ```
 
-Every exact selector uses `source:record:timestamp`. Filesystem records are
-`file`, `directory`, or `symlink`; their timestamps are `birth`, `modified`,
-`metadata-changed`, or `accessed`. Quote wildcards so the shell
-does not expand them. `--events '*'` selects every event kind but, unlike
-`-m both -p full`, keeps the ordinary Git reachability and filesystem ignore
-policies. Put positional paths before `--events` and `--list` because both
-accept multiple space-separated values.
-
-- `standard` — **What does the ordinary activity pattern look like?** Git uses
-  commit author dates reachable from local branches (plus a detached `HEAD`);
-  filesystem mode uses birth/modified dates for regular files and respects Git
-  ignore rules.
-- `portable` — **What dated evidence is stored inside Git objects?** Includes
-  commit author/committer and annotated-tag tagger dates, excluding local-only
-  evidence.
-- `full` — **What dated evidence can this local machine still discover?**
-  Enables every supported kind inside the selected time and mode; it does not
-  imply `-t all` or `-m both`.
-
-`-l/--list all|inside|outside|EVENT...` appends a bounded chronological detail
-view. A schedule selector and event selectors intersect; several event
-selectors form a union. For example, `--list outside git:tag:tagger fs:file:accessed`
-lists only outside-hours tag or access-time events from the already selected
-scope. Every exact event kind named by `--list` must already be enabled;
-wildcards match only enabled kinds and must match at least one.
-
-Use `--cluster-window 10m`, `--cluster-window 1h5m`, or another duration to tune
-row clustering. The default `--cluster-anchor event` starts a band at each
-earliest unassigned event; `midnight` uses fixed whole-minute intervals from
-local `00:00` so their `HH:MM` boundaries remain exact. Second-based windows
-remain available with event anchoring. Independently,
-`--band-label range|start` selects an observed/fixed range label or only its
-starting minute. `--show-empty-bands` with midnight anchoring renders every
-fixed interval intersecting the display range; automatic ranges expand to full
-fixed bands. An explicitly cropped partial edge always shows its exact range,
-even with `--band-label start`. Without dense output, empty time stays compressed.
-Color is automatic by default. Use `--no-color` or the standard `NO_COLOR`
-environment variable for colorless output. `--color` restores automatic color
-when a configuration file sets `no-color = true`.
+See the [usage guide](https://janthmueller.github.io/workfold/guides/usage/)
+for clustering, fixed bands, identity markers, day hiding, grids, exact event
+selection, configuration, and every CLI option.
 
 ## Configuration
 
@@ -149,21 +105,11 @@ documents locations, discovery, merging, and every supported key.
 ## Reading the chart
 
 - Circles are Git events; squares are filesystem events.
-- `--marker-style identity` replaces Git circles with mapped codes such as `J`
-  or the collision-safe `J1`, `J2`, and `J3`.
-- Green and blue are inside the configured schedule; red is outside.
-- Filled/uppercase markers are inside; hollow/lowercase markers are outside.
-- The key maps each visible identity/source once and adds an outside-hours cue
-  only when needed.
-- One symbol is one event. Busy cells use exact `×N` counts.
-- Empty time is omitted. A `⋮` row reports a compressed gap once it reaches
-  the configured cluster window.
-- Event-anchored rows are compact around observations; midnight-anchored rows
-  use predictable clock boundaries. Labels are independently configurable.
-- Day-column hiding changes only the matrix; totals continue to cover every
-  selected event.
-- `--grid vertical|horizontal|both` adds optional internal chart lines; the
-  uncluttered default is `none`.
+- Green/blue and filled markers are inside the schedule; red and hollow markers
+  are outside. Colorless output preserves the shape distinction.
+- One symbol is one event; busy cells use exact `×N` counts.
+- Empty time is compressed, and `⋮` reports a meaningful gap.
+- Identity-marker mode replaces Git circles with codes mapped in the key.
 
 The summary independently splits all events by schedule and by calendar day.
 Weekend events can therefore also be outside working hours.
@@ -187,11 +133,11 @@ The Python package lives directly in `workfold/`; there is no `src/` wrapper.
 
 ```bash
 nix develop
-uv sync --extra dev
-uv run pytest
-ruff check .
-ruff format --check .
-uv run pyright
+uv sync --locked --extra dev
+uv run --locked pytest
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pyright
 ```
 
 Use `nix run .#docs-dev` for the documentation site and

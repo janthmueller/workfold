@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
 _UTC = datetime_timezone.utc
+_UTC_ZONE = ZoneInfo("UTC")
 _EPOCH = datetime(1970, 1, 1, tzinfo=_UTC)
 _ISO_WEEK_PATTERN = re.compile(r"(?P<year>\d{4})-W(?P<week>\d{2})\Z", re.IGNORECASE)
 
@@ -90,7 +91,7 @@ def datetime_to_utc_ns(value: datetime) -> int:
     return seconds * NANOSECONDS_PER_SECOND + delta.microseconds * 1_000
 
 
-def utc_ns_to_datetime(instant_utc_ns: int, timezone: ZoneInfo = ZoneInfo("UTC")) -> datetime:
+def utc_ns_to_datetime(instant_utc_ns: int, timezone: ZoneInfo = _UTC_ZONE) -> datetime:
     """Convert integer UTC epoch nanoseconds to an aware datetime.
 
     Python's :class:`datetime` stores microseconds, so sub-microsecond remainder

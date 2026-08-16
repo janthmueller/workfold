@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from workfold.collection.diagnostics import CollectorDiagnostic
+from workfold.collection.diagnostics import DiagnosticSink
 from workfold.collection.filesystem.accounting import AccountingBuilder
 from workfold.collection.filesystem.entries import (
     entry_type,
@@ -159,7 +159,7 @@ def discover_entries(
     excluder: ExplicitExcluder,
     accounting: AccountingBuilder,
     entries: list[CollectedFilesystemEntry] | None,
-    diagnostics: list[CollectorDiagnostic],
+    diagnostics: DiagnosticSink,
     repository: GitIgnoreRepository | None,
     inventory: GitFilesystemInventoryView | None,
     pending_consumer: Callable[[PendingEntry], None] | None,
@@ -278,9 +278,9 @@ def discover_entries(
     while directories:
         directory, directory_relative, expected_snapshot = directories.pop()
         publisher = ValidatedBatchPublisher(
-            validator=lambda: revalidate_directory_snapshot(
-                directory,
-                expected_snapshot,
+            validator=lambda current=directory, expected=expected_snapshot: revalidate_directory_snapshot(
+                current,
+                expected,
                 directory_identity_reader,
             ),
             consumer=process_read,

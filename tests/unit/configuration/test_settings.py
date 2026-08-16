@@ -99,8 +99,8 @@ def test_global_local_and_cli_layers_merge_by_key(tmp_path: Path) -> None:
         platform_name="linux",
     )
 
-    assert invocation.options.timezone_name == "Europe/Berlin"
-    assert invocation.options.hours == "Mo-Thu 08:00-16:00"
+    assert invocation.options.timezone is not None and invocation.options.timezone.key == "Europe/Berlin"
+    assert str(invocation.options.schedule) == "Mo-Th 08:00-16:00"
     assert invocation.options.cluster_anchor is ClusterAnchor.MIDNIGHT
     assert invocation.options.terminal.band_label is BandLabel.START
     assert invocation.options.terminal.grid_style is GridStyle.BOTH
@@ -130,7 +130,7 @@ def test_nearest_pyproject_table_is_a_local_config(tmp_path: Path) -> None:
         platform_name="linux",
     )
 
-    assert invocation.options.timezone_name == "UTC"
+    assert invocation.options.timezone is not None and invocation.options.timezone.key == "UTC"
     assert invocation.options.cluster_window.total_seconds() == 900
     assert invocation.settings.local_config == pyproject.resolve()
 
@@ -151,7 +151,7 @@ def test_valid_quoted_pyproject_table_is_discovered_semantically(tmp_path: Path)
         platform_name="linux",
     )
 
-    assert invocation.options.timezone_name == "Europe/Berlin"
+    assert invocation.options.timezone is not None and invocation.options.timezone.key == "Europe/Berlin"
     assert invocation.settings.local_config == pyproject.resolve()
 
 
@@ -170,7 +170,7 @@ def test_unrelated_malformed_pyproject_does_not_become_a_config(tmp_path: Path) 
         platform_name="linux",
     )
 
-    assert invocation.options.timezone_name == "UTC"
+    assert invocation.options.timezone is not None and invocation.options.timezone.key == "UTC"
     assert invocation.settings.local_config == parent_config.resolve()
 
 
@@ -301,7 +301,7 @@ def test_local_sentinels_can_restore_dynamic_defaults(tmp_path: Path) -> None:
         platform_name="linux",
     )
 
-    assert invocation.options.timezone_name is None
+    assert invocation.options.timezone is None
     assert invocation.options.display_hours is None
     assert invocation.settings.origins["timezone"].kind is OriginKind.LOCAL
     assert invocation.settings.origins["display-hours"].kind is OriginKind.LOCAL
@@ -312,7 +312,7 @@ def test_local_sentinels_can_restore_dynamic_defaults(tmp_path: Path) -> None:
         environ=environ,
         platform_name="linux",
     )
-    assert cli.options.timezone_name is None
+    assert cli.options.timezone is None
     assert cli.options.display_hours is None
     assert cli.settings.origins["timezone"].kind is OriginKind.CLI
 

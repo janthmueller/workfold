@@ -30,6 +30,7 @@ from workfold.collection.filesystem.ignore import (
     GitIgnoreRunner,
     GitIgnoreService,
     IgnoreCandidate,
+    InventoryStrategy,
 )
 from workfold.collection.filesystem.inventory_metadata import (
     AnchoredInventoryMetadata,
@@ -83,29 +84,13 @@ class FixedIgnoreService(GitIgnoreService):
     def __init__(
         self,
         probe: GitIgnoreProbe,
-        matches: GitIgnoreMatches = GitIgnoreMatches(frozenset()),
+        matches: GitIgnoreMatches | None = None,
     ) -> None:
-        def disabled_inventory(
-            _runner: GitIgnoreRunner,
-            _repository: GitIgnoreRepository,
-            selected_root: Path,
-        ) -> GitFilesystemInventory:
-            return GitFilesystemInventory(
-                error=GitIgnoreCommandError(
-                    code="test_inventory_disabled",
-                    message="inventory disabled by fixture",
-                    cwd=selected_root,
-                    command=("ls-files",),
-                )
-            )
-
         super().__init__(
-            inventory_builder=disabled_inventory,
-            inventory_visitor=None,
-            transactional_inventory=False,
+            inventory_strategy=InventoryStrategy.NATIVE,
         )
         self.probe_result = probe
-        self.matches_result = matches
+        self.matches_result = GitIgnoreMatches(frozenset()) if matches is None else matches
         self.ignored_calls: list[tuple[GitIgnoreRepository, tuple[IgnoreCandidate, ...]]] = []
 
     def probe(self, path: Path, *, is_directory: bool) -> GitIgnoreProbe:
@@ -127,25 +112,7 @@ class NativeOnlyIgnoreService(GitIgnoreService):
     """Force the reference traversal/check-ignore path for equivalence tests."""
 
     def __init__(self) -> None:
-        def disabled_inventory(
-            _runner: GitIgnoreRunner,
-            _repository: GitIgnoreRepository,
-            selected_root: Path,
-        ) -> GitFilesystemInventory:
-            return GitFilesystemInventory(
-                error=GitIgnoreCommandError(
-                    code="test_inventory_disabled",
-                    message="inventory disabled by fixture",
-                    cwd=selected_root,
-                    command=("ls-files",),
-                )
-            )
-
-        super().__init__(
-            inventory_builder=disabled_inventory,
-            inventory_visitor=None,
-            transactional_inventory=False,
-        )
+        super().__init__(inventory_strategy=InventoryStrategy.NATIVE)
 
 
 @dataclass(frozen=True, slots=True)

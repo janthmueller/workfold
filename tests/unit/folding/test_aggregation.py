@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -627,7 +628,7 @@ def test_marker_store_cleans_up_when_sqlite_initialization_fails(
             self.closed = False
 
         def execute(self, _statement: str) -> None:
-            raise RuntimeError("SQLite setup failed")
+            raise sqlite3.OperationalError("SQLite setup failed")
 
         def close(self) -> None:
             self.closed = True
@@ -653,7 +654,7 @@ def test_marker_store_cleans_up_when_sqlite_initialization_fails(
                 within_schedule=True,
             )
         )
-        with pytest.raises(RuntimeError, match="SQLite setup failed"):
+        with pytest.raises(spill_module.AggregationStorageError, match="SQLite setup failed"):
             store.add(
                 ChartMarker(
                     marker_id="second",
@@ -996,6 +997,30 @@ def test_identity_registry_is_deterministic_and_survives_sqlite_spill() -> None:
     assert actual == expected
     assert [identity.members[0].name for identity in actual.identities] == ["Ada", "Bob"]
     assert actual.identity_counts == ((0, 1), (1, 2))
+
+
+def test_identity_registry_falls_back_to_bounded_source_markers() -> None:
+    markers = tuple(
+        _classified(
+            str(index),
+            datetime(2026, 8, 3, 9, index, tzinfo=timezone.utc),
+            actor_name=f"Person {index}",
+            actor_email=f"person-{index}@example.test",
+        )
+        for index in range(3)
+    )
+
+    result = aggregate_markers(
+        markers,
+        cluster_window=timedelta(hours=1),
+        retain_git_identities=True,
+        identity_limit=2,
+    )
+
+    assert result.identity_overflow
+    assert result.identities == ()
+    assert result.identity_counts == ()
+    assert all(run.identity_id is None for cell in result.clusters[0].cells for run in cell.runs)
 
 
 def test_pathologically_alternating_cell_is_compacted_to_bounded_counts() -> None:

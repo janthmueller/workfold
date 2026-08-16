@@ -19,7 +19,7 @@ from workfold.folding import (
     TimeCluster,
 )
 from workfold.folding.bands import ClusterAnchor, duration_nanoseconds
-from workfold.reporting.sanitization import display_width, pad_right
+from workfold.reporting.sanitization import display_width, pad_right, truncate_end
 from workfold.reporting.terminal.chart_time import (
     chart_layout,
     cluster_label,
@@ -246,9 +246,8 @@ def _horizontal_rule(
 def _horizontal_time_segment(width: int, label: str | None) -> str:
     if label is None:
         return "─" * width
+    label = truncate_end(label, width)
     label_width = display_width(label)
-    if label_width > width:
-        raise ValueError("horizontal grid label exceeds the time column")
     left_width = (width - label_width) // 2
     return "─" * left_width + label + "─" * (width - label_width - left_width)
 

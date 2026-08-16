@@ -25,8 +25,8 @@ jobs:
           - os: macos-latest
             python-version: "3.14"
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install -e ".[dev]"
@@ -35,27 +35,49 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.14"
-      - run: python -m pip install uv
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
       - run: uv sync --locked --extra dev
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run pyright
-      - run: uv run pytest -q --cov --cov-report=term-missing
+      - run: uv run --locked ruff check .
+      - run: uv run --locked ruff format --check .
+      - run: uv run --locked pyright
+      - run: uv run --locked pytest -q --cov --cov-report=term-missing
+
+  minimum-runtime-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - name: Install declared runtime floors
+        run: |
+          python -m pip install \
+            "pathspec==1.0.0" \
+            "rich==14.3.0" \
+            "tzlocal==5.0" \
+            "pytest>=8"
+          python -m pip install --no-deps -e .
+      - run: python -m pytest -q
 
   package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.14"
-      - run: python -m pip install build twine
-      - run: python -m build
-      - run: python -m twine check dist/*
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+      - run: uv sync --locked --extra release
+      - run: uv run --locked python -m build
+      - run: uv run --locked python -m twine check dist/*
       - name: Smoke-test wheel
         shell: bash
         run: |
@@ -71,6 +93,13 @@ jobs:
           GIT_AUTHOR_DATE="2026-08-03T10:00:00+02:00" GIT_COMMITTER_DATE="2026-08-03T10:00:00+02:00" git -C "$FIXTURE" commit -m "fixture activity"
           wheel-smoke/bin/workfold "$FIXTURE" --time all --timezone Europe/Berlin --no-color > wheel-report.txt
           grep -Eq '^Events[[:space:]]+1[[:space:]]*$' wheel-report.txt
+      - name: Smoke-test source distribution
+        shell: bash
+        run: |
+          python -m venv sdist-smoke
+          sdist-smoke/bin/python -m pip install dist/*.tar.gz
+          sdist-smoke/bin/workfold --version
+          sdist-smoke/bin/workfold --help > /dev/null
 
   binaries:
     uses: ./.github/workflows/binaries.yml
@@ -84,11 +113,11 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 11.11.0
       - working-directory: docs
@@ -101,16 +130,19 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.14"
-      - run: python -m pip install pip-audit
-      - run: python -m pip_audit .
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+      - run: uv sync --locked --extra audit
+      - run: uv run --locked python -m pip_audit .
 
   nix:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31.10.6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
       - run: nix flake check --print-build-logs

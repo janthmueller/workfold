@@ -6,7 +6,8 @@ from io import BytesIO, TextIOWrapper
 from pathlib import Path
 
 import pytest
-from workfold.cli import build_parser, configure_windows_stdio, main
+from workfold.application.errors import OperationalError
+from workfold.cli import build_parser, configure_windows_stdio, main, parse_options
 
 from support.git_repo import GitRepo
 
@@ -119,7 +120,8 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     assert "space-separated identifiers and '*' wildcards" in normalized_help
     assert "git:file-change:author" in normalized_help
     assert "fs:<file|directory|symlink>:<birth|modified|metadata-changed|accessed>" in normalized_help
-    assert "place PATH arguments before --events or --list" in normalized_help
+    assert "Place PATH arguments before --events/--list" in normalized_help
+    assert "after an option-terminating --" in normalized_help
     assert "--git-commits-from {head,local-branches,all-refs}" in normalized_help
     assert "standard built-in: local-branches; portable/full: all-refs" in normalized_help.replace("- ", "-")
     assert "--git-identity VALUE" in normalized_help
@@ -174,6 +176,19 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
         "--list-outside",
         "--no-list-outside",
     }.isdisjoint(public_options)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["repo", "--events", "git:commit:author"],
+        ["--events", "git:commit:author", "--", "repo"],
+        ["repo", "--list", "outside"],
+        ["--list", "outside", "--", "repo"],
+    ],
+)
+def test_space_separated_selectors_have_documented_path_disambiguation(arguments: list[str]) -> None:
+    assert parse_options(arguments).paths == (Path("repo"),)
 
 
 @pytest.mark.parametrize(
@@ -313,3 +328,29 @@ def test_cli_treats_a_closed_output_pipe_as_a_clean_exit(monkeypatch: pytest.Mon
     monkeypatch.setattr("workfold.cli.runner.run", closed_pipe)
 
     assert main([]) == 0
+
+
+def test_cli_reports_operational_failures_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def failed(*args: object, **kwargs: object) -> int:
+        raise OperationalError("temporary aggregation storage is unavailable")
+
+    monkeypatch.setattr("workfold.cli.runner.run", failed)
+
+    assert main([]) == 1
+    assert capsys.readouterr().err == "error: temporary aggregation storage is unavailable\n"
+
+
+def test_cli_maps_keyboard_interrupt_to_standard_exit_status(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def interrupted(*args: object, **kwargs: object) -> int:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("workfold.cli.runner.run", interrupted)
+
+    assert main([]) == 130
+    assert capsys.readouterr().err == "interrupted\n"

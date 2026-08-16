@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import stat
 import subprocess
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
+import workfold.collection.filesystem.ignore.inventory as inventory_module
 from workfold.collection.filesystem.ignore import (
     ExclusionPatternError,
     ExplicitExcluder,
@@ -23,6 +25,7 @@ from workfold.collection.filesystem.ignore import (
     is_nested_repository_boundary,
     looks_like_bare_repository,
 )
+from workfold.collection.filesystem.ignore.inventory_spool import InventoryStorageError
 
 from support.git_repo import GitRepo
 
@@ -107,6 +110,7 @@ def test_ignore_runner_is_local_noninteractive_and_retains_global_config(tmp_pat
     command, options = calls[0]
     assert command[0] == "git"
     assert "protocol.allow=never" in command
+    assert "core.fsmonitor=false" in command
     assert options["shell"] is False
     assert options["check"] is False
     assert options["input"] == b"one\0"
@@ -119,6 +123,24 @@ def test_ignore_runner_is_local_noninteractive_and_retains_global_config(tmp_pat
     assert "GIT_CONFIG_KEY_0" not in options["env"]
     assert "GIT_CONFIG_VALUE_0" not in options["env"]
     assert "GIT_TRACE_SETUP" not in options["env"]
+
+
+def test_ignore_runner_disables_configured_fsmonitor_helper(tmp_path: Path) -> None:
+    repo = GitRepo.create(tmp_path / "repo")
+    marker = tmp_path / "fsmonitor-ran"
+    helper = tmp_path / "fsmonitor-helper"
+    helper.write_text(f"#!/bin/sh\ntouch '{marker}'\n", encoding="utf-8")
+    helper.chmod(0o755)
+    repo.run("config", "core.fsmonitor", os.fspath(helper))
+    (repo.path / "tracked.txt").write_text("tracked", encoding="utf-8")
+    repo.run("add", "tracked.txt")
+    marker.unlink(missing_ok=True)
+
+    runner = GitIgnoreRunner()
+    result = runner.run(("ls-files", "-z"), cwd=repo.path)
+
+    assert result.stdout == b"tracked.txt\0"
+    assert not marker.exists()
 
 
 def test_ignore_runner_rejects_unsafe_commands_before_spawn(tmp_path: Path) -> None:
@@ -338,6 +360,63 @@ def test_streamed_git_inventory_is_deduplicated_and_callback_driven(tmp_path: Pa
     assert result.ignored_paths == 2
     assert included == ["tracked.txt", "line\nbreak.txt"]
     assert ignored == [("generated.log", False), ("ignored-dir/file.txt", False)]
+
+
+def test_streamed_inventory_structures_storage_failure_after_delivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    runner = QueueRunner(
+        (
+            completed(0, b"first.txt\0second.txt\0"),
+            completed(0),
+            completed(0),
+        )
+    )
+    included: list[str] = []
+
+    def fail_after_one(_connection: sqlite3.Connection) -> Iterator[tuple[bytes]]:
+        yield (b"first.txt",)
+        raise InventoryStorageError("simulated read failure")
+
+    monkeypatch.setattr(inventory_module, "included_rows", fail_after_one)
+
+    result = GitIgnoreService(runner).visit_inventory(
+        GitIgnoreRepository(repository_root.resolve(), False),
+        repository_root,
+        included_consumer=included.append,
+        ignored_consumer=lambda _path, _is_directory: None,
+    )
+
+    assert included == ["first.txt"]
+    assert result.error is not None
+    assert result.error.code == "git_filesystem_inventory_storage_error"
+    assert "simulated read failure" in str(result.error)
+
+
+def test_streamed_inventory_does_not_misclassify_consumer_failures(tmp_path: Path) -> None:
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    runner = QueueRunner(
+        (
+            completed(0, b"tracked.txt\0"),
+            completed(0),
+            completed(0),
+        )
+    )
+
+    def fail(_path: str) -> None:
+        raise sqlite3.OperationalError("consumer database failed")
+
+    with pytest.raises(sqlite3.OperationalError, match="consumer database failed"):
+        GitIgnoreService(runner).visit_inventory(
+            GitIgnoreRepository(repository_root.resolve(), False),
+            repository_root,
+            included_consumer=fail,
+            ignored_consumer=lambda _path, _is_directory: None,
+        )
 
 
 def test_disk_backed_inventory_membership_streams_only_unseen_ignored_paths(tmp_path: Path) -> None:

@@ -118,7 +118,6 @@ def test_2400_is_supported_only_as_an_interval_end() -> None:
         "Mx 08:00-09:00",
         "Fr-Mo 08:00-09:00",
         "Su-Mo 08:00-09:00",
-        "Mo 16:30-08:00",
         "Mo 08:00-08:00",
         "Mo 8:00-09:00",
         "Mo 08:60-09:00",
@@ -133,9 +132,33 @@ def test_invalid_schedule_grammar_is_rejected(value: str) -> None:
 def test_day_set_parser_defensively_rejects_more_than_one_range_separator() -> None:
     import workfold.domain.schedule as schedule_module
 
-    parser = cast(Callable[[str], tuple[Weekday, ...]], getattr(schedule_module, "_parse_day_set"))
+    parser = cast(Callable[[str], tuple[Weekday, ...]], schedule_module._parse_day_set)  # type: ignore[reportPrivateUsage]
     with pytest.raises(ScheduleError, match="day set"):
         parser("Mo-Tu-We")
+
+
+def test_overnight_intervals_belong_to_the_named_start_day() -> None:
+    schedule = parse_schedule("Mo-Fr 22:00-06:00")
+
+    assert schedule.intervals_for(Weekday.MONDAY) == (TimeInterval(22 * 60, 1440),)
+    assert schedule.intervals_for(Weekday.TUESDAY) == (
+        TimeInterval(0, 6 * 60),
+        TimeInterval(22 * 60, 1440),
+    )
+    assert schedule.intervals_for(Weekday.SATURDAY) == (TimeInterval(0, 6 * 60),)
+    assert not schedule.contains(Weekday.SUNDAY, 23 * 60)
+    assert schedule.contains(Weekday.SATURDAY, 5 * 60 + 59)
+    assert not schedule.contains(Weekday.SATURDAY, 6 * 60)
+    assert str(schedule) == "Mo-Fr 22:00-06:00"
+
+
+def test_overnight_interval_wraps_from_sunday_into_monday() -> None:
+    schedule = parse_schedule("Su 23:00-01:30")
+
+    assert schedule.contains(Weekday.SUNDAY, 23 * 60)
+    assert schedule.contains(Weekday.MONDAY, 89)
+    assert not schedule.contains(Weekday.MONDAY, 90)
+    assert str(schedule) == "Su 23:00-01:30"
 
 
 def test_schedule_model_normalizes_direct_construction_and_validates_shape() -> None:

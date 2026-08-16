@@ -18,6 +18,7 @@ from workfold.collection.git.evidence import GitEvidenceCollector
 from workfold.configuration.options import MarkerStyle, RunOptions
 from workfold.reporting.sanitization import sanitize_terminal_text
 from workfold.reporting.terminal import TerminalOptions, terminal_color_enabled, write_terminal
+from workfold.reporting.terminal.options import MIN_TERMINAL_WIDTH
 
 
 def run(
@@ -36,17 +37,22 @@ def run(
     errors = sys.stderr if stderr is None else stderr
     environment = os.environ if environ is None else environ
     preferences = options.terminal
-    execution = execute(
-        options,
-        collectors or default_collector_services(),
-        ReportRequirements(
-            event_list=preferences.event_list,
-            event_limit=preferences.event_limit,
-            retain_git_identities=preferences.marker_style is MarkerStyle.IDENTITY,
-        ),
-        now=now,
-        environ=environ,
-    )
+    status = _TransientStatus(errors, enabled=_is_tty(errors))
+    status.show("Collecting requested timestamps…")
+    try:
+        execution = execute(
+            options,
+            collectors or default_collector_services(),
+            ReportRequirements(
+                event_list=preferences.event_list,
+                event_limit=preferences.event_limit,
+                retain_git_identities=preferences.marker_style is MarkerStyle.IDENTITY,
+            ),
+            now=now,
+            environ=environ,
+        )
+    finally:
+        status.clear()
     collection = execution.collection
     if execution.report is None:
         _write_diagnostics(collection.diagnostics, errors, strict=preferences.strict)
@@ -54,7 +60,7 @@ def run(
 
     width = terminal_width if terminal_width is not None else shutil.get_terminal_size(fallback=(80, 24)).columns
     presentation = TerminalOptions(
-        width=max(60, width),
+        width=max(MIN_TERMINAL_WIDTH, width),
         color=terminal_color_enabled(
             no_color=preferences.no_color,
             environ=environment,
@@ -109,6 +115,29 @@ def _failed_collection_exit_status(diagnostics: Sequence[CollectorDiagnostic]) -
 def _is_tty(stream: TextIO) -> bool:
     isatty = getattr(stream, "isatty", None)
     return bool(isatty()) if callable(isatty) else False
+
+
+class _TransientStatus:
+    """One TTY-only status line removed before durable output is written."""
+
+    def __init__(self, stream: TextIO, *, enabled: bool) -> None:
+        self._stream = stream
+        self._enabled = enabled
+        self._width = 0
+
+    def show(self, message: str) -> None:
+        if not self._enabled:
+            return
+        self._width = len(message)
+        self._stream.write(message)
+        self._stream.flush()
+
+    def clear(self) -> None:
+        if not self._enabled or not self._width:
+            return
+        self._stream.write("\r" + " " * self._width + "\r")
+        self._stream.flush()
+        self._width = 0
 
 
 def default_collector_services() -> CollectorServices:

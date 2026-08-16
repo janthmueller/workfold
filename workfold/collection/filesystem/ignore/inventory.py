@@ -7,7 +7,6 @@ receive paths. The spool is ephemeral implementation storage, not user state.
 from __future__ import annotations
 
 import os
-import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
@@ -18,11 +17,14 @@ from workfold.collection.filesystem.ignore.inventory_format import (
     parse_error,
     parse_inventory_output,
     resolve_scope,
+    storage_error,
     unavailable_error,
 )
 from workfold.collection.filesystem.ignore.inventory_spool import (
+    InventoryStorageError,
     SqliteInventoryView,
     ignored_rows,
+    included_rows,
     open_inventory_spool,
 )
 from workfold.collection.filesystem.ignore.models import (
@@ -95,22 +97,16 @@ def visit_inventory(
     if isinstance(scope, GitIgnoreCommandError):
         return GitFilesystemInventoryVisit(error=scope)
     physical_repository_root, selected_prefix = scope
-    delivering_callbacks = False
     try:
         with open_inventory_spool(runner, physical_repository_root, selected_prefix) as spool:
-            delivering_callbacks = True
-            for (raw_path,) in spool.connection.execute(
-                "SELECT path FROM inventory WHERE category = 0 ORDER BY ordinal"
-            ):
+            for (raw_path,) in included_rows(spool.connection):
                 included_consumer(os.fsdecode(raw_path))
             for raw_path, is_directory in ignored_rows(spool.connection):
                 ignored_consumer(os.fsdecode(raw_path), bool(is_directory))
     except GitIgnoreCommandError as error:
         return GitFilesystemInventoryVisit(error=error)
-    except (OSError, sqlite3.Error, ValueError) as error:
-        if delivering_callbacks:
-            raise
-        return GitFilesystemInventoryVisit(error=parse_error(physical_repository_root, error))
+    except InventoryStorageError as error:
+        return GitFilesystemInventoryVisit(error=storage_error(physical_repository_root, error))
 
     return GitFilesystemInventoryVisit(
         included_paths=spool.included_count,
@@ -135,20 +131,16 @@ def inspect_inventory(
     if isinstance(scope, GitIgnoreCommandError):
         return GitFilesystemInventoryVisit(error=scope)
     physical_repository_root, selected_prefix = scope
-    delivering_callbacks = False
     try:
         with open_inventory_spool(runner, physical_repository_root, selected_prefix) as spool:
             view = SqliteInventoryView(spool.connection)
-            delivering_callbacks = True
             inventory_consumer(view)
             for raw_path, is_directory in ignored_rows(spool.connection, unseen_only=True):
                 unseen_ignored_consumer(os.fsdecode(raw_path), bool(is_directory))
     except GitIgnoreCommandError as error:
         return GitFilesystemInventoryVisit(error=error)
-    except (OSError, sqlite3.Error, ValueError) as error:
-        if delivering_callbacks:
-            raise
-        return GitFilesystemInventoryVisit(error=parse_error(physical_repository_root, error))
+    except InventoryStorageError as error:
+        return GitFilesystemInventoryVisit(error=storage_error(physical_repository_root, error))
 
     return GitFilesystemInventoryVisit(
         included_paths=spool.included_count,

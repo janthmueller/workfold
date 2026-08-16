@@ -26,12 +26,14 @@ def chart_layout(report: Report, options: TerminalOptions) -> tuple[int, int]:
         label_width = 11
     else:
         label_width = 5
-    time_width = max(
+    requested_time_width = max(
         label_width,
         display_width(time_heading(options)),
         0 if options.show_empty_bands else _maximum_gap_label_width(aggregation),
     )
     day_count = len(aggregation.visible_weekdays)
+    maximum_time_width = options.width - day_count * 4 if day_count else options.width
+    time_width = min(requested_time_width, max(label_width, maximum_time_width))
     day_width = max(3, (options.width - time_width - day_count) // day_count) if day_count else 0
     return time_width, day_width
 

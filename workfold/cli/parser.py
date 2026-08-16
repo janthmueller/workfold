@@ -52,7 +52,8 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
             "  git:tag:tagger            git:reflog:update\n"
             "  fs:<file|directory|symlink>:<birth|modified|metadata-changed|accessed>\n"
             "  Wildcards include git:*, git:*:committer, fs:file:*, fs:*:modified, fs:*, and *.\n"
-            "  Quote wildcard values, and place PATH arguments before --events or --list.\n\n"
+            "  Quote wildcard values. Place PATH arguments before --events/--list, or put them\n"
+            "  after an option-terminating --.\n\n"
             "Configuration:\n"
             "  Built-in defaults may be overridden by the global or nearest project\n"
             "  configuration. Use --show-config to inspect effective values and origins.\n\n"
@@ -65,8 +66,8 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
             "  formatting, builds, and reads can change them. Linux birth time uses statx\n"
             "  when returned by the filesystem. ctime is metadata change time; atime may be\n"
             "  unreliable. Deleted untracked files and earlier metadata values cannot be\n"
-            "  recovered. Past uncommitted edit sessions require a watcher, which is outside\n"
-            "  this MVP. Collection is local and never contacts a remote."
+            "  recovered. Past uncommitted edit sessions require a watcher, which Workfold\n"
+            "  does not provide. Collection is local and never contacts a remote."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,

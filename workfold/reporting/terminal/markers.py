@@ -25,6 +25,8 @@ def marker_visual(
     """Resolve one marker run to its printable symbol and Rich style."""
 
     if options.marker_style is MarkerStyle.IDENTITY and run.source is Source.GIT:
+        if run.identity_id is None and not identity_symbols:
+            return EVENT_VISUALS[(run.source, run.within_schedule)]
         if run.identity_id is None or not 0 <= run.identity_id < len(identity_symbols):
             raise ValueError("identity marker rendering requires a valid Git identity ID")
         identity = identity_symbols[run.identity_id]

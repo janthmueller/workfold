@@ -124,7 +124,7 @@ class LinuxStatxReader:
         self._function: Any | None = None
         try:
             library = ctypes.CDLL(None, use_errno=True)
-            function = getattr(library, "statx")
+            function = getattr(library, "statx")  # noqa: B009 - optional libc symbol
         except (AttributeError, OSError):
             return
         function.argtypes = [

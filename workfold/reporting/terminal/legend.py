@@ -41,6 +41,9 @@ def render_legend(report: Report, options: TerminalOptions) -> tuple[Text, ...]:
         )
         if Source.FILESYSTEM in visible_sources:
             items.append(_source_legend_item(Source.FILESYSTEM))
+        if aggregation.identity_overflow and Source.GIT in visible_sources:
+            items.append(_source_legend_item(Source.GIT))
+            items.append(Text("Identity view grouped into Git markers (identity limit exceeded)", style="dim"))
     else:
         for source in (Source.GIT, Source.FILESYSTEM):
             if source in visible_sources:
@@ -86,6 +89,8 @@ def _outside_legend_item(
     markers: list[str] = []
     if Source.GIT in sources:
         if options.marker_style is MarkerStyle.IDENTITY:
+            if not identity_symbols:
+                markers.append(EVENT_VISUALS[(Source.GIT, False)][0])
             outside_identities = tuple(
                 symbol for symbol in identity_symbols if identity_schedules[(symbol.identity_id, False)]
             )

@@ -18,6 +18,7 @@ from workfold.collection.filesystem.ignore.models import (
     GitIgnoreProbe,
     GitIgnoreRepository,
     IgnoreCandidate,
+    InventoryStrategy,
 )
 from workfold.collection.filesystem.ignore.paths import (
     has_git_admin_ancestor,
@@ -48,7 +49,7 @@ class GitIgnoreService:
         inventory_builder: InventoryBuilder = build_inventory,
         inventory_visitor: InventoryVisitor | None = visit_inventory,
         inventory_inspector: InventoryInspector | None = None,
-        transactional_inventory: bool = True,
+        inventory_strategy: InventoryStrategy = InventoryStrategy.GIT,
     ) -> None:
         self._runner = runner or GitIgnoreRunner()
         self._inventory_builder = inventory_builder
@@ -57,16 +58,16 @@ class GitIgnoreService:
             inventory_inspector
             if inventory_inspector is not None
             else inspect_inventory
-            if transactional_inventory
+            if inventory_strategy is InventoryStrategy.GIT
             else None
         )
-        self._transactional_inventory = transactional_inventory
+        self._inventory_strategy = inventory_strategy
 
     @property
-    def transactional_inventory(self) -> bool:
-        """Whether an inventory failure is guaranteed to precede callbacks."""
+    def inventory_strategy(self) -> InventoryStrategy:
+        """Return the explicitly selected discovery implementation."""
 
-        return self._transactional_inventory
+        return self._inventory_strategy
 
     def probe(self, path: Path, *, is_directory: bool) -> GitIgnoreProbe:
         """Locate the containing worktree without treating non-repos as errors."""
@@ -243,11 +244,11 @@ class GitIgnoreService:
     ) -> GitFilesystemInventoryVisit:
         """Visit a complete Git inventory without retaining every path in RAM.
 
-        Git output is parsed into an ephemeral SQLite spool first. Consumers
-        run only after all three commands and every path validate, so a late
-        command or parse failure can fall back without duplicating records.
-        A deliberately injected materialized visitor remains available for
-        tests and integrations that cannot stream.
+        The production adapter validates Git output in an ephemeral SQLite
+        spool before invoking consumers. Once this strategy is attempted, any
+        reported error is fail-closed: callers must mark the root partial rather
+        than silently switch discovery semantics. Tests may explicitly select
+        the native strategy instead.
         """
 
         if self._inventory_visitor is None:

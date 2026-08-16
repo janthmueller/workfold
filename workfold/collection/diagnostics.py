@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final
+from typing import Final, Protocol, overload
 
 _DEFAULT_DIAGNOSTIC_LIMIT: Final[int] = 256
 
@@ -107,6 +107,15 @@ class CollectorDiagnostic:
         return int(self.affects_completeness)
 
 
+class DiagnosticSink(Protocol):
+    """Minimal append-only diagnostic port accepted by collectors."""
+
+    def append(self, diagnostic: CollectorDiagnostic, /) -> None:
+        """Record one structured diagnostic."""
+
+        ...
+
+
 @dataclass(slots=True)
 class _OmittedDiagnosticPartition:
     """Mutable counts for one policy-category and semantic-kind partition."""
@@ -137,13 +146,13 @@ class _OmittedDiagnosticPartition:
         self.completeness_failures += diagnostic.completeness_failure_count
 
 
-class DiagnosticBuffer(list[CollectorDiagnostic]):
+class DiagnosticBuffer(Sequence[CollectorDiagnostic]):
     """Retain a bounded sample plus exact typed summaries for omissions."""
 
     def __init__(self, *, limit: int = _DEFAULT_DIAGNOSTIC_LIMIT) -> None:
         if limit < 1:
             raise ValueError("diagnostic limit must be positive")
-        super().__init__()
+        self._items: list[CollectorDiagnostic] = []
         self._limit = limit
         self._omitted: dict[
             tuple[DiagnosticCategory, DiagnosticKind],
@@ -151,8 +160,8 @@ class DiagnosticBuffer(list[CollectorDiagnostic]):
         ] = {}
 
     def append(self, diagnostic: CollectorDiagnostic) -> None:
-        if len(self) < self._limit:
-            super().append(diagnostic)
+        if len(self._items) < self._limit:
+            self._items.append(diagnostic)
             return
         key = (diagnostic.category, diagnostic.kind)
         partition = self._omitted.setdefault(key, _OmittedDiagnosticPartition(diagnostic.target))
@@ -162,11 +171,26 @@ class DiagnosticBuffer(list[CollectorDiagnostic]):
         for diagnostic in diagnostics:
             self.append(diagnostic)
 
+    def __len__(self) -> int:
+        return len(self._items)
+
+    @overload
+    def __getitem__(self, index: int) -> CollectorDiagnostic: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[CollectorDiagnostic]: ...
+
+    def __getitem__(self, index: int | slice) -> CollectorDiagnostic | list[CollectorDiagnostic]:
+        return self._items[index]
+
+    def __iter__(self) -> Iterator[CollectorDiagnostic]:
+        return iter(self._items)
+
     @property
     def error_count(self) -> int:
         """Return retained and omitted error diagnostics."""
 
-        return sum(item.occurrence_count(DiagnosticSeverity.ERROR) for item in self) + sum(
+        return sum(item.occurrence_count(DiagnosticSeverity.ERROR) for item in self._items) + sum(
             partition.errors for partition in self._omitted.values()
         )
 
@@ -174,11 +198,11 @@ class DiagnosticBuffer(list[CollectorDiagnostic]):
         """Return retained diagnostics and exact typed truncation summaries."""
 
         if not self._omitted:
-            return tuple(self)
+            return tuple(self._items)
         summaries = tuple(
             _truncation_summary(category, kind, partition) for (category, kind), partition in self._omitted.items()
         )
-        return (*self, *summaries)
+        return (*self._items, *summaries)
 
 
 def _truncation_summary(
@@ -230,5 +254,6 @@ __all__ = [
     "DiagnosticBuffer",
     "DiagnosticOccurrences",
     "DiagnosticSeverity",
+    "DiagnosticSink",
     "diagnostics_are_partial",
 ]

@@ -174,7 +174,7 @@ weeks, dates, or months.
 - Atime may be disabled, delayed by `relatime`, or changed by another read.
 - Deleted untracked entries and earlier mutable metadata values are
   unrecoverable. Unsaved and past uncommitted edit sessions cannot be
-  reconstructed without a watcher, which is outside the MVP.
+  reconstructed without a watcher, which Workfold does not provide.
 
 Collection is not an atomic snapshot. A repository or tree changing during a
 run can produce partial coverage; Workfold reports detected failures but does
@@ -188,10 +188,12 @@ requested event list, and receive a compact hidden-event count.
 
 The collection pipeline is local:
 
-- Git is invoked without fetching or contacting remote hosting APIs;
+- Git is invoked without fetching or contacting remote hosting APIs; Workfold
+  also disables configured credentials, protocols, pagers, and filesystem
+  monitor hooks for its read-only Git subprocesses;
 - filesystem scans do not read arbitrary date-like text from file contents;
-- no telemetry, persistent activity database, background watcher, or web server
-  belongs to the MVP;
+- Workfold has no telemetry, persistent activity database, background watcher,
+  or web server;
 - terminal-facing repository text is sanitized before rendering.
 
 Reports can still contain local paths, recorded Git identities, commit subjects,

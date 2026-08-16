@@ -60,6 +60,8 @@ def test_diagnostic_buffer_validates_its_limit_and_omits_no_summary_when_complet
 
     assert diagnostics.snapshot() == (diagnostic,)
     assert diagnostics.error_count == 0
+    with pytest.raises(TypeError):
+        diagnostics[0] = diagnostic  # type: ignore[index]
 
 
 def test_diagnostic_policy_and_semantic_kind_are_typed_independently() -> None:

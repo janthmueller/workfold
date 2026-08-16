@@ -138,6 +138,15 @@ def parse_error(root: Path, error: Exception) -> GitIgnoreCommandError:
     )
 
 
+def storage_error(root: Path, error: Exception) -> GitIgnoreCommandError:
+    return GitIgnoreCommandError(
+        code="git_filesystem_inventory_storage_error",
+        message=f"could not use temporary storage for the Git filesystem inventory: {error}",
+        cwd=root,
+        command=("ls-files",),
+    )
+
+
 def _inventory_arguments(options: tuple[str, ...], *, selected_prefix: Path) -> tuple[str, ...]:
     arguments = ("ls-files", "-z", "--full-name", *options)
     if selected_prefix == Path("."):

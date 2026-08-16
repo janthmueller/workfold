@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from workfold.application.collection import Collection, CollectorServices, collect
 from workfold.application.coverage import build_coverage
+from workfold.application.errors import OperationalError
 from workfold.application.report import (
     Report,
     ReportRequirements,
@@ -24,6 +25,7 @@ from workfold.domain.observations import ClassifiedMarker
 from workfold.domain.scope import ObservationScope
 from workfold.folding import AggregationBuilder
 from workfold.folding.pipeline import ActivityClassifier
+from workfold.folding.spill import AggregationStorageError
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +38,8 @@ class ExecutionResult:
 
     @property
     def is_partial(self) -> bool:
+        if self.report is not None:
+            return self.report.context.completeness.is_partial
         return diagnostics_are_partial(self.collection.diagnostics) or bool(
             self.coverage and self.coverage.has_operational_errors
         )
@@ -115,6 +119,8 @@ def execute(
             report_requirements.event_list,
         )
         return ExecutionResult(collection, report, ledger)
+    except AggregationStorageError as error:
+        raise OperationalError(str(error)) from error
     finally:
         aggregation.close()
 

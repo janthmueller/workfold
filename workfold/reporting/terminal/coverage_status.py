@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Mapping
 
-from workfold.application.report import CollectionFacts, ReportScope
-from workfold.domain.coverage import Capability, CapabilityKind, CapabilityStatus, CoverageLedger
+from workfold.application.report import CompletenessAssessment
 from workfold.domain.observations import TimestampKind
 from workfold.reporting.terminal.coverage_scope import pruned_ignored_subtree_label, timestamp_label
 
@@ -14,53 +12,48 @@ COMPLETE_COVERAGE_STATUS = "complete for all discoverable timestamps in the requ
 
 
 def coverage_status_label(
-    collection: CollectionFacts,
-    ledger: CoverageLedger,
-    scope: ReportScope,
+    assessment: CompletenessAssessment,
 ) -> str:
     """Summarize whether enabled collectors completed their requested scope."""
 
-    error_count = collection.diagnostics.errors
-    filesystem_inventory_incomplete = collection.diagnostics.filesystem_inventory_failures
-    other_partial_warning_count = collection.diagnostics.other_completeness_failures
-    if error_count or filesystem_inventory_incomplete or other_partial_warning_count or ledger.has_operational_errors:
+    if assessment.is_partial:
         reasons: list[str] = []
-        if filesystem_inventory_incomplete:
+        if assessment.filesystem_inventory_failures:
             reasons.append(
                 "filesystem inventory incomplete"
-                if filesystem_inventory_incomplete == 1
-                else f"{filesystem_inventory_incomplete:,} filesystem inventories incomplete"
+                if assessment.filesystem_inventory_failures == 1
+                else f"{assessment.filesystem_inventory_failures:,} filesystem inventories incomplete"
             )
-        if error_count:
-            reasons.append(_counted(error_count, "collection error"))
-        if other_partial_warning_count:
-            reasons.append(_counted(other_partial_warning_count, "collection warning"))
+        if assessment.collection_errors:
+            reasons.append(_counted(assessment.collection_errors, "collection error"))
+        if assessment.collection_warnings:
+            reasons.append(_counted(assessment.collection_warnings, "collection warning"))
         if not reasons:
             reasons.append("collection incomplete")
         label = "partial · " + " · ".join(reasons)
     else:
         label = COMPLETE_COVERAGE_STATUS
     qualifiers: list[str] = []
-    if scope.git_identities:
+    if assessment.git_identity_scope_active:
         qualifiers.append("Git identity scope active")
-    if scope.exclusions:
+    if assessment.explicit_exclusions_active:
         qualifiers.append("explicit exclusions active")
-    pruned_ignored_subtrees = collection.pruned_ignored_subtrees
+    pruned_ignored_subtrees = assessment.pruned_ignored_subtrees
     if pruned_ignored_subtrees:
         qualifiers.append(pruned_ignored_subtree_label(pruned_ignored_subtrees))
-    unsupported_capabilities: dict[CapabilityKind, Capability] = {}
-    for capability in collection.capabilities:
-        if capability.status is CapabilityStatus.UNSUPPORTED:
-            unsupported_capabilities.setdefault(capability.kind, capability)
-    for capability in unsupported_capabilities.values():
+    for capability in assessment.capability_limitations:
         qualifier = f"{capability.name} unavailable"
-        if capability.note:
-            qualifier += f": {capability.note}"
+        if capability.total_targets > 1:
+            target_scope = (
+                f"all {capability.total_targets:,} targets"
+                if capability.affected_targets == capability.total_targets
+                else f"{capability.affected_targets:,} of {capability.total_targets:,} targets"
+            )
+            qualifier += f" on {target_scope}"
+        if capability.notes:
+            qualifier += ": " + "; ".join(capability.notes)
         qualifiers.append(qualifier)
-    unavailable_by_kind = Counter[TimestampKind]()
-    for item in ledger.timestamps:
-        unavailable_by_kind[item.key.timestamp_kind] += item.unavailable
-    unavailable_by_kind += Counter()
+    unavailable_by_kind = dict(assessment.unavailable_timestamps)
     if unavailable_by_kind:
         qualifiers.append(_unavailable_timestamp_label(unavailable_by_kind))
     if qualifiers:

@@ -186,10 +186,13 @@ class GitReflogCollector:
                     ).stdout
                     reflog_path = decode_git_path(path_output, repository=repository)
 
-                    def consume_parsed(parsed_batch: tuple[ParsedReflogEntry, ...]) -> None:
+                    def consume_parsed(
+                        parsed_batch: tuple[ParsedReflogEntry, ...],
+                        current_repository: GitRepository = repository,
+                    ) -> None:
                         nonlocal captured_for_ref, captured_entry_count, scope_matches_for_ref
                         collected_batch = tuple(
-                            CollectedGitReflog(repository=repository, entry=entry) for entry in parsed_batch
+                            CollectedGitReflog(repository=current_repository, entry=entry) for entry in parsed_batch
                         )
                         captured_for_ref += len(collected_batch)
                         captured_entry_count += len(collected_batch)

@@ -19,7 +19,7 @@ from workfold.application.report import (
     ReportScope,
 )
 from workfold.application.resolution import ResolvedTimeSelection
-from workfold.collection.diagnostics import DiagnosticKind
+from workfold.collection.diagnostics import DiagnosticKind, DiagnosticSeverity
 from workfold.collection.git.evidence import GitCommitInputSummary, GitFileChangeSummary
 from workfold.configuration.options import RunOptions
 from workfold.domain.coverage import CoverageLedger
@@ -65,8 +65,13 @@ def _collection_facts(collection: Collection) -> CollectionFacts:
             for item in collection.diagnostics
             if item.kind is DiagnosticKind.FILESYSTEM_INVENTORY
         ),
+        filesystem_inventory_errors=sum(
+            item.occurrence_count(DiagnosticSeverity.ERROR)
+            for item in collection.diagnostics
+            if item.kind is DiagnosticKind.FILESYSTEM_INVENTORY
+        ),
         other_completeness_failures=sum(
-            item.completeness_failure_count
+            max(0, item.completeness_failure_count - item.occurrence_count(DiagnosticSeverity.ERROR))
             for item in collection.diagnostics
             if item.kind is not DiagnosticKind.FILESYSTEM_INVENTORY
         ),

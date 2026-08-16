@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from functools import partial
 from pathlib import Path
 
-from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticBuffer
+from workfold.collection.diagnostics import DiagnosticBuffer, DiagnosticSink
 from workfold.collection.filesystem.accounting import AccountingBuilder
 from workfold.collection.filesystem.entries import (
     crosses_nested_repository,
@@ -131,8 +131,12 @@ class FilesystemCollector:
             root_excluder = task.excluder
             nested_roots: list[tuple[RootSnapshot, ExplicitExcluder]] = []
 
-            def queue_nested_repository(root_snapshot: RootSnapshot, nested_excluder: ExplicitExcluder) -> None:
-                nested_roots.append((root_snapshot, nested_excluder))
+            def queue_nested_repository(
+                root_snapshot: RootSnapshot,
+                nested_excluder: ExplicitExcluder,
+                destination: list[tuple[RootSnapshot, ExplicitExcluder]] = nested_roots,
+            ) -> None:
+                destination.append((root_snapshot, nested_excluder))
 
             root = root_snapshot.path
             successful_roots.append(root)
@@ -187,7 +191,7 @@ class FilesystemCollector:
     def _prepare_roots(
         self,
         requested: Sequence[Path],
-        diagnostics: list[CollectorDiagnostic],
+        diagnostics: DiagnosticSink,
         lstat_reader: LstatReader,
     ) -> tuple[list[RootSnapshot], tuple[Path, ...], int]:
         indexed: list[tuple[int, Path]] = []

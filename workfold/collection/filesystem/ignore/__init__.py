@@ -11,6 +11,7 @@ from workfold.collection.filesystem.ignore.models import (
     GitIgnoreProbe,
     GitIgnoreRepository,
     IgnoreCandidate,
+    InventoryStrategy,
 )
 from workfold.collection.filesystem.ignore.paths import (
     has_git_admin_ancestor,
@@ -37,6 +38,7 @@ __all__ = [
     "GitIgnoreRunner",
     "GitIgnoreService",
     "IgnoreCandidate",
+    "InventoryStrategy",
     "has_git_admin_ancestor",
     "has_repository_marker_ancestor",
     "is_git_admin_name",

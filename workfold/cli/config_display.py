@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 from workfold.configuration.effective import EffectiveSettings
 from workfold.configuration.layers import ResolvedSettings
-from workfold.configuration.options import ListSchedule, RunOptions
+from workfold.configuration.options import ListSchedule
 from workfold.configuration.schema import DEFAULT_SETTINGS, SettingValue
 from workfold.reporting.sanitization import display_width, pad_right, sanitize_terminal_text
 from workfold.reporting.terminal.layout import aligned_fact_lines, column_chunks
@@ -78,11 +78,12 @@ def _setting_table(rows: Sequence[tuple[str, str, str]], width: int) -> list[str
 
 
 def _effective_rows(effective: EffectiveSettings) -> list[tuple[str, str, str]]:
-    values = _effective_values(effective.options)
+    values = _effective_values(effective)
     return [(key, _format_value(values[key]), effective.origins[key].label) for key in DEFAULT_SETTINGS]
 
 
-def _effective_values(options: RunOptions) -> dict[str, SettingValue]:
+def _effective_values(effective: EffectiveSettings) -> dict[str, SettingValue]:
+    options = effective.options
     preferences = options.terminal
     if options.weeks:
         time_value: SettingValue = options.weeks
@@ -115,8 +116,8 @@ def _effective_values(options: RunOptions) -> dict[str, SettingValue]:
         "git-identity": options.git_identities,
         "include-ignored": options.include_ignored,
         "fs-exclude": options.exclusions,
-        "hours": options.hours,
-        "timezone": options.timezone_name or "local",
+        "hours": str(options.schedule),
+        "timezone": options.timezone.key if options.timezone is not None else "local",
         "cluster-window": _format_duration(options.cluster_window.total_seconds()),
         "cluster-anchor": options.cluster_anchor.value,
         "band-label": preferences.band_label.value,

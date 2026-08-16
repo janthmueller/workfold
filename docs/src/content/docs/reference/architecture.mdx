@@ -120,8 +120,8 @@ Adding a source therefore does not require a new application-level coverage
 switch statement.
 
 The report is also renderer-neutral. A future renderer may consume it, but the
-MVP exposes only terminal output and does not contain a web server or browser
-application.
+current product exposes only terminal output and contains no web server or
+browser application.
 
 ## Selection axes
 
@@ -167,6 +167,12 @@ source-level facade: it coordinates commit discovery, file-change derivation,
 tag and reflog collection, exact Git selection, source coverage, and a compact
 operational summary. Application code does not reproduce those dependencies.
 
+Both Git runners prepend fixed local-only safety options. They disable pagers,
+credentials, external protocols, and configured filesystem-monitor hooks, then
+admit only the read commands required by their adapter. Repository
+configuration therefore cannot turn collection into an interactive, remote,
+or helper-executing operation.
+
 `collection.filesystem` owns current-snapshot discovery and metadata. Ignore
 integration is nested under this adapter because ignore rules affect only
 filesystem discovery; they never filter historical Git records. Native Linux
@@ -182,6 +188,10 @@ decisions out of traversal callbacks and operating-system safety decisions out
 of root orchestration. One prepared root is passed through explicit request,
 sink, and service bundles, so scan policy, mutable accounting, and platform
 mechanisms cannot be confused by a long positional interface.
+Production Git-aware discovery is fail-closed: once its authoritative inventory
+strategy is selected, an inventory failure becomes partial coverage rather
+than a silent semantic switch to native discovery. The native strategy remains
+an explicit internal seam for non-Git discovery and tests.
 
 Capabilities carry a typed semantic kind separately from their human-readable
 label. Diagnostics likewise separate source-specific codes, policy category,
@@ -220,6 +230,13 @@ Git/filesystem results, and it does not flatten facts into terminal labels.
 `ReportRequirements` makes the bounded detail needed by a renderer explicit
 without importing terminal choices into the application layer. Architecture
 tests prevent reporting code from bypassing this contract.
+
+Completeness is also application policy. `CompletenessAssessment` combines
+typed diagnostic facts, capabilities, explicit scope qualifiers, and ledger
+outcomes into one renderer-neutral verdict. Terminal code formats that verdict
+but cannot independently reinterpret collection success. Diagnostic storage is
+bounded by composition rather than list inheritance, so every insertion passes
+through the same truncation and exact-summary accounting.
 
 ### Reporting and CLI
 

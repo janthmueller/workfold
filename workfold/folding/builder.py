@@ -5,6 +5,7 @@ from __future__ import annotations
 import heapq
 from collections import Counter
 from collections.abc import Callable, Iterable
+from contextlib import suppress
 from datetime import timedelta
 
 from workfold.domain.identity import MarkerIdentity, marker_identity, marker_identity_sort_key
@@ -25,9 +26,10 @@ from workfold.folding.models import (
     HiddenMarkers,
     freeze_counter,
 )
-from workfold.folding.spill import DEFAULT_SPILL_THRESHOLD, ChartMarkerStore
+from workfold.folding.spill import DEFAULT_SPILL_THRESHOLD, AggregationStorageError, ChartMarkerStore
 
 CLUSTER_MATERIALIZATION_THRESHOLD = 4_096
+DEFAULT_IDENTITY_LIMIT = 128
 
 
 class AggregationBuilder:
@@ -43,6 +45,7 @@ class AggregationBuilder:
         listed_marker_limit: int = 0,
         listed_marker_predicate: Callable[[ClassifiedMarker], bool] | None = None,
         retain_git_identities: bool = False,
+        identity_limit: int = DEFAULT_IDENTITY_LIMIT,
         hide_days: tuple[Weekday, ...] = (),
         hide_empty_days: tuple[Weekday, ...] = (),
         spill_threshold: int = DEFAULT_SPILL_THRESHOLD,
@@ -58,11 +61,15 @@ class AggregationBuilder:
             raise ValueError("listed_marker_limit must not be negative")
         if cluster_materialization_threshold < 0:
             raise ValueError("cluster_materialization_threshold must be non-negative")
+        if identity_limit < 1:
+            raise ValueError("identity_limit must be positive")
         self._schedule_bounds = schedule_bounds
         self._display_range = display_range
         self._listed_marker_limit = listed_marker_limit
         self._listed_marker_predicate = listed_marker_predicate
         self._retain_git_identities = retain_git_identities
+        self._identity_limit = identity_limit
+        self._identity_overflow = False
         _validate_weekdays(hide_days, "hide_days")
         _validate_weekdays(hide_empty_days, "hide_empty_days")
         self._hide_days = frozenset(hide_days)
@@ -157,10 +164,17 @@ class AggregationBuilder:
             raise RuntimeError("an aggregation builder can only be built once")
         self._finished = True
         try:
-            return self._build_snapshot()
-        finally:
-            self._marker_store.close()
+            result = self._build_snapshot()
+        except BaseException:
+            with suppress(AggregationStorageError):
+                self._marker_store.close()
             self._marker_store.clear()
+            raise
+        try:
+            self._marker_store.close()
+        finally:
+            self._marker_store.clear()
+        return result
 
     def _build_snapshot(self) -> Aggregation:
         visible_weekdays = self._resolve_visible_weekdays()
@@ -178,7 +192,9 @@ class AggregationBuilder:
         identities, identity_remap = self._freeze_identities(visible_weekday_set)
         layout = cluster_ordered_markers(
             (
-                _remap_marker_identity(marker, identity_remap)
+                _without_marker_identity(marker)
+                if self._identity_overflow
+                else _remap_marker_identity(marker, identity_remap)
                 for marker in self._marker_store.ordered()
                 if marker.weekday in visible_weekday_set
             ),
@@ -192,9 +208,10 @@ class AggregationBuilder:
             if weekday in visible_weekday_set:
                 visible_visual_counts[(source, within_schedule)] += count
         visible_identity_counts: Counter[int] = Counter()
-        for (identity_id, weekday), count in self._identity_counts.items():
-            if weekday in visible_weekday_set:
-                visible_identity_counts[identity_remap[identity_id]] += count
+        if not self._identity_overflow:
+            for (identity_id, weekday), count in self._identity_counts.items():
+                if weekday in visible_weekday_set:
+                    visible_identity_counts[identity_remap[identity_id]] += count
         hidden_weekday_counts = tuple(
             (weekday, self._displayed_weekday_counts[weekday])
             for weekday in sorted(self._hide_days)
@@ -221,6 +238,7 @@ class AggregationBuilder:
             ),
             identities=identities,
             identity_counts=tuple(sorted(visible_identity_counts.items())),
+            identity_overflow=self._identity_overflow,
             max_cell_event_count=layout.max_cell_event_count,
             has_multi_minute_cluster=layout.has_multi_minute_cluster,
             hidden_before=HiddenMarkers(self._hidden_before_total, freeze_counter(self._hidden_before_sources)),
@@ -244,6 +262,14 @@ class AggregationBuilder:
             return None
         identity_id = self._identity_ids.get(identity)
         if identity_id is None:
+            if self._identity_overflow:
+                return None
+            if len(self._identities) >= self._identity_limit:
+                self._identity_overflow = True
+                self._identity_ids.clear()
+                self._identities.clear()
+                self._identity_counts.clear()
+                return None
             identity_id = len(self._identities)
             self._identity_ids[identity] = identity_id
             self._identities.append(identity)
@@ -253,6 +279,8 @@ class AggregationBuilder:
         self,
         visible_weekdays: frozenset[Weekday],
     ) -> tuple[tuple[MarkerIdentity, ...], dict[int, int]]:
+        if self._identity_overflow:
+            return (), {}
         visible_ids = {identity_id for identity_id, weekday in self._identity_counts if weekday in visible_weekdays}
         ordered = tuple(
             sorted(
@@ -272,12 +300,13 @@ class AggregationBuilder:
         )
 
     def close(self) -> None:
-        """Release temporary sorting storage without producing a result."""
+        """Best-effort release of temporary storage for an aborted build."""
 
         if self._finished:
             return
         self._finished = True
-        self._marker_store.close()
+        with suppress(AggregationStorageError):
+            self._marker_store.close()
         self._marker_store.clear()
 
     @property
@@ -297,6 +326,7 @@ def aggregate_markers(
     listed_marker_limit: int = 0,
     listed_marker_predicate: Callable[[ClassifiedMarker], bool] | None = None,
     retain_git_identities: bool = False,
+    identity_limit: int = DEFAULT_IDENTITY_LIMIT,
     hide_days: tuple[Weekday, ...] = (),
     hide_empty_days: tuple[Weekday, ...] = (),
 ) -> Aggregation:
@@ -317,6 +347,7 @@ def aggregate_markers(
         listed_marker_limit=listed_marker_limit,
         listed_marker_predicate=listed_marker_predicate,
         retain_git_identities=retain_git_identities,
+        identity_limit=identity_limit,
         hide_days=hide_days,
         hide_empty_days=hide_empty_days,
     )
@@ -345,6 +376,20 @@ def _remap_marker_identity(marker: ChartMarker, remap: dict[int, int]) -> ChartM
         source=marker.source,
         within_schedule=marker.within_schedule,
         identity_id=remap[identity_id],
+        count=marker.count,
+    )
+
+
+def _without_marker_identity(marker: ChartMarker) -> ChartMarker:
+    if marker.identity_id is None:
+        return marker
+    return ChartMarker(
+        marker_id=marker.marker_id,
+        occurred_at_utc_ns=marker.occurred_at_utc_ns,
+        time_of_day_ns=marker.time_of_day_ns,
+        weekday=marker.weekday,
+        source=marker.source,
+        within_schedule=marker.within_schedule,
         count=marker.count,
     )
 

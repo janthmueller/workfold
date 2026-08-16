@@ -36,6 +36,10 @@ GROUPING_REQUIRED_SAMPLES = 2
 MarkerGroupKey: TypeAlias = tuple[int, int, int, int, int, bool, int, str]
 
 
+class AggregationStorageError(RuntimeError):
+    """Temporary aggregation storage could not be created, written, or read."""
+
+
 class ChartMarkerStore:
     """Sort chart markers in memory, spilling large inputs to temporary SQLite."""
 
@@ -106,39 +110,42 @@ class ChartMarkerStore:
                 markers = cast(list[ChartMarker], self._buffer)
             markers.sort(key=chart_marker_order_key)
             return iter(markers)
-        self._flush()
-        connection.commit()
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS chart_marker_grouping ON chart_markers (
-                time_of_day_ns,
-                occurred_at_seconds,
-                occurred_at_remainder_ns,
-                source_rank,
-                weekday,
-                within_schedule,
-                identity_id,
-                group_id,
-                marker_id
+        try:
+            self._flush()
+            connection.commit()
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS chart_marker_grouping ON chart_markers (
+                    time_of_day_ns,
+                    occurred_at_seconds,
+                    occurred_at_remainder_ns,
+                    source_rank,
+                    weekday,
+                    within_schedule,
+                    identity_id,
+                    group_id,
+                    marker_id
+                )
+                """
             )
-            """
-        )
-        # Aggregate append-only rows at read time. Unlike SQLite UPSERT, these
-        # primitives are available in every SQLite supported by Python 3.11.
-        cursor = connection.execute(
-            """
-            SELECT time_of_day_ns, occurred_at_seconds,
-                   occurred_at_remainder_ns, source_rank, min(marker_id),
-                   weekday, within_schedule, identity_id, sum(event_count)
-              FROM chart_markers
-             GROUP BY time_of_day_ns, occurred_at_seconds,
-                      occurred_at_remainder_ns, source_rank, weekday,
-                      within_schedule, identity_id, group_id
-             ORDER BY time_of_day_ns, occurred_at_seconds,
-                      occurred_at_remainder_ns, source_rank, min(marker_id)
-            """
-        )
-        return (chart_marker_from_row(row) for row in cursor)
+            # Aggregate append-only rows at read time. Unlike SQLite UPSERT,
+            # these primitives exist in every SQLite supported by Python 3.11.
+            cursor = connection.execute(
+                """
+                SELECT time_of_day_ns, occurred_at_seconds,
+                       occurred_at_remainder_ns, source_rank, min(marker_id),
+                       weekday, within_schedule, identity_id, sum(event_count)
+                  FROM chart_markers
+                 GROUP BY time_of_day_ns, occurred_at_seconds,
+                          occurred_at_remainder_ns, source_rank, weekday,
+                          within_schedule, identity_id, group_id
+                 ORDER BY time_of_day_ns, occurred_at_seconds,
+                          occurred_at_remainder_ns, source_rank, min(marker_id)
+                """
+            )
+        except (OSError, sqlite3.Error) as error:
+            raise _storage_error("prepare temporary aggregation results", error) from error
+        return _read_rows(cursor)
 
     def clear(self) -> None:
         self._buffer.clear()
@@ -149,18 +156,29 @@ class ChartMarkerStore:
 
     def close(self) -> None:
         connection = getattr(self, "_connection", None)
-        if connection is not None:
-            connection.close()
-            self._connection = None
         directory = getattr(self, "_directory", None)
+        self._connection = None
+        self._directory = None
+        failure: BaseException | None = None
+        if connection is not None:
+            try:
+                connection.close()
+            except (OSError, sqlite3.Error) as error:
+                failure = error
         if directory is not None:
-            directory.cleanup()
-            self._directory = None
+            try:
+                directory.cleanup()
+            except OSError as error:
+                if failure is None:
+                    failure = error
+        if failure is not None:
+            raise _storage_error("clean up temporary aggregation storage", failure) from failure
 
     def _start_spill(self) -> None:
-        directory = tempfile.TemporaryDirectory(prefix="workfold-aggregation-")
+        directory: tempfile.TemporaryDirectory[str] | None = None
         connection: sqlite3.Connection | None = None
         try:
+            directory = tempfile.TemporaryDirectory(prefix="workfold-aggregation-")
             connection = sqlite3.connect(f"{directory.name}/markers.sqlite3")
             connection.execute("PRAGMA journal_mode=OFF")
             connection.execute("PRAGMA synchronous=OFF")
@@ -182,13 +200,14 @@ class ChartMarkerStore:
                 )
                 """
             )
-        except BaseException:
+        except (OSError, sqlite3.Error) as error:
             if connection is not None:
                 with suppress(Exception):
                     connection.close()
-            with suppress(Exception):
-                directory.cleanup()
-            raise
+            if directory is not None:
+                with suppress(Exception):
+                    directory.cleanup()
+            raise _storage_error("initialize temporary aggregation storage", error) from error
         self._directory = directory
         self._connection = connection
         self._did_spill = True
@@ -202,10 +221,13 @@ class ChartMarkerStore:
         connection = self._connection
         if connection is None or not self._buffer:
             return
-        connection.executemany(
-            "INSERT INTO chart_markers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            self._buffer_rows(),
-        )
+        try:
+            connection.executemany(
+                "INSERT INTO chart_markers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                self._buffer_rows(),
+            )
+        except (OSError, sqlite3.Error) as error:
+            raise _storage_error("write temporary aggregation storage", error) from error
         self._buffer.clear()
 
     def _buffer_rows(self) -> Iterable[tuple[int, int, int, int, str, int, int, int, str, int]]:
@@ -279,7 +301,8 @@ class ChartMarkerStore:
         grouped[key] = (representative, count + marker.count)
 
     def __del__(self) -> None:
-        self.close()
+        with suppress(Exception):
+            self.close()
 
 
 def _marker_group_id(marker: ChartMarker) -> str:
@@ -300,3 +323,15 @@ def _marker_group_key(marker: ChartMarker) -> MarkerGroupKey:
         -1 if marker.identity_id is None else marker.identity_id,
         _marker_group_id(marker),
     )
+
+
+def _read_rows(cursor: sqlite3.Cursor) -> Iterable[ChartMarker]:
+    try:
+        for row in cursor:
+            yield chart_marker_from_row(row)
+    except (OSError, sqlite3.Error) as error:
+        raise _storage_error("read temporary aggregation storage", error) from error
+
+
+def _storage_error(action: str, error: BaseException) -> AggregationStorageError:
+    return AggregationStorageError(f"could not {action}: {error}")

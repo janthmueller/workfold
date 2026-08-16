@@ -218,8 +218,11 @@ Schedule intervals are half-open: the start is inside and the end is outside.
 A weekday accepts either Workfold's two-letter token (`Mo`, `Th`) or its common
 three-letter English alias (`Mon`, `Thu`), case-insensitively. Output is
 normalized to the two-letter form.
-A weekday with no interval is entirely outside. Overnight intervals are not in
-the MVP; express the two sides as clauses on adjacent days.
+A weekday with no interval is entirely outside. An interval whose end is
+earlier than its start crosses midnight: `Mo-Fr 22:00-06:00` creates shifts
+starting Monday through Friday, with Friday's shift ending Saturday at 06:00.
+The boundary remains half-open, and `start == end` is rejected rather than
+being interpreted as a full day.
 `all` is a compact seven-day `00:00-24:00` schedule: every selected event is
 inside working hours, including weekend events. It changes classification only;
 it does not select more dates, enable sources, or force empty chart rows.
@@ -365,9 +368,12 @@ outside-hours cue explains every lowercase occurrence compactly.
 An identity uses the first ASCII letter in its normalized name, then its email
 as a fallback, and `I` if neither contains one. A unique initial remains one
 letter; every member of a shared initial group is numbered from `1`, such as
-`J1`, `J2`, and `J3`. This remains unbounded and adjacent markers are
-self-delimiting without spaces: `J1J2j3` is two inside-hours identities followed
-by the outside-hours form of `J3`.
+`J1`, `J2`, and `J3`. Adjacent markers are self-delimiting without spaces:
+`J1J2j3` is two inside-hours identities followed by the outside-hours form of
+`J3`. To keep memory bounded on repositories with pathological identity
+cardinality, a chart that exceeds 128 distinct visible identity groups falls
+back to ordinary Git source markers and says so in the key. Event provenance,
+identity filters, totals, and coverage remain unchanged.
 When one marker coalesces identical author and committer instants belonging to
 different identities, it receives `◆` (then `◆2`, `◆3`, if several such
 groups are visible) rather than arbitrarily choosing one person. Filesystem
@@ -392,6 +398,11 @@ policy, and the detailed coverage ledger. Use `--coverage` for the ledger
 without those verbose details. Partial collection, explicit narrowing,
 unsupported capabilities, and nonzero cropping remain visible by default as
 exception notices.
+
+Interactive terminals show one transient collection status while Workfold is
+busy; it is erased before the report. Redirected output and redirected errors
+stay free of progress text. The adaptive layout remains usable down to 40
+columns, while wider terminals devote more space to event cells and details.
 
 `--display-hours` crops chart rows only. It does not change classification:
 
@@ -453,7 +464,9 @@ the custom form retains ordinary local-branch reachability and the
 ignore-respecting filesystem policy unless those axes are changed explicitly.
 
 Because `--events` and `--list` accept one or more whitespace-separated values,
-put every positional `PATH` before either option.
+put every positional `PATH` before either option. If a generated command must
+place paths later, terminate option values explicitly: `workfold --events
+git:commit:author -- path/to/repo`.
 
 ## Inspect Git evidence
 

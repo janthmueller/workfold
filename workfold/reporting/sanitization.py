@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import unicodedata
 
+from rich.cells import cell_len, split_graphemes
+
 
 def sanitize_terminal_text(value: object) -> str:
     """Return printable, single-line text with control characters escaped.
@@ -52,19 +54,14 @@ def sanitize_terminal_text(value: object) -> str:
 
 
 def display_width(text: str) -> int:
-    """Return an approximation of the number of terminal columns in *text*.
+    """Return Rich's grapheme-aware terminal-cell width for plain *text*.
 
     This deliberately handles only plain text.  ANSI is never accepted here:
     generated styling is added after layout, and untrusted ANSI is escaped by
     :func:`sanitize_terminal_text`.
     """
 
-    width = 0
-    for character in text:
-        if unicodedata.combining(character):
-            continue
-        width += 2 if unicodedata.east_asian_width(character) in {"F", "W"} else 1
-    return width
+    return cell_len(text)
 
 
 def truncate_end(text: str, max_width: int, *, ellipsis: str = "…") -> str:
@@ -111,33 +108,24 @@ def pad_right(text: str, width: int) -> str:
 
 
 def _take_prefix(text: str, width: int) -> str:
-    result: list[str] = []
+    end = 0
     used = 0
-    for character in text:
-        character_width = (
-            0
-            if unicodedata.combining(character)
-            else (2 if unicodedata.east_asian_width(character) in {"F", "W"} else 1)
-        )
-        if used + character_width > width:
+    spans, _total = split_graphemes(text)
+    for _start, span_end, span_width in spans:
+        if used + span_width > width:
             break
-        result.append(character)
-        used += character_width
-    return "".join(result)
+        end = span_end
+        used += span_width
+    return text[:end]
 
 
 def _take_suffix(text: str, width: int) -> str:
-    result: list[str] = []
+    start = len(text)
     used = 0
-    for character in reversed(text):
-        character_width = (
-            0
-            if unicodedata.combining(character)
-            else (2 if unicodedata.east_asian_width(character) in {"F", "W"} else 1)
-        )
-        if used + character_width > width:
+    spans, _total = split_graphemes(text)
+    for span_start, _end, span_width in reversed(spans):
+        if used + span_width > width:
             break
-        result.append(character)
-        used += character_width
-    result.reverse()
-    return "".join(result)
+        start = span_start
+        used += span_width
+    return text[start:]

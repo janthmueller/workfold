@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, TextIO, cast
 
+from workfold.application.errors import OperationalError
 from workfold.application.resolution import validate_without_collection
 from workfold.cli.config_display import format_resolved_settings
 from workfold.cli.parser import SafeArgumentParser, build_parser, cli_setting_values
@@ -109,6 +110,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except UsageError as error:
         print(f"error: {sanitize_terminal_text(error)}", file=sys.stderr)
         return 2
+    except OperationalError as error:
+        print(f"error: {sanitize_terminal_text(error)}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return 130
     except BrokenPipeError:
         return 0
 

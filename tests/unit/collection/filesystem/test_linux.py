@@ -300,7 +300,7 @@ def test_statx_enosys_disables_future_calls_and_reports_unsupported_birth_time(t
     for name in ("one.txt", "two.txt", "three.txt"):
         (root / name).write_text(name, encoding="utf-8")
     reader = LinuxStatxReader()
-    setattr(reader, "_function", missing_statx)
+    reader._function = missing_statx  # type: ignore[reportPrivateUsage]
     adapter = FilesystemTimestampAdapter(platform_name="linux", linux_birthtime_reader=reader)
 
     result = FilesystemCollector(timestamp_adapter=adapter).collect(

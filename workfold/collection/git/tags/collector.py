@@ -78,7 +78,10 @@ class GitTagCollector:
             delivery_batch: list[CollectedGitTag] = []
             delivery_bytes = 0
 
-            def consume_tag(item: CollectedGitTag) -> None:
+            def consume_tag(
+                item: CollectedGitTag,
+                current_batch: list[CollectedGitTag] = delivery_batch,
+            ) -> None:
                 nonlocal delivery_bytes, scope_matches_for_repository
                 scope_matches_for_repository += _tag_matches_scope(item, observation_scope)
                 if retain_tags:
@@ -86,13 +89,13 @@ class GitTagCollector:
                 if tag_consumer is None:
                     return
                 retained_bytes = _retained_tag_bytes(item)
-                if delivery_batch and delivery_bytes + retained_bytes > self._tag_batch_bytes:
-                    _deliver_tag_batch(delivery_batch, tag_consumer)
+                if current_batch and delivery_bytes + retained_bytes > self._tag_batch_bytes:
+                    _deliver_tag_batch(current_batch, tag_consumer)
                     delivery_bytes = 0
-                delivery_batch.append(item)
+                current_batch.append(item)
                 delivery_bytes += retained_bytes
-                if len(delivery_batch) >= self._tag_batch_size or delivery_bytes >= self._tag_batch_bytes:
-                    _deliver_tag_batch(delivery_batch, tag_consumer)
+                if len(current_batch) >= self._tag_batch_size or delivery_bytes >= self._tag_batch_bytes:
+                    _deliver_tag_batch(current_batch, tag_consumer)
                     delivery_bytes = 0
 
             try:

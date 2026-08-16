@@ -19,14 +19,25 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   binaries:
+    if: ${{ !inputs.upload }}
     uses: ./.github/workflows/binaries.yml
     with:
       tag: ${{ inputs.tag }}
       checkout_ref: ${{ inputs.checkout_ref }}
       upload: ${{ inputs.upload }}
+    permissions:
+      contents: read
+
+  binaries-and-upload:
+    if: ${{ inputs.upload }}
+    uses: ./.github/workflows/binaries.yml
+    with:
+      tag: ${{ inputs.tag }}
+      checkout_ref: ${{ inputs.checkout_ref }}
+      upload: true
     permissions:
       contents: write

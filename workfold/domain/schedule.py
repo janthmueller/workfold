@@ -90,20 +90,21 @@ class Schedule:
     def __str__(self) -> str:
         if all(intervals == (TimeInterval(0, 1440),) for intervals in self.intervals_by_weekday):
             return ALL_HOURS_TEXT
+        display_intervals = _display_intervals(self.intervals_by_weekday)
         clauses: list[str] = []
         day_index = 0
         while day_index < len(Weekday):
-            intervals = self.intervals_by_weekday[day_index]
+            intervals = display_intervals[day_index]
             if not intervals:
                 day_index += 1
                 continue
             run_end = day_index
-            while run_end + 1 < len(Weekday) and self.intervals_by_weekday[run_end + 1] == intervals:
+            while run_end + 1 < len(Weekday) and display_intervals[run_end + 1] == intervals:
                 run_end += 1
             first = Weekday(day_index).abbreviation
             last = Weekday(run_end).abbreviation
             day_token = first if day_index == run_end else f"{first}-{last}"
-            clauses.append(f"{day_token} {','.join(str(interval) for interval in intervals)}")
+            clauses.append(f"{day_token} {','.join(_format_display_interval(*interval) for interval in intervals)}")
             day_index = run_end + 1
         return "; ".join(clauses)
 
@@ -132,12 +133,16 @@ def parse_schedule(value: str) -> Schedule:
             raise ScheduleError(f"invalid interval list in clause: {clause!r}")
         intervals = tuple(_parse_interval(item.strip()) for item in raw_intervals)
         for weekday in weekdays:
-            day_intervals[int(weekday)].extend(intervals)
+            for current_day, next_day in intervals:
+                day_intervals[int(weekday)].append(current_day)
+                if next_day is not None:
+                    following = Weekday((int(weekday) + 1) % len(Weekday))
+                    day_intervals[int(following)].append(next_day)
     return Schedule(tuple(tuple(intervals) for intervals in day_intervals))
 
 
 def default_schedule() -> Schedule:
-    """Return the personal-use MVP default schedule."""
+    """Return Workfold's built-in weekday schedule."""
 
     return parse_schedule(DEFAULT_SCHEDULE_TEXT)
 
@@ -176,15 +181,17 @@ def _parse_day_set(value: str) -> tuple[Weekday, ...]:
     return (weekdays[0],)
 
 
-def _parse_interval(value: str) -> TimeInterval:
+def _parse_interval(value: str) -> tuple[TimeInterval, TimeInterval | None]:
     match = _INTERVAL_PATTERN.fullmatch(value)
     if match is None:
         raise ScheduleError(f"invalid schedule interval: {value!r}")
     start = _parse_time(match.group("start"), allow_24=False)
     end = _parse_time(match.group("end"), allow_24=True)
-    if start >= end:
-        raise ScheduleError("schedule intervals must have start before end; overnight intervals are not supported")
-    return TimeInterval(start, end)
+    if start == end:
+        raise ScheduleError("schedule intervals must not be empty")
+    if start < end:
+        return TimeInterval(start, end), None
+    return TimeInterval(start, 1440), TimeInterval(0, end)
 
 
 def _parse_time(value: str, *, allow_24: bool) -> int:
@@ -209,6 +216,41 @@ def _normalize_intervals(intervals: tuple[TimeInterval, ...]) -> tuple[TimeInter
         else:
             normalized.append(interval)
     return tuple(normalized)
+
+
+def _display_intervals(
+    intervals_by_weekday: tuple[tuple[TimeInterval, ...], ...],
+) -> tuple[tuple[tuple[int, int], ...], ...]:
+    """Recombine normalized midnight splits into compact overnight ranges."""
+
+    remaining = [list(intervals) for intervals in intervals_by_weekday]
+    display: list[list[tuple[int, int]]] = [[] for _weekday in Weekday]
+    for day_index in range(len(Weekday)):
+        following_index = (day_index + 1) % len(Weekday)
+        for interval in tuple(remaining[day_index]):
+            if interval.start_minute == 0 or interval.end_minute != 1440:
+                continue
+            following = next(
+                (
+                    candidate
+                    for candidate in remaining[following_index]
+                    if candidate.start_minute == 0 and candidate.end_minute < 1440
+                ),
+                None,
+            )
+            if following is None:
+                continue
+            remaining[day_index].remove(interval)
+            remaining[following_index].remove(following)
+            display[day_index].append((interval.start_minute, following.end_minute))
+    for day_index, intervals in enumerate(remaining):
+        display[day_index].extend((interval.start_minute, interval.end_minute) for interval in intervals)
+        display[day_index].sort(key=lambda item: item[0])
+    return tuple(tuple(intervals) for intervals in display)
+
+
+def _format_display_interval(start: int, end: int) -> str:
+    return f"{_format_time(start)}-{_format_time(end)}"
 
 
 def _format_time(minute: int) -> str:

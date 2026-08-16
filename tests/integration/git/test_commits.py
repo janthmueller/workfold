@@ -56,6 +56,7 @@ def test_git_runner_uses_no_shell_and_disables_remote_interaction(tmp_path: Path
     assert options["check"] is False
     assert command[0] == "git"
     assert "protocol.allow=never" in command
+    assert "core.fsmonitor=false" in command
     assert options["env"]["GIT_NO_LAZY_FETCH"] == "1"
     assert options["env"]["GIT_NO_REPLACE_OBJECTS"] == "1"
     assert options["env"]["GIT_TERMINAL_PROMPT"] == "0"
@@ -370,7 +371,7 @@ def test_collector_resolves_whole_repository_and_preserves_raw_dates(tmp_path: P
         assert accounting.materialized_scope_match_count(role) == 1
         assert accounting.materialization_error_count(role) == 0
     with pytest.raises(FrozenInstanceError):
-        setattr(accounting, "examined_commits", 2)
+        accounting.examined_commits = 2  # type: ignore[misc]
 
     origin = result.commits[0].to_origin()
     observations = tuple(

@@ -61,7 +61,7 @@ def test_tzlocal_adapter_failure_is_accounted(monkeypatch: pytest.MonkeyPatch) -
         raise OSError
 
     monkeypatch.setattr(local_timezone, "get_localzone_name", fail_resolution)
-    adapter = getattr(local_timezone, "_tzlocal_zone_name")
+    adapter = local_timezone._tzlocal_zone_name  # type: ignore[reportPrivateUsage]
     assert adapter() is None
 
 

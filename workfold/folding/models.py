@@ -57,7 +57,7 @@ class ClusterCell:
             first.source is second.source
             and first.within_schedule == second.within_schedule
             and first.identity_id == second.identity_id
-            for first, second in zip(self.runs, self.runs[1:])
+            for first, second in zip(self.runs, self.runs[1:], strict=False)
         ):
             raise ValueError("adjacent equivalent marker runs must be coalesced")
 
@@ -166,9 +166,11 @@ class Aggregation:
     retained_listed_markers: tuple[ClassifiedMarker, ...]
     listed_marker_count: int
     cluster_anchor: ClusterAnchor = ClusterAnchor.EVENT
+    identity_overflow: bool = False
 
     def __post_init__(self) -> None:
         cluster_anchor = validate_cluster_anchor(self.cluster_anchor)
+        _validate_bool(self.identity_overflow, "identity_overflow")
         _validate_cluster_window(self.cluster_window, cluster_anchor)
         _validate_display_bounds(self.display_start_minute, self.display_end_minute)
         _validate_bool(self.display_is_explicit, "display_is_explicit")
@@ -191,6 +193,8 @@ class Aggregation:
             != self.event_count
         ):
             raise ValueError("displayed and hidden markers must reconcile with the full event count")
+        if self.identity_overflow and (self.identities or self.identity_counts):
+            raise ValueError("identity overflow must use source markers without an identity registry")
         if any(count < 1 for _identity_id, count in self.identity_counts):
             raise ValueError("identity counts must be positive")
         identity_ids = tuple(identity_id for identity_id, _count in self.identity_counts)
