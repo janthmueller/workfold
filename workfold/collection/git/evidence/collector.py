@@ -59,8 +59,7 @@ class GitEvidenceCollector:
                 return
             selected = (
                 tuple(observations)
-                if request.observation_scope is None
-                or not request.observation_scope.is_restrictive_for(Source.GIT)
+                if request.observation_scope is None or not request.observation_scope.is_restrictive_for(Source.GIT)
                 else request.observation_scope.select(observations)
             )
             if selected:

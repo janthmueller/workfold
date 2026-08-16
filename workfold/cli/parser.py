@@ -31,9 +31,7 @@ def cli_setting_values(namespace: argparse.Namespace) -> dict[str, SettingValue]
             continue
         raw_value = raw[spec.cli_destination]
         values[spec.key] = (
-            tuple(cast(Sequence[str], raw_value))
-            if spec.config_shape.cli_sequence
-            else cast(SettingValue, raw_value)
+            tuple(cast(Sequence[str], raw_value)) if spec.config_shape.cli_sequence else cast(SettingValue, raw_value)
         )
     return values
 

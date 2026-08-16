@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 from workfold.application.report import DiagnosticFacts
 from workfold.configuration import BandLabel, ClusterAnchor, EventListSelection, GridStyle, MarkerStyle
+from workfold.domain.coverage import Capability, CapabilityKind, CapabilityReason, CapabilityStatus
 from workfold.domain.evidence import EvidenceKind
 from workfold.domain.observations import Source
 from workfold.reporting.sanitization import display_width, sanitize_terminal_text, truncate_end, truncate_middle
@@ -130,6 +131,29 @@ def test_verbose_renderer_restores_operational_and_exact_scope_details() -> None
     assert "Filesystem policy: standard Git ignores respected; files" in rendered
     assert "Explicit exclusions: *.tmp" in rendered
     assert all(display_width(line) <= 80 for line in rendered.splitlines())
+
+
+def test_verbose_ignore_policy_uses_typed_applicability_instead_of_capability_prose() -> None:
+    value = report()
+    capability = Capability(
+        Source.FILESYSTEM,
+        "/work/repository",
+        CapabilityKind.GIT_IGNORE_SEMANTICS,
+        "standard Git ignore semantics",
+        CapabilityStatus.NOT_APPLICABLE,
+        note="arbitrary adapter detail",
+        reason=CapabilityReason.OUTSIDE_GIT_WORKTREE,
+    )
+    context = replace(
+        value.context,
+        collection=replace(value.context.collection, capabilities=(capability,)),
+    )
+
+    rendered = render_terminal(replace(value, context=context), options=TerminalOptions(width=80, verbose=True))
+
+    assert "Filesystem policy: outside a Git worktree; no Git ignore rules apply; files" in rendered
+    assert "standard Git ignore semantics: not applicable" in rendered
+    assert "not_applicable" not in rendered
 
 
 def test_verbose_renderer_describes_dense_fixed_bands() -> None:

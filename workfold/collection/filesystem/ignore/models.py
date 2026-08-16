@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from workfold.domain.coverage import CapabilityReason
+
 
 class ExclusionPatternError(ValueError):
     """Raised when an explicit exclusion exceeds the documented subset."""
@@ -58,6 +60,7 @@ class GitIgnoreProbe:
     git_available: bool
     note: str
     error: GitIgnoreCommandError | None = None
+    capability_reason: CapabilityReason | None = None
 
 
 @dataclass(frozen=True, slots=True)

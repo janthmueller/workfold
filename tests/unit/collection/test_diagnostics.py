@@ -97,6 +97,41 @@ def test_diagnostic_buffer_preserves_completeness_impact_when_sample_is_truncate
     assert summary.completeness_failure_count == 1
 
 
+def test_diagnostic_buffer_partitions_truncation_summaries_by_policy_and_kind() -> None:
+    diagnostics = DiagnosticBuffer(limit=1)
+    diagnostics.append(_diagnostic(1, DiagnosticSeverity.INFO))
+    diagnostics.append(
+        CollectorDiagnostic(
+            code="missing_path",
+            stage="fixture",
+            target="missing",
+            message="missing",
+            category=DiagnosticCategory.INVOCATION,
+        )
+    )
+    diagnostics.append(
+        CollectorDiagnostic(
+            code="incomplete_inventory",
+            stage="fixture",
+            target="repository",
+            message="incomplete",
+            severity=DiagnosticSeverity.WARNING,
+            affects_completeness=True,
+            kind=DiagnosticKind.FILESYSTEM_INVENTORY,
+        )
+    )
+
+    invocation, inventory = diagnostics.snapshot()[1:]
+
+    assert invocation.category is DiagnosticCategory.INVOCATION
+    assert invocation.kind is DiagnosticKind.GENERAL
+    assert invocation.occurrence_count(DiagnosticSeverity.ERROR) == 1
+    assert inventory.category is DiagnosticCategory.COLLECTION
+    assert inventory.kind is DiagnosticKind.FILESYSTEM_INVENTORY
+    assert inventory.occurrence_count(DiagnosticSeverity.WARNING) == 1
+    assert inventory.completeness_failure_count == 1
+
+
 def test_diagnostic_buffer_preserves_nested_truncation_summary_counts() -> None:
     inner = DiagnosticBuffer(limit=1)
     inner.append(_diagnostic(1, DiagnosticSeverity.ERROR))

@@ -31,6 +31,7 @@ from workfold.collection.filesystem.ignore.paths import (
     physical_path_without_following_final,
 )
 from workfold.collection.filesystem.ignore.runner import GitIgnoreRunner
+from workfold.domain.coverage import CapabilityReason
 
 InventoryBuilder = Callable[[GitIgnoreRunner, GitIgnoreRepository, Path], GitFilesystemInventory]
 InventoryVisitor = Callable[..., GitFilesystemInventoryVisit]
@@ -81,7 +82,12 @@ class GitIgnoreService:
             return GitIgnoreProbe(None, not error.unavailable, str(error), error)
         if state.returncode == 128:
             if not has_repository_marker_ancestor(cwd):
-                return GitIgnoreProbe(None, True, "outside a Git worktree; no Git ignore rules apply")
+                return GitIgnoreProbe(
+                    None,
+                    True,
+                    "outside a Git worktree; no Git ignore rules apply",
+                    capability_reason=CapabilityReason.OUTSIDE_GIT_WORKTREE,
+                )
             error = GitIgnoreCommandError(
                 code="git_repository_probe_failed",
                 message="Git could not inspect a repository marker visible above the selected path",
@@ -109,12 +115,14 @@ class GitIgnoreService:
                     GitIgnoreRepository(admin_root, True, admin_root),
                     True,
                     "selected path is inside bare Git administrative storage",
+                    capability_reason=CapabilityReason.SEMANTIC_GIT_ADMIN,
                 )
             if values == [b"false", b"false"]:
                 return GitIgnoreProbe(
                     GitIgnoreRepository(admin_root, False, admin_root),
                     True,
                     "selected path is inside non-bare Git administrative storage",
+                    capability_reason=CapabilityReason.SEMANTIC_GIT_ADMIN,
                 )
             top_level = self._runner.run(("rev-parse", "--show-toplevel"), cwd=cwd)
             root = parse_absolute_git_path(top_level.stdout, field="worktree root")

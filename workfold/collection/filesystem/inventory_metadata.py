@@ -39,7 +39,8 @@ class AnchoredInventoryMetadata(AbstractContextManager["AnchoredInventoryMetadat
     Parent components are opened one at a time with no-follow semantics. A
     small LRU of directory descriptors preserves Git-inventory performance
     without allowing an intermediate symlink to redirect a later metadata
-    lookup outside the selected root.
+    lookup outside the selected root. Callers that publish incrementally must
+    finish each bounded parent lease before making its snapshots visible.
     """
 
     def __init__(
@@ -58,6 +59,7 @@ class AnchoredInventoryMetadata(AbstractContextManager["AnchoredInventoryMetadat
         self._cache_limit = cache_limit
         self._root_descriptor: int | None = None
         self._directories: OrderedDict[tuple[str, ...], int] = OrderedDict()
+        self._active_parent: tuple[tuple[str, ...], int] | None = None
 
     def __enter__(self) -> AnchoredInventoryMetadata:
         root = self._root_snapshot.path
@@ -90,19 +92,15 @@ class AnchoredInventoryMetadata(AbstractContextManager["AnchoredInventoryMetadat
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> bool | None:
-        del exc_type, exc_value, traceback
+        del exc_value, traceback
         root_descriptor = self._root_descriptor
         try:
-            if root_descriptor is not None:
-                validate_directory_snapshot_identity(
-                    self._root_snapshot.path,
-                    _descriptor_snapshot(self._root_snapshot.path, root_descriptor),
-                    self._root_snapshot.snapshot,
-                )
+            if exc_type is None and root_descriptor is not None:
+                self.finish_parent()
+                self._validate_parent_mapping((), root_descriptor)
         finally:
-            for descriptor in self._directories.values():
-                os.close(descriptor)
-            self._directories.clear()
+            self._active_parent = None
+            self._close_directory_cache()
             if root_descriptor is not None:
                 os.close(root_descriptor)
                 self._root_descriptor = None
@@ -117,7 +115,7 @@ class AnchoredInventoryMetadata(AbstractContextManager["AnchoredInventoryMetadat
         display = os.fspath(display_path)
         parts = relative.parts
         if not parts:
-            descriptor = self._require_root_descriptor()
+            descriptor = self._activate_parent((), display_path=display_path)
             return _descriptor_snapshot(root, descriptor)
         if relative.is_absolute() or any(part in {"", ".", ".."} for part in parts):
             raise DirectorySafetyError(
@@ -125,7 +123,7 @@ class AnchoredInventoryMetadata(AbstractContextManager["AnchoredInventoryMetadat
                 "inventory metadata path was not a normalized descendant",
                 display,
             )
-        parent_descriptor = self._parent_descriptor(parts[:-1], display_path=display_path)
+        parent_descriptor = self._activate_parent(parts[:-1], display_path=display_path)
         final_name = parts[-1]
         statx_reader = self._statx_reader
         if statx_reader is not None and statx_reader.available:
@@ -135,6 +133,64 @@ class AnchoredInventoryMetadata(AbstractContextManager["AnchoredInventoryMetadat
                 snapshot = os.stat(final_name, dir_fd=parent_descriptor, follow_symlinks=False)
                 return statx_fallback_snapshot(snapshot, error)
         return os.stat(final_name, dir_fd=parent_descriptor, follow_symlinks=False)
+
+    def _activate_parent(self, parts: tuple[str, ...], *, display_path: Path) -> int:
+        """Lease one parent descriptor while adjacent inventory entries use it."""
+
+        active = self._active_parent
+        if active is not None and active[0] == parts:
+            return active[1]
+        self.finish_parent()
+        descriptor = self._parent_descriptor(parts, display_path=display_path)
+        self._validate_parent_mapping(parts, descriptor)
+        self._active_parent = (parts, descriptor)
+        return descriptor
+
+    def finish_parent(self) -> None:
+        """Validate and release the active lexical parent lease."""
+
+        active = self._active_parent
+        if active is None:
+            return
+        self._active_parent = None
+        parts, descriptor = active
+        self._validate_parent_mapping(parts, descriptor)
+
+    def _validate_parent_mapping(self, parts: tuple[str, ...], expected_descriptor: int) -> None:
+        """Compare a cached handle with a fresh no-follow walk of its path."""
+
+        root = self._root_snapshot.path
+        path = root.joinpath(*parts)
+        actual_descriptor: int | None = None
+        try:
+            actual_descriptor = os.open(root, _directory_open_flags())
+            validate_directory_snapshot_identity(
+                root,
+                _descriptor_snapshot(root, actual_descriptor),
+                self._root_snapshot.snapshot,
+            )
+            for part in parts:
+                previous_descriptor = actual_descriptor
+                actual_descriptor = os.open(part, _directory_open_flags(), dir_fd=previous_descriptor)
+                os.close(previous_descriptor)
+            validate_directory_snapshot_identity(
+                path,
+                _descriptor_snapshot(path, actual_descriptor),
+                _descriptor_snapshot(path, expected_descriptor),
+            )
+        except DirectorySafetyError:
+            self._invalidate_directory_cache()
+            raise
+        except OSError as error:
+            self._invalidate_directory_cache()
+            raise DirectorySafetyError(
+                error.errno or errno.EIO,
+                "inventory metadata ancestor could not be revalidated against its selected path",
+                os.fspath(path),
+            ) from error
+        finally:
+            if actual_descriptor is not None:
+                os.close(actual_descriptor)
 
     def _parent_descriptor(self, parts: tuple[str, ...], *, display_path: Path) -> int:
         if not parts:
@@ -171,6 +227,15 @@ class AnchoredInventoryMetadata(AbstractContextManager["AnchoredInventoryMetadat
         while len(self._directories) > self._cache_limit:
             _prefix, descriptor = self._directories.popitem(last=False)
             os.close(descriptor)
+
+    def _invalidate_directory_cache(self) -> None:
+        self._active_parent = None
+        self._close_directory_cache()
+
+    def _close_directory_cache(self) -> None:
+        for descriptor in self._directories.values():
+            os.close(descriptor)
+        self._directories.clear()
 
     def _require_root_descriptor(self) -> int:
         if self._root_descriptor is None:

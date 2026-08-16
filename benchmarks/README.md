@@ -61,10 +61,18 @@ for repeatability; repository-local configuration still applies.
 
 ## Synthetic fixtures
 
-`--fixture small|medium|large` creates an automatically removed repository with
+`--fixture small|medium|directory-heavy|large` creates an automatically removed repository with
 historical and current-week commits, distinct author/committer identities,
 annotated tags, reflogs, tracked files, untracked files, ignored files,
 directories, and symlinks where supported.
+
+The `directory-heavy` fixture places one tracked, untracked, or ignored file in
+each directory. It isolates directory traversal and parent-handle validation
+costs that file-dense fixtures can hide:
+
+```bash
+uv run python -m benchmarks.run --fixture directory-heavy --case fs-all
+```
 
 To keep a fixture for profiling tools, create one explicitly in a new or empty
 directory:

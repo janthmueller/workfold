@@ -4,6 +4,7 @@ from workfold.domain.coverage.builder import CoverageLedgerBuilder, finalize_cov
 from workfold.domain.coverage.models import (
     Capability,
     CapabilityKind,
+    CapabilityReason,
     CapabilityStatus,
     CollectionTimestampCoverage,
     CoverageFragment,
@@ -21,6 +22,7 @@ from workfold.domain.coverage.models import (
 __all__ = [
     "Capability",
     "CapabilityKind",
+    "CapabilityReason",
     "CapabilityStatus",
     "CollectionTimestampCoverage",
     "CoverageFragment",

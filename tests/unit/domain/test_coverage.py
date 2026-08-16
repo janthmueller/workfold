@@ -4,6 +4,7 @@ import pytest
 from workfold.domain.coverage import (
     Capability,
     CapabilityKind,
+    CapabilityReason,
     CapabilityStatus,
     CollectionTimestampCoverage,
     CoverageFragment,
@@ -304,4 +305,26 @@ def test_capability_retains_platform_availability_context() -> None:
             "birth time",
             CapabilityStatus.SUPPORTED,
             TimestampKind.FS_MODIFIED,
+        )
+
+
+def test_capability_requires_typed_reasons_for_not_applicable_policy() -> None:
+    capability = Capability(
+        Source.FILESYSTEM,
+        "/root",
+        CapabilityKind.GIT_IGNORE_SEMANTICS,
+        "standard Git ignore semantics",
+        CapabilityStatus.NOT_APPLICABLE,
+        reason=CapabilityReason.OUTSIDE_GIT_WORKTREE,
+    )
+
+    assert capability.reason is CapabilityReason.OUTSIDE_GIT_WORKTREE
+
+    with pytest.raises(ValueError, match="typed reason"):
+        Capability(
+            Source.FILESYSTEM,
+            "/root",
+            CapabilityKind.GIT_IGNORE_SEMANTICS,
+            "standard Git ignore semantics",
+            CapabilityStatus.NOT_APPLICABLE,
         )

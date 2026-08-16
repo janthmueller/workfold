@@ -47,13 +47,16 @@ class DiagnosticFacts:
     other_completeness_failures: int = 0
 
     def __post_init__(self) -> None:
-        if min(
-            self.errors,
-            self.warnings,
-            self.infos,
-            self.filesystem_inventory_failures,
-            self.other_completeness_failures,
-        ) < 0:
+        if (
+            min(
+                self.errors,
+                self.warnings,
+                self.infos,
+                self.filesystem_inventory_failures,
+                self.other_completeness_failures,
+            )
+            < 0
+        ):
             raise ValueError("diagnostic report counts must be non-negative")
 
 

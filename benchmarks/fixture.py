@@ -24,6 +24,8 @@ class FixtureSpec:
     ignored_files: int
     reflog_updates: int
     symlinks: int
+    tracked_files_per_directory: int = 100
+    filesystem_files_per_directory: int = 250
 
     def __post_init__(self) -> None:
         values = asdict(self)
@@ -31,6 +33,8 @@ class FixtureSpec:
             raise ValueError("fixture commits and tracked_files must be positive")
         if any(value < 0 for value in values.values()):
             raise ValueError("fixture sizes must not be negative")
+        if self.tracked_files_per_directory < 1 or self.filesystem_files_per_directory < 1:
+            raise ValueError("fixture directory densities must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +51,8 @@ class FixtureManifest:
     reflog_updates: int
     symlinks: int
     annotated_tags: int
+    tracked_files_per_directory: int
+    filesystem_files_per_directory: int
 
 
 PRESETS: dict[str, FixtureSpec] = {
@@ -65,6 +71,16 @@ PRESETS: dict[str, FixtureSpec] = {
         ignored_files=5_000,
         reflog_updates=100,
         symlinks=50,
+    ),
+    "directory-heavy": FixtureSpec(
+        commits=5_000,
+        tracked_files=5_000,
+        untracked_files=5_000,
+        ignored_files=1_000,
+        reflog_updates=50,
+        symlinks=50,
+        tracked_files_per_directory=1,
+        filesystem_files_per_directory=1,
     ),
     "large": FixtureSpec(
         commits=200_000,
@@ -102,9 +118,22 @@ def create_fixture(
     _create_annotated_tag(target, clock)
     _create_reflog_history(target, spec.reflog_updates)
     _run_git(target, "update-ref", "refs/remotes/origin/benchmark", "HEAD")
-    _write_file_set(target / "untracked", spec.untracked_files)
-    _write_file_set(target / "ignored", spec.ignored_files)
-    symlinks = _create_symlinks(target, spec.symlinks, spec.tracked_files)
+    _write_file_set(
+        target / "untracked",
+        spec.untracked_files,
+        files_per_directory=spec.filesystem_files_per_directory,
+    )
+    _write_file_set(
+        target / "ignored",
+        spec.ignored_files,
+        files_per_directory=spec.filesystem_files_per_directory,
+    )
+    symlinks = _create_symlinks(
+        target,
+        spec.symlinks,
+        spec.tracked_files,
+        tracked_files_per_directory=spec.tracked_files_per_directory,
+    )
     current_week_commits = spec.commits - _historical_commit_count(spec.commits)
     return FixtureManifest(
         root=os.fspath(target),
@@ -117,6 +146,8 @@ def create_fixture(
         reflog_updates=spec.reflog_updates,
         symlinks=symlinks,
         annotated_tags=1,
+        tracked_files_per_directory=spec.tracked_files_per_directory,
+        filesystem_files_per_directory=spec.filesystem_files_per_directory,
     )
 
 
@@ -194,7 +225,7 @@ def _write_commit(
     stream.write(f"committer {committer_name} <{committer_email}> {committer_epoch} +0000\n".encode("ascii"))
     _write_data(stream, f"benchmark commit {index}".encode())
     path_index = index % spec.tracked_files
-    path = f"tracked/{path_index // 100:04d}/file-{path_index:06d}.txt"
+    path = f"tracked/{path_index // spec.tracked_files_per_directory:04d}/file-{path_index:06d}.txt"
     stream.write(f"M 100644 :{content_mark} {path}\n".encode("ascii"))
     if ignore_mark is not None:
         stream.write(f"M 100644 :{ignore_mark} .gitignore\n".encode("ascii"))
@@ -258,15 +289,21 @@ def _create_reflog_history(root: Path, count: int) -> None:
         )
 
 
-def _write_file_set(root: Path, count: int) -> None:
+def _write_file_set(root: Path, count: int, *, files_per_directory: int) -> None:
     for index in range(count):
-        directory = root / f"{index // 250:04d}"
-        if index % 250 == 0:
+        directory = root / f"{index // files_per_directory:04d}"
+        if index % files_per_directory == 0:
             directory.mkdir(parents=True, exist_ok=True)
         (directory / f"file-{index:06d}.txt").write_text(f"filesystem benchmark {index}\n", encoding="utf-8")
 
 
-def _create_symlinks(root: Path, count: int, tracked_files: int) -> int:
+def _create_symlinks(
+    root: Path,
+    count: int,
+    tracked_files: int,
+    *,
+    tracked_files_per_directory: int,
+) -> int:
     if count == 0:
         return 0
     links = root / "links"
@@ -274,7 +311,12 @@ def _create_symlinks(root: Path, count: int, tracked_files: int) -> int:
     created = 0
     for index in range(count):
         target_index = index % tracked_files
-        target = Path("..") / "tracked" / f"{target_index // 100:04d}" / f"file-{target_index:06d}.txt"
+        target = (
+            Path("..")
+            / "tracked"
+            / f"{target_index // tracked_files_per_directory:04d}"
+            / f"file-{target_index:06d}.txt"
+        )
         try:
             (links / f"link-{index:06d}").symlink_to(target)
         except OSError:

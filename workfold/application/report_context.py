@@ -77,36 +77,26 @@ def _collection_facts(collection: Collection) -> CollectionFacts:
         diagnostics=diagnostic_facts,
         capabilities=collection.capabilities,
         git_roots=tuple(os.fspath(item) for item in git.roots) if git is not None else (),
-        filesystem_roots=(
-            tuple(os.fspath(item) for item in filesystem.roots) if filesystem is not None else ()
-        ),
+        filesystem_roots=(tuple(os.fspath(item) for item in filesystem.roots) if filesystem is not None else ()),
         pruned_ignored_subtrees=(filesystem.pruned_ignored_subtrees if filesystem is not None else 0),
         commit_inputs=(
-            _commit_input_facts(git.commit_inputs)
-            if git is not None and git.commit_inputs is not None
-            else None
+            _commit_input_facts(git.commit_inputs) if git is not None and git.commit_inputs is not None else None
         ),
         file_changes=(
-            _file_change_facts(git.file_changes)
-            if git is not None and git.file_changes is not None
-            else None
+            _file_change_facts(git.file_changes) if git is not None and git.file_changes is not None else None
         ),
         duplicate_commit_ids=git.duplicate_commit_ids if git is not None else 0,
         duplicate_git_targets=git.duplicate_targets if git is not None else 0,
         linked_worktree_contexts=git.linked_worktree_contexts if git is not None else 0,
         tags=(
-            GitTagFacts(git.tags.annotated, git.tags.lightweight)
-            if git is not None and git.tags is not None
-            else None
+            GitTagFacts(git.tags.annotated, git.tags.lightweight) if git is not None and git.tags is not None else None
         ),
         reflogs=(
             GitReflogFacts(git.reflogs.available, git.reflogs.unavailable)
             if git is not None and git.reflogs is not None
             else None
         ),
-        overlapping_filesystem_roots=(
-            filesystem.overlapping_roots_deduplicated if filesystem is not None else 0
-        ),
+        overlapping_filesystem_roots=(filesystem.overlapping_roots_deduplicated if filesystem is not None else 0),
     )
 
 

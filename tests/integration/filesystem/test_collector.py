@@ -10,6 +10,7 @@ from typing import NoReturn, cast
 
 import pytest
 import workfold.collection.filesystem.entries as filesystem_entries
+import workfold.collection.filesystem.traversal as filesystem_traversal
 from workfold.collection.diagnostics import DiagnosticSeverity
 from workfold.collection.filesystem import (
     CollectedFilesystemEntry,
@@ -1551,6 +1552,105 @@ def test_queued_directory_replaced_by_another_directory_is_reported(tmp_path: Pa
 
 
 @pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows does not permit replacing a directory while its scan handle is open",
+)
+def test_native_scan_does_not_publish_a_batch_from_a_replaced_directory(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    active = root / "active"
+    active.mkdir(parents=True)
+    for name in ("first.txt", "second.txt"):
+        (active / name).write_text(f"original {name}", encoding="utf-8")
+    displaced = root / "displaced"
+    received: list[tuple[TimestampObservation, ...]] = []
+    swapped = False
+
+    @contextmanager
+    def swapping_scandir(
+        path: Path,
+        expected_snapshot: StatSnapshot,
+    ) -> Generator[Iterator[DirectoryEntry], None, None]:
+        nonlocal swapped
+        with scandir_no_follow(path, expected_snapshot) as iterator:
+            if path != active:
+                yield iterator
+                return
+
+            def swap_after_first_entry() -> Iterator[DirectoryEntry]:
+                nonlocal swapped
+                for entry in iterator:
+                    yield entry
+                    if not swapped:
+                        active.rename(displaced)
+                        active.mkdir()
+                        (active / "replacement.txt").write_text("replacement", encoding="utf-8")
+                        swapped = True
+
+            yield swap_after_first_entry()
+
+    result = FilesystemCollector(scandir_reader=swapping_scandir).collect(
+        (root,),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+        respect_gitignore=False,
+        include_ignored=True,
+        observation_consumer=received.append,
+    )
+
+    assert swapped
+    assert not result.observations
+    assert not received
+    assert result.is_partial
+    assert any(item.code == "filesystem_concurrent_mutation" for item in result.diagnostics)
+
+
+def test_native_scan_revalidates_at_the_exact_publication_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    files = tuple(root / f"work-{index}.txt" for index in range(3))
+    for file in files:
+        file.write_text(file.name, encoding="utf-8")
+    scanning_root = False
+    validation_calls = 0
+
+    def recording_lstat(path: Path) -> StatSnapshot:
+        nonlocal validation_calls
+        if scanning_root and path == root:
+            validation_calls += 1
+        return os.lstat(path)
+
+    @contextmanager
+    def recording_scandir(
+        path: Path,
+        expected_snapshot: StatSnapshot,
+    ) -> Generator[Iterator[DirectoryEntry], None, None]:
+        nonlocal scanning_root
+        with scandir_no_follow(path, expected_snapshot) as iterator:
+            scanning_root = path == root
+            try:
+                yield iterator
+            finally:
+                scanning_root = False
+
+    monkeypatch.setattr(filesystem_traversal, "DIRECTORY_PUBLICATION_BATCH_SIZE", 2)
+    result = FilesystemCollector(
+        lstat_reader=recording_lstat,
+        scandir_reader=recording_scandir,
+    ).collect(
+        (root,),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+        respect_gitignore=False,
+        include_ignored=True,
+    )
+
+    assert validation_calls == 2
+    assert {item.origin.path for item in result.observations} == set(files)
+    assert not result.is_partial
+
+
+@pytest.mark.skipif(
     not anchored_inventory_metadata_supported(),
     reason="Git's path-driven inventory is disabled without component-safe descriptor lookup",
 )
@@ -1638,6 +1738,52 @@ def test_git_inventory_cannot_follow_an_intermediate_directory_replaced_by_a_sym
     assert result.is_partial
     assert sum(item.record_errors for item in result.accounting.records) == 1
     assert any(item.code == "filesystem_concurrent_mutation" for item in result.diagnostics)
+
+
+@pytest.mark.skipif(
+    not anchored_inventory_metadata_supported(),
+    reason="Git's path-driven inventory is disabled without component-safe descriptor lookup",
+)
+def test_git_inventory_does_not_publish_a_batch_from_a_replaced_parent(tmp_path: Path) -> None:
+    selected = GitRepo.create(tmp_path / "selected")
+    active = selected.path / "active"
+    active.mkdir()
+    for name in ("first.txt", "second.txt"):
+        (active / name).write_text(f"original {name}", encoding="utf-8")
+    displaced = selected.path / "displaced"
+    received: list[tuple[TimestampObservation, ...]] = []
+
+    def swapping_inventory(
+        _runner: GitIgnoreRunner,
+        _repository: GitIgnoreRepository,
+        _selected_root: Path,
+        *,
+        included_consumer: Callable[[str], None],
+        ignored_consumer: Callable[[str, bool], None],
+    ) -> GitFilesystemInventoryVisit:
+        del ignored_consumer
+        included_consumer("active/first.txt")
+        active.rename(displaced)
+        active.mkdir()
+        (active / "second.txt").write_text("replacement", encoding="utf-8")
+        included_consumer("active/second.txt")
+        return GitFilesystemInventoryVisit(included_paths=2)
+
+    result = FilesystemCollector(
+        ignore_service=GitIgnoreService(inventory_visitor=swapping_inventory),
+    ).collect(
+        (selected.path,),
+        entry_timestamps=fs_selection(FS_MODIFIED),
+        observation_consumer=received.append,
+    )
+
+    assert not result.observations
+    assert not received
+    assert result.is_partial
+    assert sum(item.record_errors for item in result.accounting.records) == 1
+    mutation = next(item for item in result.diagnostics if item.code == "filesystem_concurrent_mutation")
+    assert mutation.target == os.fspath(selected.path)
+    assert mutation.path == os.fspath(active)
 
 
 def test_non_retaining_collection_streams_one_entry_batch_at_a_time(tmp_path: Path) -> None:

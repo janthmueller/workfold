@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import PurePosixPath
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 
 from workfold.collection.diagnostics import CollectorDiagnostic
 from workfold.collection.filesystem.accounting import AccountingBuilder
@@ -15,7 +16,6 @@ from workfold.collection.filesystem.entries import (
     origin,
     retain_entry,
     stat_diagnostic,
-    traversal_diagnostic,
 )
 from workfold.collection.filesystem.ignore import (
     ExplicitExcluder,
@@ -28,9 +28,70 @@ from workfold.collection.filesystem.inventory_metadata import AnchoredInventoryM
 from workfold.collection.filesystem.linux import LinuxStatxReader
 from workfold.collection.filesystem.models import CollectedFilesystemEntry
 from workfold.collection.filesystem.root_schedule import RootOwnershipScope
-from workfold.collection.filesystem.scan import DirectorySafetyError, PendingEntry, RootSnapshot
+from workfold.collection.filesystem.scan import (
+    DIRECTORY_PUBLICATION_BATCH_SIZE,
+    DirectorySafetyError,
+    PendingEntry,
+    RootSnapshot,
+    StatSnapshot,
+    ValidatedBatchPublisher,
+)
 from workfold.domain.coverage import RecordDisposition
 from workfold.domain.observations import EntryType
+
+
+@dataclass(frozen=True, slots=True)
+class _InventoryCandidate:
+    relative: PurePosixPath
+    path: Path
+    snapshot: StatSnapshot
+
+
+class _ValidatedInventoryPublisher:
+    """Publish only bounded metadata batches with a validated parent mapping."""
+
+    def __init__(
+        self,
+        metadata: AnchoredInventoryMetadata,
+        consumer: Callable[[_InventoryCandidate], None],
+        *,
+        batch_size: int = DIRECTORY_PUBLICATION_BATCH_SIZE,
+    ) -> None:
+        if batch_size < 1:
+            raise ValueError("inventory validation batch size must be positive")
+        self._parent: tuple[str, ...] | None = None
+        self._publisher = ValidatedBatchPublisher(
+            validator=metadata.finish_parent,
+            consumer=consumer,
+            batch_size=batch_size,
+        )
+
+    def prepare(self, parent: tuple[str, ...]) -> None:
+        """Finish the previous lexical parent before reading another one."""
+
+        if self._parent is None:
+            self._parent = parent
+            return
+        if self._parent == parent:
+            return
+        self._finish_parent()
+        self._parent = parent
+
+    def stage(self, candidate: _InventoryCandidate) -> None:
+        """Retain one snapshot until its active parent lease is validated."""
+
+        if self._parent != candidate.relative.parts[:-1]:
+            raise RuntimeError("inventory candidate does not belong to the prepared parent")
+        self._publisher.stage(candidate)
+
+    def finish(self) -> None:
+        """Validate and publish the final bounded parent batch."""
+
+        self._finish_parent()
+
+    def _finish_parent(self) -> None:
+        self._publisher.flush()
+        self._parent = None
 
 
 def collect_git_inventory_stream(
@@ -93,26 +154,10 @@ def _collect_git_inventory_stream(
 ) -> GitFilesystemInventoryVisit:
     root = root_snapshot.path
 
-    def consume_included(relative_path: str) -> None:
-        relative = PurePosixPath(relative_path)
-        path = root if not relative.parts else root / relative_path
-        if ownership.delegates(relative):
-            return
-        try:
-            snapshot = metadata.read(relative, display_path=path)
-        except (FileNotFoundError, NotADirectoryError):
-            return
-        except DirectorySafetyError as error:
-            accounting.discover(root)
-            accounting.record(root, RecordDisposition.RECORD_ERROR)
-            diagnostics.append(traversal_diagnostic(root, path, error))
-            return
-        except OSError as error:
-            accounting.discover(root)
-            accounting.record(root, RecordDisposition.RECORD_ERROR)
-            diagnostics.append(stat_diagnostic(root, path, error, is_root=False))
-            return
-
+    def process_included(candidate: _InventoryCandidate) -> None:
+        relative = candidate.relative
+        path = candidate.path
+        snapshot = candidate.snapshot
         candidate_type = entry_type(snapshot.st_mode)
         candidate_origin = origin(root, path, candidate_type) if entries is not None else None
         semantic_git_admin = (
@@ -148,6 +193,30 @@ def _collect_git_inventory_stream(
         if disposition is RecordDisposition.ELIGIBLE:
             eligible_consumer(PendingEntry(root, path, snapshot, candidate_origin, candidate_type))
 
+    publisher = _ValidatedInventoryPublisher(metadata, process_included)
+
+    def consume_included(relative_path: str) -> None:
+        relative = PurePosixPath(relative_path)
+        path = root if not relative.parts else root / relative_path
+        if ownership.delegates(relative):
+            return
+        publisher.prepare(relative.parts[:-1])
+        try:
+            snapshot = metadata.read(relative, display_path=path)
+        except (FileNotFoundError, NotADirectoryError):
+            return
+        except DirectorySafetyError:
+            # A component-safe lookup failed because the inventory namespace
+            # changed. Abort this root so the outer boundary accounts for the
+            # mutation exactly once instead of continuing against a bad map.
+            raise
+        except OSError as error:
+            accounting.discover(root)
+            accounting.record(root, RecordDisposition.RECORD_ERROR)
+            diagnostics.append(stat_diagnostic(root, path, error, is_root=False))
+            return
+        publisher.stage(_InventoryCandidate(relative, path, snapshot))
+
     def consume_ignored(relative_path: str, is_directory: bool) -> None:
         relative = PurePosixPath(relative_path)
         if ownership.delegates(relative):
@@ -167,9 +236,10 @@ def _collect_git_inventory_stream(
         included_consumer=consume_included,
         ignored_consumer=consume_ignored,
     )
-    root_validator()
     if visit.error is not None:
         return visit
+    publisher.finish()
+    root_validator()
 
     try:
         selected_is_worktree_root = root.resolve(strict=True) == repository.root.resolve(strict=True)
@@ -182,15 +252,15 @@ def _collect_git_inventory_stream(
             admin_snapshot = metadata.read(PurePosixPath(".git"), display_path=admin_path)
         except FileNotFoundError:
             pass
-        except DirectorySafetyError as error:
-            accounting.discover(root)
-            accounting.record(root, RecordDisposition.RECORD_ERROR)
-            diagnostics.append(traversal_diagnostic(root, admin_path, error))
+        except DirectorySafetyError:
+            raise
         except OSError as error:
             accounting.discover(root)
             accounting.record(root, RecordDisposition.RECORD_ERROR)
             diagnostics.append(stat_diagnostic(root, admin_path, error, is_root=False))
         else:
+            metadata.finish_parent()
+            root_validator()
             admin_type = entry_type(admin_snapshot.st_mode)
             accounting.discover(root)
             accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)

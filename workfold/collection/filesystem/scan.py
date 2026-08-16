@@ -9,10 +9,49 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Final, Generic, Protocol, TypeVar
 
 from workfold.collection.filesystem.linux import LinuxStatxFallbackSnapshot, LinuxStatxReader
 from workfold.domain.observations import EntryType, RecordOrigin, TimestampObservation
+
+DIRECTORY_PUBLICATION_BATCH_SIZE: Final[int] = 4_096
+_PublicationItem = TypeVar("_PublicationItem")
+
+
+class ValidatedBatchPublisher(Generic[_PublicationItem]):
+    """Publish bounded item batches only after validating their shared scope."""
+
+    def __init__(
+        self,
+        *,
+        validator: Callable[[], None],
+        consumer: Callable[[_PublicationItem], None],
+        batch_size: int,
+    ) -> None:
+        if batch_size < 1:
+            raise ValueError("publication batch size must be positive")
+        self._validator = validator
+        self._consumer = consumer
+        self._batch_size = batch_size
+        self._pending: list[_PublicationItem] = []
+
+    def stage(self, item: _PublicationItem) -> None:
+        """Retain one item and publish when the bounded batch is full."""
+
+        self._pending.append(item)
+        if len(self._pending) >= self._batch_size:
+            self.flush()
+
+    def flush(self) -> None:
+        """Validate the shared scope, then publish the current batch."""
+
+        if not self._pending:
+            return
+        pending = self._pending
+        self._pending = []
+        self._validator()
+        for item in pending:
+            self._consumer(item)
 
 
 class StatSnapshot(Protocol):

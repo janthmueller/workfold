@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
@@ -45,6 +46,18 @@ def test_cli_reports_version(capsys: pytest.CaptureFixture[str]) -> None:
 
     assert error.value.code == 0
     assert capsys.readouterr().out.startswith("workfold ")
+
+
+def test_truncated_missing_path_diagnostics_keep_the_usage_exit_status(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    missing_paths = tuple(os.fspath(tmp_path / f"missing-{index}") for index in range(257))
+
+    assert main([*missing_paths, "--mode", "fs", "--no-color"]) == 2
+    captured = capsys.readouterr()
+    assert "1 additional diagnostic(s) omitted" in captured.err
+    assert "(errors=1, warnings=0, info=0)" in captured.err
 
 
 @pytest.mark.parametrize(("platform_name", "expected_encoding"), [("win32", "utf-8"), ("linux", "cp1252")])

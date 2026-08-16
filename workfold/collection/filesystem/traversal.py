@@ -30,6 +30,7 @@ from workfold.collection.filesystem.linux import LinuxStatxReader
 from workfold.collection.filesystem.models import CollectedFilesystemEntry
 from workfold.collection.filesystem.root_schedule import RootOwnershipScope
 from workfold.collection.filesystem.scan import (
+    DIRECTORY_PUBLICATION_BATCH_SIZE,
     DirectoryEntry,
     DirectorySafetyError,
     LstatReader,
@@ -37,7 +38,9 @@ from workfold.collection.filesystem.scan import (
     RootSnapshot,
     ScandirReader,
     StatSnapshot,
+    ValidatedBatchPublisher,
     directory_identity,
+    revalidate_directory_snapshot,
     statx_fallback_snapshot,
     validate_directory_snapshot_identity,
 )
@@ -133,10 +136,25 @@ class _StatxDirectoryEntry:
         return self.entry.stat(follow_symlinks=False)
 
 
+@dataclass(frozen=True, slots=True)
+class _DirectoryRead:
+    """One child outcome retained until its parent mapping is revalidated."""
+
+    path: Path
+    relative: PurePosixPath
+    snapshot: StatSnapshot | None = None
+    error: OSError | None = None
+
+    def __post_init__(self) -> None:
+        if (self.snapshot is None) == (self.error is None):
+            raise ValueError("a directory read must contain exactly one snapshot or error")
+
+
 def discover_entries(
     root_snapshot: RootSnapshot,
     *,
     lstat_reader: LstatReader,
+    directory_identity_reader: LstatReader,
     scandir_reader: ScandirReader,
     excluder: ExplicitExcluder,
     accounting: AccountingBuilder,
@@ -171,6 +189,8 @@ def discover_entries(
         if root_origin is not None:
             retain_entry(entries, root_origin, RecordDisposition.EXPLICITLY_EXCLUDED)
         return pending
+    if root_type is EntryType.DIRECTORY:
+        revalidate_directory_snapshot(root, root_snapshot.snapshot, directory_identity_reader)
     _queue_or_consume(
         PendingEntry(root, root, root_snapshot.snapshot, root_origin, root_type),
         pending,
@@ -182,22 +202,110 @@ def discover_entries(
     admin_relative_parts = repository_admin_relative_parts(root, repository)
     root_relative = PurePosixPath(".")
     directories = [(root, root_relative, root_snapshot.snapshot)]
+
+    def process_read(item: _DirectoryRead) -> None:
+        path = item.path
+        if item.error is not None:
+            accounting.discover(root)
+            accounting.record(root, RecordDisposition.RECORD_ERROR)
+            diagnostics.append(stat_diagnostic(root, path, item.error, is_root=False))
+            return
+        snapshot = item.snapshot
+        if snapshot is None:
+            raise RuntimeError("validated directory read omitted its metadata snapshot")
+        relative = item.relative
+        candidate_type = entry_type(snapshot.st_mode)
+        candidate_origin = origin(root, path, candidate_type) if entries is not None else None
+        relative_text = relative.as_posix()
+        if ownership.delegates(relative):
+            # Explicit roots partition otherwise overlapping repository scopes
+            # and account for their own records. A delegated directory is
+            # pruned here.
+            return
+        inventory_ignored, inventory_directory = (
+            inventory.ignore_state(relative_text) if inventory is not None else (False, False)
+        )
+        if is_semantic_git_admin(
+            path,
+            repository,
+            relative_parts=relative.parts,
+            admin_relative_parts=admin_relative_parts,
+        ):
+            accounting.discover(root)
+            accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
+            if candidate_origin is not None:
+                retain_entry(entries, candidate_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
+            return
+        if excluder.matches(relative, is_directory=candidate_type is EntryType.DIRECTORY):
+            accounting.discover(root)
+            accounting.record(root, RecordDisposition.EXPLICITLY_EXCLUDED)
+            if candidate_origin is not None:
+                retain_entry(entries, candidate_origin, RecordDisposition.EXPLICITLY_EXCLUDED)
+            return
+        nested_boundary = candidate_type is EntryType.DIRECTORY and is_nested_repository_boundary(
+            path,
+            selected_root=root,
+        )
+        if inventory_ignored or (candidate_type is EntryType.DIRECTORY and inventory_directory):
+            if candidate_type is not EntryType.DIRECTORY or include_directories or nested_boundary:
+                if candidate_type is EntryType.DIRECTORY and include_directories:
+                    accounting.prune_ignored_subtree()
+                accounting.discover(root)
+                accounting.record(root, RecordDisposition.IGNORED)
+                if candidate_origin is not None:
+                    retain_entry(entries, candidate_origin, RecordDisposition.IGNORED)
+            return
+        if nested_boundary:
+            # A visible nested worktree owns its descendants and applies its
+            # own ignore semantics. An outer ignored boundary was handled
+            # above and is never entered.
+            if pending_consumer is None:
+                # The fallback check-ignore path has not decided visibility
+                # yet. Retain only the boundary and defer repository handoff
+                # with that decision.
+                pending.append(PendingEntry(root, path, snapshot, candidate_origin, candidate_type))
+            else:
+                nested_repository_consumer(RootSnapshot(path, snapshot), excluder.scoped(relative))
+            return
+        _queue_or_consume(
+            PendingEntry(root, path, snapshot, candidate_origin, candidate_type),
+            pending,
+            pending_consumer,
+        )
+        if candidate_type is EntryType.DIRECTORY:
+            directories.append((path, relative, snapshot))
+
     while directories:
         directory, directory_relative, expected_snapshot = directories.pop()
+        publisher = ValidatedBatchPublisher(
+            validator=lambda: revalidate_directory_snapshot(
+                directory,
+                expected_snapshot,
+                directory_identity_reader,
+            ),
+            consumer=process_read,
+            batch_size=DIRECTORY_PUBLICATION_BATCH_SIZE,
+        )
         try:
             with scandir_reader(directory, expected_snapshot) as iterator:
-                try:
-                    for directory_entry in iterator:
-                        name = directory_entry.name
-                        path = directory / name
-                        try:
-                            snapshot = directory_entry.stat(follow_symlinks=False)
-                        except OSError as error:
-                            accounting.discover(root)
-                            accounting.record(root, RecordDisposition.RECORD_ERROR)
-                            diagnostics.append(stat_diagnostic(root, path, error, is_root=False))
-                            continue
-
+                scan = iter(iterator)
+                iteration_error: OSError | None = None
+                while True:
+                    try:
+                        directory_entry = next(scan)
+                    except StopIteration:
+                        break
+                    except OSError as error:
+                        iteration_error = error
+                        break
+                    name = directory_entry.name
+                    path = directory / name
+                    relative = PurePosixPath(name) if directory_relative == root_relative else directory_relative / name
+                    try:
+                        snapshot = directory_entry.stat(follow_symlinks=False)
+                    except OSError as error:
+                        publisher.stage(_DirectoryRead(path, relative, error=error))
+                    else:
                         candidate_type = entry_type(snapshot.st_mode)
                         if candidate_type is EntryType.DIRECTORY and directory_identity(snapshot) is None:
                             # Windows DirEntry.stat() deliberately leaves device
@@ -208,76 +316,13 @@ def discover_entries(
                             try:
                                 snapshot = lstat_reader(path)
                             except OSError as error:
-                                accounting.discover(root)
-                                accounting.record(root, RecordDisposition.RECORD_ERROR)
-                                diagnostics.append(stat_diagnostic(root, path, error, is_root=False))
-                                continue
-                            candidate_type = entry_type(snapshot.st_mode)
-                        candidate_origin = origin(root, path, candidate_type) if entries is not None else None
-                        relative = (
-                            PurePosixPath(name) if directory_relative == root_relative else directory_relative / name
-                        )
-                        relative_text = relative.as_posix()
-                        if ownership.delegates(relative):
-                            # Explicit roots partition otherwise overlapping
-                            # repository scopes and account for their own
-                            # records. A delegated directory is pruned here.
-                            continue
-                        inventory_ignored, inventory_directory = (
-                            inventory.ignore_state(relative_text) if inventory is not None else (False, False)
-                        )
-                        if is_semantic_git_admin(
-                            path,
-                            repository,
-                            relative_parts=relative.parts,
-                            admin_relative_parts=admin_relative_parts,
-                        ):
-                            accounting.discover(root)
-                            accounting.record(root, RecordDisposition.SEMANTIC_GIT_ADMIN)
-                            if candidate_origin is not None:
-                                retain_entry(entries, candidate_origin, RecordDisposition.SEMANTIC_GIT_ADMIN)
-                            continue
-                        if excluder.matches(relative, is_directory=candidate_type is EntryType.DIRECTORY):
-                            accounting.discover(root)
-                            accounting.record(root, RecordDisposition.EXPLICITLY_EXCLUDED)
-                            if candidate_origin is not None:
-                                retain_entry(entries, candidate_origin, RecordDisposition.EXPLICITLY_EXCLUDED)
-                            continue
-                        nested_boundary = candidate_type is EntryType.DIRECTORY and is_nested_repository_boundary(
-                            path,
-                            selected_root=root,
-                        )
-                        if inventory_ignored or (candidate_type is EntryType.DIRECTORY and inventory_directory):
-                            if candidate_type is not EntryType.DIRECTORY or include_directories or nested_boundary:
-                                if candidate_type is EntryType.DIRECTORY:
-                                    if include_directories:
-                                        accounting.prune_ignored_subtree()
-                                accounting.discover(root)
-                                accounting.record(root, RecordDisposition.IGNORED)
-                                if candidate_origin is not None:
-                                    retain_entry(entries, candidate_origin, RecordDisposition.IGNORED)
-                            continue
-                        if nested_boundary:
-                            # A visible nested worktree owns its descendants and
-                            # applies its own ignore semantics. An outer ignored
-                            # boundary was handled above and is never entered.
-                            if pending_consumer is None:
-                                # The fallback check-ignore path has not decided
-                                # visibility yet. Retain only the boundary and
-                                # defer repository handoff with that decision.
-                                pending.append(PendingEntry(root, path, snapshot, candidate_origin, candidate_type))
-                            else:
-                                nested_repository_consumer(RootSnapshot(path, snapshot), excluder.scoped(relative))
-                            continue
-                        _queue_or_consume(
-                            PendingEntry(root, path, snapshot, candidate_origin, candidate_type),
-                            pending,
-                            pending_consumer,
-                        )
-                        if candidate_type is EntryType.DIRECTORY:
-                            directories.append((path, relative, snapshot))
-                except OSError as error:
-                    diagnostics.append(traversal_diagnostic(root, directory, error))
+                                publisher.stage(_DirectoryRead(path, relative, error=error))
+                                snapshot = None
+                        if snapshot is not None:
+                            publisher.stage(_DirectoryRead(path, relative, snapshot=snapshot))
+                publisher.flush()
+                if iteration_error is not None:
+                    diagnostics.append(traversal_diagnostic(root, directory, iteration_error))
         except OSError as error:
             diagnostics.append(traversal_diagnostic(root, directory, error))
     return pending

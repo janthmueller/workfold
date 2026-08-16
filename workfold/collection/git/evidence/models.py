@@ -44,12 +44,7 @@ class GitEvidenceRequest:
 
     @property
     def has_work(self) -> bool:
-        return bool(
-            self.commit_timestamps
-            or self.file_change_timestamps
-            or self.collect_tags
-            or self.collect_reflogs
-        )
+        return bool(self.commit_timestamps or self.file_change_timestamps or self.collect_tags or self.collect_reflogs)
 
 
 @dataclass(frozen=True, slots=True)

@@ -107,34 +107,56 @@ class CollectorDiagnostic:
         return int(self.affects_completeness)
 
 
+@dataclass(slots=True)
+class _OmittedDiagnosticPartition:
+    """Mutable counts for one policy-category and semantic-kind partition."""
+
+    first_target: str
+    errors: int = 0
+    warnings: int = 0
+    infos: int = 0
+    completeness_failures: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.errors + self.warnings + self.infos
+
+    def add(self, diagnostic: CollectorDiagnostic) -> None:
+        represented = diagnostic.represented_occurrences
+        if represented is None:
+            if diagnostic.severity is DiagnosticSeverity.ERROR:
+                self.errors += 1
+            elif diagnostic.severity is DiagnosticSeverity.WARNING:
+                self.warnings += 1
+            else:
+                self.infos += 1
+        else:
+            self.errors += represented.errors
+            self.warnings += represented.warnings
+            self.infos += represented.infos
+        self.completeness_failures += diagnostic.completeness_failure_count
+
+
 class DiagnosticBuffer(list[CollectorDiagnostic]):
-    """Retain a bounded diagnostic sample plus exact omitted counts."""
+    """Retain a bounded sample plus exact typed summaries for omissions."""
 
     def __init__(self, *, limit: int = _DEFAULT_DIAGNOSTIC_LIMIT) -> None:
         if limit < 1:
             raise ValueError("diagnostic limit must be positive")
         super().__init__()
         self._limit = limit
-        self._omitted = 0
-        self._omitted_by_severity = {severity: 0 for severity in DiagnosticSeverity}
-        self._omitted_completeness_failures = 0
-        self._first_omitted_target: str | None = None
+        self._omitted: dict[
+            tuple[DiagnosticCategory, DiagnosticKind],
+            _OmittedDiagnosticPartition,
+        ] = {}
 
     def append(self, diagnostic: CollectorDiagnostic) -> None:
         if len(self) < self._limit:
             super().append(diagnostic)
             return
-        represented = diagnostic.represented_occurrences
-        if represented is None:
-            self._omitted += 1
-            self._omitted_by_severity[diagnostic.severity] += 1
-        else:
-            self._omitted += represented.total
-            for severity in DiagnosticSeverity:
-                self._omitted_by_severity[severity] += represented.count(severity)
-        self._omitted_completeness_failures += diagnostic.completeness_failure_count
-        if self._first_omitted_target is None:
-            self._first_omitted_target = diagnostic.target
+        key = (diagnostic.category, diagnostic.kind)
+        partition = self._omitted.setdefault(key, _OmittedDiagnosticPartition(diagnostic.target))
+        partition.add(diagnostic)
 
     def extend(self, diagnostics: Iterable[CollectorDiagnostic]) -> None:
         for diagnostic in diagnostics:
@@ -144,41 +166,53 @@ class DiagnosticBuffer(list[CollectorDiagnostic]):
     def error_count(self) -> int:
         """Return retained and omitted error diagnostics."""
 
-        return (
-            sum(item.occurrence_count(DiagnosticSeverity.ERROR) for item in self)
-            + self._omitted_by_severity[DiagnosticSeverity.ERROR]
+        return sum(item.occurrence_count(DiagnosticSeverity.ERROR) for item in self) + sum(
+            partition.errors for partition in self._omitted.values()
         )
 
     def snapshot(self) -> tuple[CollectorDiagnostic, ...]:
-        """Return retained diagnostics and one exact truncation summary."""
+        """Return retained diagnostics and exact typed truncation summaries."""
 
         if not self._omitted:
             return tuple(self)
-        errors = self._omitted_by_severity[DiagnosticSeverity.ERROR]
-        warnings = self._omitted_by_severity[DiagnosticSeverity.WARNING]
-        infos = self._omitted_by_severity[DiagnosticSeverity.INFO]
-        severity = (
-            DiagnosticSeverity.ERROR if errors else DiagnosticSeverity.WARNING if warnings else DiagnosticSeverity.INFO
+        summaries = tuple(
+            _truncation_summary(category, kind, partition) for (category, kind), partition in self._omitted.items()
         )
-        summary = CollectorDiagnostic(
-            code="diagnostics_truncated",
-            stage="diagnostic_collection",
-            target=self._first_omitted_target or "multiple targets",
-            severity=severity,
-            message=(
-                f"{self._omitted:,} additional diagnostic(s) omitted "
-                f"(errors={errors:,}, warnings={warnings:,}, info={infos:,})"
-            ),
-            hint="Use narrower paths or repair the first reported failures before retrying.",
-            affects_completeness=bool(self._omitted_completeness_failures),
-            represented_occurrences=DiagnosticOccurrences(
-                errors=errors,
-                warnings=warnings,
-                infos=infos,
-                completeness_failures=self._omitted_completeness_failures,
-            ),
-        )
-        return (*self, summary)
+        return (*self, *summaries)
+
+
+def _truncation_summary(
+    category: DiagnosticCategory,
+    kind: DiagnosticKind,
+    partition: _OmittedDiagnosticPartition,
+) -> CollectorDiagnostic:
+    severity = (
+        DiagnosticSeverity.ERROR
+        if partition.errors
+        else DiagnosticSeverity.WARNING
+        if partition.warnings
+        else DiagnosticSeverity.INFO
+    )
+    return CollectorDiagnostic(
+        code="diagnostics_truncated",
+        stage="diagnostic_collection",
+        target=partition.first_target,
+        severity=severity,
+        message=(
+            f"{partition.total:,} additional diagnostic(s) omitted "
+            f"(errors={partition.errors:,}, warnings={partition.warnings:,}, info={partition.infos:,})"
+        ),
+        hint="Use narrower paths or repair the first reported failures before retrying.",
+        affects_completeness=bool(partition.completeness_failures),
+        represented_occurrences=DiagnosticOccurrences(
+            errors=partition.errors,
+            warnings=partition.warnings,
+            infos=partition.infos,
+            completeness_failures=partition.completeness_failures,
+        ),
+        category=category,
+        kind=kind,
+    )
 
 
 def diagnostics_are_partial(diagnostics: Iterable[CollectorDiagnostic]) -> bool:

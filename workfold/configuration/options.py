@@ -198,6 +198,7 @@ class RunOptions:
             return SourceMode.BOTH
         return SourceMode.GIT if includes_git else SourceMode.FILESYSTEM
 
+
 @dataclass(frozen=True, slots=True)
 class UnresolvedOptions:
     """Typed setting values awaiting cross-option validation."""

@@ -54,16 +54,12 @@ def build_git_evidence_summary(
             if request.file_change_timestamps and commit_result is not None
             else None
         ),
-        file_changes=(
-            _file_change_summary(file_change_result) if file_change_result is not None else None
-        ),
+        file_changes=(_file_change_summary(file_change_result) if file_change_result is not None else None),
         duplicate_commit_ids=commit_result.duplicate_commit_ids if commit_result is not None else 0,
         duplicate_targets=duplicate_targets,
         linked_worktree_contexts=linked_worktree_contexts,
         tags=(
-            GitTagSummary(tag_result.annotated_tags, tag_result.lightweight_tags)
-            if tag_result is not None
-            else None
+            GitTagSummary(tag_result.annotated_tags, tag_result.lightweight_tags) if tag_result is not None else None
         ),
         reflogs=(
             GitReflogSummary(len(reflog_result.available_refs), len(reflog_result.refs_without_reflog))
@@ -87,9 +83,7 @@ def _commit_input_summary(result: GitCollectionResult) -> GitCommitInputSummary:
         candidates=candidates,
         hydrated=hydrated,
         selected=selected,
-        scope_evaluation_errors=sum(
-            count for item in accounting for _role, count in item.scope_evaluation_errors
-        ),
+        scope_evaluation_errors=sum(count for item in accounting for _role, count in item.scope_evaluation_errors),
         record_errors=sum(item.record_errors for item in accounting),
         targets=tuple(
             GitCommitInputTargetSummary(

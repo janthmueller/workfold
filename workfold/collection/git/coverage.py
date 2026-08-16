@@ -49,9 +49,7 @@ def build_git_coverage_fragment(
                     record_errors=accounting.record_errors,
                     timestamp_kinds=commit_timestamps,
                     examined={kind: accounting.timestamp_value_count(_git_role(kind)) for kind in commit_timestamps},
-                    values_read={
-                        kind: accounting.timestamp_value_count(_git_role(kind)) for kind in commit_timestamps
-                    },
+                    values_read={kind: accounting.timestamp_value_count(_git_role(kind)) for kind in commit_timestamps},
                     unavailable={},
                     scope_matches={kind: accounting.scope_match_count(_git_role(kind)) for kind in commit_timestamps},
                     scope_errors={
@@ -167,9 +165,7 @@ def build_git_coverage_fragment(
         )
         for target in targets or (GIT_COVERAGE_TARGET,):
             entries = tuple(item for item in reflog_result.entries if os.fspath(item.repository.root) == target)
-            statuses = tuple(
-                item for item in reflog_result.available_refs if os.fspath(item.repository.root) == target
-            )
+            statuses = tuple(item for item in reflog_result.available_refs if os.fspath(item.repository.root) == target)
             captured_entries = sum(item.captured_entry_count for item in statuses) if statuses else len(entries)
             unavailable_entries = sum(item.unavailable_entry_count for item in statuses)
             _append_partition(

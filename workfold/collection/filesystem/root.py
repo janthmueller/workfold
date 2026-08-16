@@ -44,7 +44,7 @@ from workfold.collection.filesystem.scan import (
 )
 from workfold.collection.filesystem.timestamps import extract_entry
 from workfold.collection.filesystem.traversal import discover_entries
-from workfold.domain.coverage import Capability, RecordDisposition
+from workfold.domain.coverage import Capability, CapabilityReason, RecordDisposition
 from workfold.domain.observations import EntryType, TimestampKind, TimestampObservation
 from workfold.domain.scope import ObservationScope
 
@@ -158,7 +158,12 @@ def collect_root(
             ignore_capability(
                 root,
                 respect_gitignore,
-                GitIgnoreProbe(None, True, "raw Git administrative storage is semantically excluded"),
+                GitIgnoreProbe(
+                    None,
+                    True,
+                    "raw Git administrative storage is semantically excluded",
+                    capability_reason=CapabilityReason.SEMANTIC_GIT_ADMIN,
+                ),
                 error=None,
             )
         )
@@ -226,6 +231,7 @@ def collect_root(
                 pending = discover_entries(
                     root_snapshot,
                     lstat_reader=lstat_reader,
+                    directory_identity_reader=root_identity_reader,
                     scandir_reader=scandir_reader,
                     excluder=excluder,
                     accounting=accounting,
@@ -276,6 +282,7 @@ def collect_root(
     pending = discover_entries(
         root_snapshot,
         lstat_reader=lstat_reader,
+        directory_identity_reader=root_identity_reader,
         scandir_reader=scandir_reader,
         excluder=excluder,
         accounting=accounting,

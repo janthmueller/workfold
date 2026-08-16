@@ -180,30 +180,22 @@ def coverage_details(
     if collection.duplicate_commit_ids:
         details.append(f"duplicate commit IDs deduplicated: {collection.duplicate_commit_ids:,}")
     if collection.linked_worktree_contexts:
-        details.append(
-            f"linked worktree contexts sharing commit history: {collection.linked_worktree_contexts:,}"
-        )
+        details.append(f"linked worktree contexts sharing commit history: {collection.linked_worktree_contexts:,}")
     if collection.duplicate_git_targets:
         details.append(f"duplicate selected Git targets deduplicated: {collection.duplicate_git_targets:,}")
     if collection.tags is not None:
-        details.append(
-            f"tags: {collection.tags.annotated:,} annotated, "
-            f"{collection.tags.lightweight:,} lightweight"
-        )
+        details.append(f"tags: {collection.tags.annotated:,} annotated, {collection.tags.lightweight:,} lightweight")
     if collection.reflogs is not None:
         details.append(
-            f"reflogs: {collection.reflogs.available:,} available, "
-            f"{collection.reflogs.unavailable:,} unavailable"
+            f"reflogs: {collection.reflogs.available:,} available, {collection.reflogs.unavailable:,} unavailable"
         )
     if collection.overlapping_filesystem_roots:
-        details.append(
-            "overlapping filesystem roots deduplicated: "
-            f"{collection.overlapping_filesystem_roots:,}"
-        )
+        details.append(f"overlapping filesystem roots deduplicated: {collection.overlapping_filesystem_roots:,}")
     for capability in collection.capabilities:
         if capability.status is not CapabilityStatus.SUPPORTED or capability.note:
             note = f" ({capability.note})" if capability.note else ""
-            details.append(f"{capability.name}: {capability.status.value}{note}")
+            status = capability.status.value.replace("_", " ")
+            details.append(f"{capability.name}: {status}{note}")
     diagnostic_facts = collection.diagnostics
     if diagnostic_facts.errors or diagnostic_facts.warnings or diagnostic_facts.infos:
         errors, warnings, infos = diagnostic_facts.errors, diagnostic_facts.warnings, diagnostic_facts.infos

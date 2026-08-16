@@ -42,6 +42,7 @@ class CapabilityStatus(str, Enum):
     SUPPORTED = "supported"
     UNSUPPORTED = "unsupported"
     UNAVAILABLE = "unavailable"
+    NOT_APPLICABLE = "not_applicable"
     POTENTIALLY_UNRELIABLE = "potentially_unreliable"
 
 
@@ -55,6 +56,13 @@ class CapabilityKind(str, Enum):
     GIT_IGNORE_SEMANTICS = "git_ignore_semantics"
 
 
+class CapabilityReason(str, Enum):
+    """Typed explanation for a capability that does not apply to a target."""
+
+    OUTSIDE_GIT_WORKTREE = "outside_git_worktree"
+    SEMANTIC_GIT_ADMIN = "semantic_git_admin"
+
+
 @dataclass(frozen=True, slots=True)
 class Capability:
     """A collector/platform capability statement."""
@@ -66,6 +74,7 @@ class Capability:
     status: CapabilityStatus
     timestamp_kind: TimestampKind | None = None
     note: str | None = None
+    reason: CapabilityReason | None = None
 
     def __post_init__(self) -> None:
         if self.source is not Source.FILESYSTEM:
@@ -81,6 +90,12 @@ class Capability:
             raise ValueError("timestamp capability kind does not match its timestamp kind")
         if self.kind is CapabilityKind.GIT_IGNORE_SEMANTICS and self.timestamp_kind is not None:
             raise ValueError("Git ignore capability cannot describe a timestamp kind")
+        if self.reason is not None and self.kind is not CapabilityKind.GIT_IGNORE_SEMANTICS:
+            raise ValueError("capability reason does not belong to the capability kind")
+        if self.reason is not None and self.status is not CapabilityStatus.NOT_APPLICABLE:
+            raise ValueError("capability reason requires a not-applicable status")
+        if self.status is CapabilityStatus.NOT_APPLICABLE and self.reason is None:
+            raise ValueError("not-applicable capability requires a typed reason")
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,9 +338,7 @@ class CollectionTimestampCoverage:
         if self.scope_matches + self.scope_errors > self.values_read:
             problems.append(f"scope outcomes={self.scope_matches + self.scope_errors}, values read={self.values_read}")
         if self.materialization_errors > self.scope_matches:
-            problems.append(
-                f"materialization errors={self.materialization_errors}, scope matches={self.scope_matches}"
-            )
+            problems.append(f"materialization errors={self.materialization_errors}, scope matches={self.scope_matches}")
         if problems:
             raise CoverageInvariantError(
                 f"collection timestamp coverage does not reconcile for {self.key!r}: {'; '.join(problems)}"
@@ -439,6 +452,7 @@ def _require_non_negative(*values: int) -> None:
 __all__ = [
     "Capability",
     "CapabilityKind",
+    "CapabilityReason",
     "CapabilityStatus",
     "CollectionTimestampCoverage",
     "CoverageFragment",

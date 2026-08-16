@@ -22,7 +22,13 @@ from workfold.collection.filesystem.ignore import (
 )
 from workfold.collection.filesystem.models import CollectedFilesystemEntry
 from workfold.collection.filesystem.scan import DirectorySafetyError, PendingEntry
-from workfold.domain.coverage import Capability, CapabilityKind, CapabilityStatus, RecordDisposition
+from workfold.domain.coverage import (
+    Capability,
+    CapabilityKind,
+    CapabilityReason,
+    CapabilityStatus,
+    RecordDisposition,
+)
 from workfold.domain.observations import EntryType, RecordKind, RecordOrigin, Source
 from workfold.domain.provenance import absolute_filesystem_entry_id
 
@@ -140,6 +146,11 @@ def stat_diagnostic(root: Path, path: Path, error: OSError, *, is_root: bool) ->
 
 
 def traversal_diagnostic(root: Path, path: Path, error: OSError) -> CollectorDiagnostic:
+    failed_path = (
+        os.fsdecode(error.filename)
+        if isinstance(error, DirectorySafetyError) and isinstance(error.filename, (str, bytes))
+        else os.fspath(path)
+    )
     return CollectorDiagnostic(
         code="filesystem_concurrent_mutation"
         if isinstance(error, DirectorySafetyError)
@@ -147,7 +158,7 @@ def traversal_diagnostic(root: Path, path: Path, error: OSError) -> CollectorDia
         stage="filesystem_traversal",
         target=os.fspath(root),
         message=f"directory could not be fully enumerated: {error}",
-        path=os.fspath(path),
+        path=failed_path,
     )
 
 
@@ -177,12 +188,17 @@ def ignore_capability(
     *,
     error: Exception | None,
 ) -> Capability:
+    reason: CapabilityReason | None = None
     if not respect_gitignore:
         status = CapabilityStatus.SUPPORTED
         note = "ignored entries were explicitly included"
     elif error is not None:
         status = CapabilityStatus.UNAVAILABLE
         note = str(error)
+    elif probe.capability_reason is not None:
+        status = CapabilityStatus.NOT_APPLICABLE
+        note = probe.note
+        reason = probe.capability_reason
     elif probe.repository is None:
         status = CapabilityStatus.UNAVAILABLE
         note = probe.note
@@ -196,4 +212,5 @@ def ignore_capability(
         name="standard Git ignore semantics",
         status=status,
         note=note,
+        reason=reason,
     )

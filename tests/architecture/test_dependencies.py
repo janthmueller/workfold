@@ -116,7 +116,9 @@ def test_filesystem_root_scan_has_explicit_boundary_bundles() -> None:
     path = PACKAGE_ROOT / "collection" / "filesystem" / "root.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     function = next(
-        node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "collect_root"
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "collect_root"
     )
 
     assert [item.arg for item in function.args.args] == ["root_snapshot"]

@@ -93,6 +93,33 @@ def test_synthetic_fixture_exercises_complete_workfold_collection(tmp_path: Path
         assert sample.peak_process_tree_rss_bytes > 0
 
 
+def test_synthetic_fixture_can_model_one_file_per_directory(tmp_path: Path) -> None:
+    root = tmp_path / "directory-heavy"
+    manifest = create_fixture(
+        root,
+        FixtureSpec(
+            commits=3,
+            tracked_files=3,
+            untracked_files=3,
+            ignored_files=2,
+            reflog_updates=0,
+            symlinks=1,
+            tracked_files_per_directory=1,
+            filesystem_files_per_directory=1,
+        ),
+        now=datetime(2026, 8, 12, 12, tzinfo=timezone.utc),
+    )
+
+    assert manifest.tracked_files_per_directory == 1
+    assert manifest.filesystem_files_per_directory == 1
+    assert (root / "tracked" / "0002" / "file-000002.txt").is_file()
+    assert (root / "untracked" / "0002" / "file-000002.txt").is_file()
+    assert (root / "ignored" / "0001" / "file-000001.txt").is_file()
+    assert manifest.symlinks in {0, 1}
+    if manifest.symlinks:
+        assert (root / "links" / "link-000000").is_symlink()
+
+
 def _git(root: Path, *arguments: str) -> str:
     completed = subprocess.run(
         ("git", "-C", os.fspath(root), *arguments),
