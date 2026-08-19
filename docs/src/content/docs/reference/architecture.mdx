@@ -207,6 +207,13 @@ policy never depend on matching diagnostic prose or an ad hoc code allowlist.
 layout. Band assignment, clustering, adaptive exact-count compaction,
 projection, and portable temporary SQLite spill storage live here. It does not
 know how timestamps were collected or how Rich will display the result.
+Each compact chart marker retains a bit-mask signature of its exact evidence
+kinds. The signature survives in-memory grouping, SQLite spill, run compaction,
+and lazy cluster storage, so a renderer may distinguish commit, tag, reflog,
+file-change, and filesystem timestamp roles without retaining full provenance.
+It is also part of visual equivalence: simultaneous markers with different
+evidence signatures are never grouped merely because their source and schedule
+state agree.
 
 ### Application
 
@@ -241,12 +248,22 @@ but cannot independently reinterpret collection success. Diagnostic storage is
 bounded by composition rather than list inheritance, so every insertion passes
 through the same truncation and exact-summary accounting.
 
+### Configuration
+
+`configuration` owns scalar setting precedence plus structured event-style
+rules. Style rules reuse domain evidence selectors, remain separated by
+global/local precedence layer, and compile into immutable visuals for every
+supported marker evidence signature before collection begins. Configuration
+validates one-cell symbols and terminal color values, but it does not inspect
+events or create report output. A rule covers a coalesced marker only when it
+covers every evidence role retained by that marker.
+
 ### Reporting and CLI
 
 `reporting.terminal` is the output adapter. Only this package creates Rich
-objects, assigns terminal styles, or turns report facts into scope and coverage
-prose. Generic terminal-safe text handling is in `reporting.sanitization` and
-is shared with configuration display.
+renderables, applies terminal styles, or turns report facts into scope and
+coverage prose. Generic terminal-safe text handling is in
+`reporting.sanitization` and is shared with configuration display.
 
 `cli` is the outer composition boundary. It owns argparse, standard-stream
 handling, effective configuration display, diagnostic output, process exit

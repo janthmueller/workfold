@@ -8,6 +8,7 @@ from workfold.configuration.effective import EffectiveSettings
 from workfold.configuration.layers import ResolvedSettings
 from workfold.configuration.options import ListSchedule
 from workfold.configuration.schema import DEFAULT_SETTINGS, SettingValue
+from workfold.configuration.styles import EventStyleRule
 from workfold.reporting.sanitization import display_width, pad_right, sanitize_terminal_text
 from workfold.reporting.terminal.layout import aligned_fact_lines, column_chunks
 
@@ -44,6 +45,16 @@ def format_resolved_settings(
 
     rows = _effective_rows(effective)
     lines.extend(("", *_setting_table(rows, width)))
+    lines.extend(("", "Event styles"))
+    if not resolution.style_layers:
+        lines.extend(f"  {chunk}" for chunk in column_chunks("built-in source and schedule visuals", width - 2))
+    else:
+        style_rows = [
+            (rule.selector, _format_style_rule(rule), layer.origin.label)
+            for layer in resolution.style_layers
+            for rule in layer.rules.rules
+        ]
+        lines.extend(_setting_table(style_rows, width, headings=("Selector", "Overrides", "Origin")))
     return "\n".join(lines) + "\n"
 
 
@@ -52,16 +63,21 @@ def _config_lines(facts: Sequence[tuple[str, object]], width: int) -> list[str]:
     return [f"  {line}" for line in aligned_fact_lines([(key, _safe(value)) for key, value in facts], available)]
 
 
-def _setting_table(rows: Sequence[tuple[str, str, str]], width: int) -> list[str]:
-    setting_max = max(display_width("Setting"), *(display_width(name) for name, _, _ in rows))
-    origin_max = max(display_width("Origin"), *(display_width(origin) for _, _, origin in rows))
+def _setting_table(
+    rows: Sequence[tuple[str, str, str]],
+    width: int,
+    *,
+    headings: tuple[str, str, str] = ("Setting", "Effective value", "Origin"),
+) -> list[str]:
+    setting_max = max(display_width(headings[0]), *(display_width(name) for name, _, _ in rows))
+    origin_max = max(display_width(headings[2]), *(display_width(origin) for _, _, origin in rows))
     setting_width = min(setting_max, max(7, width // 4))
     remaining = max(2, width - setting_width - 4)
     desired_origin_width = max(8, remaining // 3)
     origin_width = min(origin_max, desired_origin_width, remaining - 1)
     value_width = remaining - origin_width
 
-    table_rows = (("Setting", "Effective value", "Origin"), *rows)
+    table_rows = (headings, *rows)
     lines: list[str] = []
     for name, value, origin in table_rows:
         name_chunks = column_chunks(name, setting_width) or [""]
@@ -148,6 +164,20 @@ def _format_value(value: SettingValue) -> str:
     if value is None:
         return "—"
     return _safe(value)
+
+
+def _format_style_rule(rule: EventStyleRule) -> str:
+    values: list[str] = []
+    for key, attribute in (
+        ("symbol", "symbol"),
+        ("color", "color"),
+        ("outside-symbol", "outside_symbol"),
+        ("outside-color", "outside_color"),
+    ):
+        value = getattr(rule, attribute)
+        if value is not None:
+            values.append(f"{key}={_safe(value)}")
+    return " ".join(values)
 
 
 def _format_clock(minutes: int) -> str:

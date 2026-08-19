@@ -117,12 +117,13 @@ duration is embedded into the boundary between its neighboring clusters.
 
 The matrix is the first terminal output; no title or context line appears above
 it. A content-aware symbol key, left-aligned working-hours line, and three direct
-statistic rows follow. The key has no heading and names only identities, sources,
+statistic rows follow. The key has no heading and names only identities and event-style groups,
 outside-hours, and exact-count categories actually visible in the matrix. Each
-identity and source is mapped once. When color is available, one red `Outside
-working hours` cue explains every red marker without repeating a real identity;
-its conditional symbols use the same hollow shapes or lowercase forms as the
-matrix. Colorless output retains that structure without styling. There is no
+identity or equal visual group is mapped once. With built-in styles, one red
+`Outside working hours` cue explains every red marker without repeating a real
+identity; its conditional symbols use the same hollow shapes or lowercase forms
+as the matrix. Custom outside colors are shown on their corresponding symbols.
+Colorless output retains that structure without styling. There is no
 Summary heading: Events shows the total, Schedule splits it into inside/outside,
 and Calendar independently splits it into weekday/weekend.
 `--verbose` adds scope, period, the full successful coverage status,
@@ -147,7 +148,10 @@ Each ordinary symbol is one activity marker:
 - `○` and `□` are outside-hours Git/filesystem markers, shown in red.
 
 Circle/square identifies the source and filled/hollow identifies schedule state
-in every output mode. Color reinforces those meanings but is never required.
+with built-in source markers. Color reinforces those meanings but is never
+required. Persistent `styles` rules can replace the source-mode symbol/color
+pairs per exact or wildcard event selector; they do not alter evidence scope,
+counts, or coverage.
 When an unusually busy cell cannot fit individual symbols, exact tokens such as
 `●×12` replace that cell; Workfold never substitutes an approximate density
 band.

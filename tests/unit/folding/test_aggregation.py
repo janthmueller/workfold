@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 import workfold.folding.spill as spill_module
 from workfold.configuration import ClusterAnchor
+from workfold.domain.evidence import EvidenceKind, evidence_mask
 from workfold.domain.observations import (
     ActivityMarker,
     ClassifiedMarker,
@@ -32,6 +33,9 @@ from workfold.folding import (
 )
 from workfold.folding.markers import ChartMarker
 from workfold.folding.spill import ChartMarkerStore
+
+GIT_EVIDENCE_MASK = evidence_mask((EvidenceKind.GIT_COMMIT_AUTHOR,))
+FS_EVIDENCE_MASK = evidence_mask((EvidenceKind.FS_FILE_MODIFIED,))
 
 
 def _classified(
@@ -93,8 +97,8 @@ def test_sparse_aggregation_preserves_exact_events_and_summary_dimensions() -> N
     monday_cell = result.clusters[0].cell(Weekday.MONDAY)
     assert monday_cell is not None
     assert monday_cell.runs == (
-        MarkerRun(Source.GIT, True, 1),
-        MarkerRun(Source.FILESYSTEM, False, 1),
+        MarkerRun(Source.GIT, True, 1, GIT_EVIDENCE_MASK),
+        MarkerRun(Source.FILESYSTEM, False, 1, FS_EVIDENCE_MASK),
     )
     assert monday_cell.event_count == 2
     assert result.event_count == result.displayed_event_count == 3
@@ -131,7 +135,7 @@ def test_clusters_are_global_across_weekdays_and_half_open_at_the_anchor_window(
 
 
 def test_time_cluster_preserves_the_exported_observed_bounds_constructor() -> None:
-    cell = ClusterCell(Weekday.MONDAY, (MarkerRun(Source.GIT, True, 1),))
+    cell = ClusterCell(Weekday.MONDAY, (MarkerRun(Source.GIT, True, 1, GIT_EVIDENCE_MASK),))
 
     cluster = TimeCluster(100, 200, (cell,))
 
@@ -258,7 +262,7 @@ def test_visual_runs_are_exact_and_independent_of_input_order() -> None:
     forward_markers = forward.clusters[0].cell(Weekday.MONDAY)
     reverse_markers = reverse.clusters[0].cell(Weekday.MONDAY)
     assert forward_markers is not None and reverse_markers is not None
-    assert forward_markers.runs == reverse_markers.runs == (MarkerRun(Source.GIT, True, 3),)
+    assert forward_markers.runs == reverse_markers.runs == (MarkerRun(Source.GIT, True, 3, GIT_EVIDENCE_MASK),)
     assert exact_later.time_of_day_ns == earlier_week.time_of_day_ns + 1
 
 
@@ -272,8 +276,8 @@ def test_simultaneous_mixed_sources_have_a_stable_git_first_tie_break() -> None:
     cell = result.clusters[0].cell(Weekday.MONDAY)
     assert cell is not None
     assert cell.runs == (
-        MarkerRun(Source.GIT, True, 1),
-        MarkerRun(Source.FILESYSTEM, True, 1),
+        MarkerRun(Source.GIT, True, 1, GIT_EVIDENCE_MASK),
+        MarkerRun(Source.FILESYSTEM, True, 1, FS_EVIDENCE_MASK),
     )
 
 
@@ -286,7 +290,7 @@ def test_fall_back_duplicate_wall_times_remain_two_events_in_one_cell() -> None:
 
     cell = result.clusters[0].cell(Weekday.SUNDAY)
     assert cell is not None
-    assert cell.runs == (MarkerRun(Source.GIT, True, 2),)
+    assert cell.runs == (MarkerRun(Source.GIT, True, 2, GIT_EVIDENCE_MASK),)
     assert cell.event_count == 2
 
 
@@ -312,8 +316,8 @@ def test_explicit_display_crop_is_exact_and_does_not_change_full_summary() -> No
     assert result.hidden_after.count_for_source(Source.GIT) == 1
     assert (result.display_start_minute, result.display_end_minute) == (6 * 60, 22 * 60)
     assert [cell.runs for cluster in result.clusters for cell in cluster.cells] == [
-        (MarkerRun(Source.FILESYSTEM, True, 1),),
-        (MarkerRun(Source.GIT, True, 1),),
+        (MarkerRun(Source.FILESYSTEM, True, 1, FS_EVIDENCE_MASK),),
+        (MarkerRun(Source.GIT, True, 1, GIT_EVIDENCE_MASK),),
     ]
 
 
@@ -607,6 +611,7 @@ def test_marker_store_compacts_visually_equivalent_simultaneous_markers() -> Non
                     weekday=Weekday.MONDAY,
                     source=Source.FILESYSTEM,
                     within_schedule=True,
+                    evidence_mask=FS_EVIDENCE_MASK,
                 )
             )
 
@@ -616,6 +621,38 @@ def test_marker_store_compacts_visually_equivalent_simultaneous_markers() -> Non
         assert len(markers) == 1
         assert markers[0].marker_id == "first"
         assert markers[0].count == 2
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("spill_threshold", [1, 10])
+def test_marker_store_never_groups_distinct_event_style_signatures(spill_threshold: int) -> None:
+    instant = datetime_to_utc_ns(datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc))
+    store = ChartMarkerStore(spill_threshold=spill_threshold)
+    try:
+        for marker_id, kind in (
+            ("commit", EvidenceKind.GIT_COMMIT_AUTHOR),
+            ("tag", EvidenceKind.GIT_TAG_TAGGER),
+        ):
+            store.add(
+                ChartMarker(
+                    marker_id=marker_id,
+                    occurred_at_utc_ns=instant,
+                    time_of_day_ns=9 * 60 * NANOSECONDS_PER_MINUTE,
+                    weekday=Weekday.MONDAY,
+                    source=Source.GIT,
+                    within_schedule=True,
+                    evidence_mask=evidence_mask((kind,)),
+                )
+            )
+
+        markers = tuple(store.ordered())
+
+        assert [(marker.marker_id, marker.evidence_mask, marker.count) for marker in markers] == [
+            ("commit", evidence_mask((EvidenceKind.GIT_COMMIT_AUTHOR,)), 1),
+            ("tag", evidence_mask((EvidenceKind.GIT_TAG_TAGGER,)), 1),
+        ]
+        assert store.did_spill is (spill_threshold == 1)
     finally:
         store.close()
 
@@ -652,6 +689,7 @@ def test_marker_store_cleans_up_when_sqlite_initialization_fails(
                 weekday=Weekday.MONDAY,
                 source=Source.FILESYSTEM,
                 within_schedule=True,
+                evidence_mask=FS_EVIDENCE_MASK,
             )
         )
         with pytest.raises(spill_module.AggregationStorageError, match="SQLite setup failed"):
@@ -663,6 +701,7 @@ def test_marker_store_cleans_up_when_sqlite_initialization_fails(
                     weekday=Weekday.MONDAY,
                     source=Source.FILESYSTEM,
                     within_schedule=True,
+                    evidence_mask=FS_EVIDENCE_MASK,
                 )
             )
     finally:
@@ -692,7 +731,7 @@ def test_marker_store_compaction_reconciles_duplicates_across_spill_batches() ->
     assert actual.displayed_event_count == 3
     assert actual.clusters[0].cell(Weekday.MONDAY) == ClusterCell(
         Weekday.MONDAY,
-        (MarkerRun(Source.FILESYSTEM, True, 3),),
+        (MarkerRun(Source.FILESYSTEM, True, 3, FS_EVIDENCE_MASK),),
     )
 
 
@@ -709,6 +748,7 @@ def test_marker_store_preserves_individual_identity_marker_order() -> None:
                     weekday=Weekday.MONDAY,
                     source=Source.GIT,
                     within_schedule=True,
+                    evidence_mask=GIT_EVIDENCE_MASK,
                     identity_id=identity_id,
                 )
             )
@@ -737,6 +777,7 @@ def test_marker_store_keeps_an_early_collision_in_a_unique_workload_on_the_fast_
                     weekday=Weekday.MONDAY,
                     source=Source.FILESYSTEM,
                     within_schedule=True,
+                    evidence_mask=FS_EVIDENCE_MASK,
                 )
             )
 
@@ -763,6 +804,7 @@ def test_marker_store_does_not_group_after_one_duplicate_heavy_prefix() -> None:
                     weekday=Weekday.MONDAY,
                     source=Source.FILESYSTEM,
                     within_schedule=True,
+                    evidence_mask=FS_EVIDENCE_MASK,
                 )
             )
 
@@ -788,6 +830,7 @@ def test_marker_store_groups_after_repeated_duplicate_heavy_samples() -> None:
                     weekday=Weekday.MONDAY,
                     source=Source.FILESYSTEM,
                     within_schedule=True,
+                    evidence_mask=FS_EVIDENCE_MASK,
                 )
             )
 
@@ -818,6 +861,7 @@ def test_marker_store_rejects_two_local_duplicate_bursts_in_a_unique_workload() 
                     weekday=Weekday.MONDAY,
                     source=Source.FILESYSTEM,
                     within_schedule=True,
+                    evidence_mask=FS_EVIDENCE_MASK,
                 )
             )
 
@@ -843,6 +887,7 @@ def test_marker_store_demotes_when_global_compression_degrades_before_spill() ->
                     weekday=Weekday.MONDAY,
                     source=Source.FILESYSTEM,
                     within_schedule=True,
+                    evidence_mask=FS_EVIDENCE_MASK,
                 )
             )
         for index in range(1, 33_001):
@@ -854,6 +899,7 @@ def test_marker_store_demotes_when_global_compression_degrades_before_spill() ->
                     weekday=Weekday.MONDAY,
                     source=Source.FILESYSTEM,
                     within_schedule=True,
+                    evidence_mask=FS_EVIDENCE_MASK,
                 )
             )
 
@@ -1041,6 +1087,6 @@ def test_pathologically_alternating_cell_is_compacted_to_bounded_counts() -> Non
     assert cell.compacted
     assert cell.event_count == 300
     assert cell.runs == (
-        MarkerRun(Source.GIT, True, 150),
-        MarkerRun(Source.FILESYSTEM, True, 150),
+        MarkerRun(Source.GIT, True, 150, GIT_EVIDENCE_MASK),
+        MarkerRun(Source.FILESYSTEM, True, 150, FS_EVIDENCE_MASK),
     )

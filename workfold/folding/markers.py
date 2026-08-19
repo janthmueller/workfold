@@ -5,11 +5,12 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 
+from workfold.domain.evidence import evidence_mask_source
 from workfold.domain.observations import ClassifiedMarker, RecordKind, Source, Weekday
 from workfold.folding.models import NANOSECONDS_PER_SECOND, ClusterCell, MarkerRun
 
 RUN_COMPACTION_THRESHOLD = 256
-VISUAL_ORDER = (
+SOURCE_SCHEDULE_ORDER = (
     (Source.GIT, True),
     (Source.FILESYSTEM, True),
     (Source.GIT, False),
@@ -27,12 +28,15 @@ class ChartMarker:
     weekday: Weekday
     source: Source
     within_schedule: bool
+    evidence_mask: int
     identity_id: int | None = None
     count: int = 1
 
     def __post_init__(self) -> None:
         if self.count < 1:
             raise ValueError("a chart marker must represent at least one event")
+        if evidence_mask_source(self.evidence_mask) is not self.source:
+            raise ValueError("a chart marker's evidence must belong to its source")
         if self.identity_id is not None and self.identity_id < 0:
             raise ValueError("a chart marker identity ID must not be negative")
         if self.identity_id is not None and self.source is not Source.GIT:
@@ -44,38 +48,56 @@ class CellRunBuilder:
     """Retain short visual sequences and compact pathologically busy cells."""
 
     runs: list[MarkerRun] = field(default_factory=lambda: [])
-    counts: Counter[tuple[Source, bool, int | None]] | None = None
+    counts: Counter[tuple[Source, bool, int, int | None]] | None = None
 
     def add(self, marker: ChartMarker) -> None:
         if self.counts is not None:
-            self.counts[(marker.source, marker.within_schedule, marker.identity_id)] += marker.count
+            self.counts[(marker.source, marker.within_schedule, marker.evidence_mask, marker.identity_id)] += (
+                marker.count
+            )
             return
         if self.runs and same_visual(self.runs[-1], marker):
             previous = self.runs[-1]
             self.runs[-1] = MarkerRun(
-                previous.source,
-                previous.within_schedule,
-                previous.count + marker.count,
-                previous.identity_id,
+                source=previous.source,
+                within_schedule=previous.within_schedule,
+                count=previous.count + marker.count,
+                identity_id=previous.identity_id,
+                evidence_mask=previous.evidence_mask,
             )
         else:
-            self.runs.append(MarkerRun(marker.source, marker.within_schedule, marker.count, marker.identity_id))
+            self.runs.append(
+                MarkerRun(
+                    source=marker.source,
+                    within_schedule=marker.within_schedule,
+                    count=marker.count,
+                    identity_id=marker.identity_id,
+                    evidence_mask=marker.evidence_mask,
+                )
+            )
         if len(self.runs) > RUN_COMPACTION_THRESHOLD:
             self.counts = Counter()
             for run in self.runs:
-                self.counts[(run.source, run.within_schedule, run.identity_id)] += run.count
+                self.counts[(run.source, run.within_schedule, run.evidence_mask, run.identity_id)] += run.count
             self.runs.clear()
 
     def build(self, weekday: Weekday) -> ClusterCell:
         if self.counts is None:
             return ClusterCell(weekday, tuple(self.runs))
         runs = tuple(
-            MarkerRun(source, within_schedule, count, identity_id)
-            for (source, within_schedule, identity_id), count in sorted(
+            MarkerRun(
+                source=source,
+                within_schedule=within_schedule,
+                count=count,
+                identity_id=identity_id,
+                evidence_mask=evidence_mask,
+            )
+            for (source, within_schedule, evidence_mask, identity_id), count in sorted(
                 self.counts.items(),
                 key=lambda item: (
-                    VISUAL_ORDER.index((item[0][0], item[0][1])),
-                    -1 if item[0][2] is None else item[0][2],
+                    SOURCE_SCHEDULE_ORDER.index((item[0][0], item[0][1])),
+                    item[0][2],
+                    -1 if item[0][3] is None else item[0][3],
                 ),
             )
             if count
@@ -87,11 +109,12 @@ def same_visual(run: MarkerRun, marker: ChartMarker) -> bool:
     return (
         run.source is marker.source
         and run.within_schedule == marker.within_schedule
+        and run.evidence_mask == marker.evidence_mask
         and run.identity_id == marker.identity_id
     )
 
 
-def chart_marker_row(marker: ChartMarker) -> tuple[int, int, int, int, str, int, int, int, int]:
+def chart_marker_row(marker: ChartMarker) -> tuple[int, int, int, int, str, int, int, int, int, int]:
     seconds, remainder_ns = divmod(marker.occurred_at_utc_ns, NANOSECONDS_PER_SECOND)
     return (
         marker.time_of_day_ns,
@@ -101,12 +124,13 @@ def chart_marker_row(marker: ChartMarker) -> tuple[int, int, int, int, str, int,
         marker.marker_id,
         int(marker.weekday),
         int(marker.within_schedule),
+        marker.evidence_mask,
         -1 if marker.identity_id is None else marker.identity_id,
         marker.count,
     )
 
 
-def chart_marker_from_row(row: tuple[int, int, int, int, str, int, int, int, int]) -> ChartMarker:
+def chart_marker_from_row(row: tuple[int, int, int, int, str, int, int, int, int, int]) -> ChartMarker:
     (
         time_of_day_ns,
         seconds,
@@ -115,6 +139,7 @@ def chart_marker_from_row(row: tuple[int, int, int, int, str, int, int, int, int
         marker_id,
         weekday,
         within_schedule,
+        evidence_mask,
         identity_id,
         count,
     ) = row
@@ -125,6 +150,7 @@ def chart_marker_from_row(row: tuple[int, int, int, int, str, int, int, int, int
         weekday=Weekday(weekday),
         source=Source.GIT if source_rank == 0 else Source.FILESYSTEM,
         within_schedule=bool(within_schedule),
+        evidence_mask=evidence_mask,
         identity_id=None if identity_id == -1 else identity_id,
         count=count,
     )

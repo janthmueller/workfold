@@ -88,6 +88,12 @@ band-label = "start"
 show-empty-bands = true
 grid = "vertical"
 hide-empty-days = ["weekend"]
+
+[styles."git:tag:*"]
+symbol = "◆"
+color = "magenta"
+outside-symbol = "◇"
+outside-color = "bright_red"
 ```
 
 Python projects may use `[tool.workfold]` in `pyproject.toml` instead. Values
@@ -104,12 +110,15 @@ documents locations, discovery, merging, and every supported key.
 
 ## Reading the chart
 
-- Circles are Git events; squares are filesystem events.
-- Green/blue and filled markers are inside the schedule; red and hollow markers
-  are outside. Colorless output preserves the shape distinction.
+- By default, circles are Git events and squares are filesystem events.
+- Default green/blue filled markers are inside the schedule; red hollow markers
+  are outside. Colorless output preserves the shape distinction, and event
+  style rules may replace both symbol pairs and their colors.
 - One symbol is one event; busy cells use exact `×N` counts.
 - Empty time is compressed, and `⋮` reports a meaningful gap.
 - Identity-marker mode replaces Git circles with codes mapped in the key.
+- Event-selector style rules can replace source-mode symbols and colors while
+  keeping collection and coverage unchanged.
 
 The summary independently splits all events by schedule and by calendar day.
 Weekend events can therefore also be outside working hours.

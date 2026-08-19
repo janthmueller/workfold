@@ -91,7 +91,61 @@ The same settings fit inside a Python project file:
 timezone = "Europe/Berlin"
 hours = "Mo-Fr 08:00-16:30"
 grid = "vertical"
+
+[tool.workfold.styles."git:tag:*"]
+symbol = "◆"
+color = "magenta"
+outside-symbol = "◇"
+outside-color = "bright_red"
 ```
+
+### Event marker styles
+
+Persistent source-marker visuals use the same exact and wildcard selectors as
+`--events`. In a standalone file, put style rules beneath `styles`; in a
+Python project, put them beneath `tool.workfold.styles`:
+
+```toml title="workfold.toml"
+[styles."git:commit:*"]
+symbol = "C"
+color = "green"
+outside-symbol = "c"
+outside-color = "bright_red"
+
+[styles."git:tag:tagger"]
+symbol = "◆"
+color = "magenta"
+outside-symbol = "◇"
+
+[styles."fs:*:accessed"]
+symbol = "A"
+color = "cyan"
+```
+
+Each rule may set any combination of `symbol`, `color`, `outside-symbol`, and
+`outside-color`. Missing properties inherit the result from lower-precedence
+layers and ultimately the built-in source style. Symbols must be one printable
+terminal cell. Colors accept Rich terminal color names or `#RRGGBB`; terminal
+capabilities may reduce a true-color value, and `NO_COLOR` still removes all
+color without changing symbols.
+
+Global rules are applied before project rules, so a nearer project can override
+only one property. Within one file, broader wildcard rules apply before more
+specific rules. Equally specific overlapping rules may set different
+properties or the same value, but conflicting values are rejected as ambiguous
+rather than depending on TOML declaration order.
+
+A plotted marker can retain both author and committer roles when their instants
+are identical. A style selector applies to that marker only if it covers every
+retained role: `git:commit:*` covers the pair, while
+`git:commit:author` styles only an author-only marker. This keeps one logical
+event and never chooses an arbitrary role or draws a duplicate.
+
+Custom symbols and colors apply to source-marker mode. Git identity mode keeps
+its generated uppercase/lowercase identity codes and established green/red
+schedule encoding; filesystem markers still use configured event styles. The
+content-aware key groups equal visuals and names only style groups present in
+the matrix.
 
 Repeatable and multi-value CLI selections use TOML arrays. `time` also accepts
 one string for its common single-selector form:
@@ -149,7 +203,8 @@ workfold . --grid both --show-config  # includes this CLI override and its origi
 
 `--show-config` prints the loaded files followed by every effective value and
 whether it came from a built-in, global file, local file, exact config file, or
-the CLI. Derived values identify every controlling setting, while values reset
+the CLI. It also lists custom event-style rules in their applied global-to-local
+order. Derived values identify every controlling setting, while values reset
 by a higher-precedence source or profile identify that decision. The table
 wraps to the terminal width. `--help` remains stable and describes built-in
 defaults; it does not pretend configured values are universal defaults.
@@ -319,11 +374,12 @@ clustering, so hidden weekdays cannot anchor or stretch a visible time band.
 
 Events are ordered by local wall time, actual instant, canonical source (Git
 before filesystem for simultaneous ties), and stable marker ID; weekdays only
-group those events into columns. Each ordinary event is a symbol: Git uses
-circles, filesystem uses squares,
+group those events into columns. Each ordinary event is a symbol. By default,
+Git uses circles and filesystem uses squares;
 inside-hours markers are filled, and outside-hours markers are hollow. Color
 adds green for inside-hours Git, blue for inside-hours filesystem, and red for
-outside-hours events. If a cell is too busy for individual symbols at the
+outside-hours events. Event-style configuration can replace those source-mode
+symbols and colors for exact or wildcard event kinds. If a cell is too busy for individual symbols at the
 available width, exact tokens such as `●×12 ■×4 ○×2` replace only that
 cell; they are counts, not density estimates. Empty bands are omitted by
 default. With event anchoring, a gap cue measures consecutive observed extents;
@@ -379,13 +435,17 @@ different identities, it receives `◆` (then `◆2`, `◆3`, if several such
 groups are visible) rather than arbitrarily choosing one person. Filesystem
 markers remain squares. In every color mode, uppercase/lowercase identity codes
 mean inside/outside; composite codes use `◆`/`◇` for the same distinction.
+Configured Git event visuals do not replace these generated identity codes or
+their schedule colors. Configured filesystem visuals remain active because
+filesystem markers do not have an identity-code mode.
 
 Terminal output starts directly with the matrix; there is no title or context
 subtitle above it. A content-aware symbol key follows without a heading. It
 names only categories actually visible after display cropping and explains
 `×N` only when exact-count tokens occur. One conditional outside-hours cue uses
-the hollow shapes or lowercase classes actually present; the entire cue is red
-when color is available. It never repeats one contributor's marker as a global
+the configured outside symbols or lowercase classes actually present. The cue
+uses one shared color when those visuals agree and styles individual symbols
+when configured outside colors differ. It never repeats one contributor's marker as a global
 example. The configured schedule follows on an independent left-aligned
 `Working hours:` line. Three statistic rows then appear without a Summary
 heading: Events is the common total, Schedule is its

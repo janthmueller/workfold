@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NoReturn
 
@@ -16,6 +16,7 @@ from workfold.configuration.options import RunOptions, UnresolvedOptions, UsageE
 from workfold.configuration.parsing import parse_event_selectors
 from workfold.configuration.resolution import resolve_options
 from workfold.configuration.schema import DEFAULT_SETTINGS, SETTING_BY_KEY, SettingValue
+from workfold.configuration.styles import compile_event_style_sheet
 from workfold.domain.observations import RecordKind, Source
 
 
@@ -65,6 +66,8 @@ def materialize_settings(resolution: ResolvedSettings, paths: Sequence[Path]) ->
         _suppress_shadowed_settings(values, origins, explicit_keys, resolution)
         unresolved = _unresolved_options(values, explicit_keys, paths)
         options = resolve_options(unresolved)
+        event_styles = compile_event_style_sheet(tuple(layer.rules for layer in resolution.style_layers))
+        options = replace(options, terminal=replace(options.terminal, event_styles=event_styles))
     except UsageError as error:
         _raise_with_setting_origins(error, resolution)
     return EffectiveSettings(

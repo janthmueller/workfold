@@ -4,7 +4,15 @@ from typing import cast
 
 import pytest
 from workfold.application.collection_plan import CollectionPlan
-from workfold.domain.evidence import EvidenceKind, EvidenceSelection, expand_evidence_selectors
+from workfold.domain.evidence import (
+    EvidenceKind,
+    EvidenceSelection,
+    evidence_kinds_from_mask,
+    evidence_mask,
+    evidence_mask_source,
+    expand_evidence_selectors,
+    supported_marker_evidence_masks,
+)
 from workfold.domain.observations import EntryType, RecordKind, Source, TimestampKind
 
 
@@ -12,6 +20,28 @@ def test_evidence_catalog_round_trips_normalized_dimensions() -> None:
     for kind in EvidenceKind:
         assert EvidenceKind.from_dimensions(kind.record_kind, kind.timestamp_kind, kind.entry_type) is kind
         assert kind.timestamp_kind.source is kind.source
+
+
+def test_compact_marker_signatures_round_trip_every_supported_shape() -> None:
+    supported = supported_marker_evidence_masks()
+
+    assert len(supported) == len(EvidenceKind) + 2
+    assert all(evidence_mask(evidence_kinds_from_mask(mask)) == mask for mask in supported)
+    assert evidence_kinds_from_mask(supported[-2]) == (
+        EvidenceKind.GIT_COMMIT_AUTHOR,
+        EvidenceKind.GIT_COMMIT_COMMITTER,
+    )
+
+
+def test_evidence_masks_reject_empty_unknown_and_mixed_source_signatures() -> None:
+    with pytest.raises(ValueError, match="cannot be empty"):
+        evidence_mask(())
+    with pytest.raises(TypeError, match="integer"):
+        evidence_kinds_from_mask(True)
+    with pytest.raises(ValueError, match="supported event kinds"):
+        evidence_kinds_from_mask(1 << len(EvidenceKind))
+    with pytest.raises(ValueError, match="one source"):
+        evidence_mask_source(evidence_mask((EvidenceKind.GIT_COMMIT_AUTHOR, EvidenceKind.FS_FILE_MODIFIED)))
 
 
 def test_selector_expansion_is_case_insensitive_deduplicated_and_canonical() -> None:

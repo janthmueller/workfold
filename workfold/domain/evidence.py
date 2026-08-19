@@ -7,8 +7,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from difflib import get_close_matches
 from enum import Enum
+from functools import cache
 
-from workfold.domain.observations import EntryType, RecordKind, Source, TimestampKind
+from workfold.domain.observations import ActivityMarker, EntryType, RecordKind, Source, TimestampKind
 
 
 class EvidenceKind(str, Enum):
@@ -132,6 +133,9 @@ _DIMENSION_EVIDENCE = {
     for evidence, (_source, record_kind, timestamp_kind, entry_type) in _EVIDENCE_DIMENSIONS.items()
 }
 
+_EVIDENCE_BITS = {kind: 1 << index for index, kind in enumerate(EvidenceKind)}
+_ALL_EVIDENCE_BITS = sum(_EVIDENCE_BITS.values())
+
 _SELECTOR_PATTERN = re.compile(r"[a-z0-9-]+(?::(?:[a-z0-9-]+|\*))*|\*")
 
 
@@ -210,6 +214,78 @@ def expand_evidence_selectors(selectors: tuple[str, ...], *, option: str) -> Evi
     return EvidenceSelection.create(selected)
 
 
+def evidence_mask(kinds: Iterable[EvidenceKind]) -> int:
+    """Return the compact, lossless bit mask for one or more evidence kinds."""
+
+    values = tuple(kinds)
+    _require_evidence_kinds(values)
+    if not values:
+        raise ValueError("an evidence mask cannot be empty")
+    return _cached_evidence_mask(values)
+
+
+@cache
+def _cached_evidence_mask(kinds: tuple[EvidenceKind, ...]) -> int:
+    mask = 0
+    for kind in kinds:
+        mask |= _EVIDENCE_BITS[kind]
+    return mask
+
+
+def evidence_kinds_from_mask(mask: object) -> tuple[EvidenceKind, ...]:
+    """Decode a validated evidence bit mask in canonical catalog order."""
+
+    if not isinstance(mask, int) or isinstance(mask, bool):
+        raise TypeError("an evidence mask must be an integer")
+    if mask <= 0 or mask & ~_ALL_EVIDENCE_BITS:
+        raise ValueError("an evidence mask must contain only supported event kinds")
+    return _cached_evidence_kinds(mask)
+
+
+@cache
+def _cached_evidence_kinds(mask: int) -> tuple[EvidenceKind, ...]:
+    return tuple(kind for kind in EvidenceKind if mask & _EVIDENCE_BITS[kind])
+
+
+def marker_evidence_mask(marker: ActivityMarker) -> int:
+    """Project every retained timestamp role of one plotted marker."""
+
+    return evidence_mask(
+        EvidenceKind.from_dimensions(
+            observation.origin.record_kind,
+            observation.kind,
+            observation.origin.entry_type,
+        )
+        for observation in marker.observations
+    )
+
+
+def evidence_mask_source(mask: int) -> Source:
+    """Return the single collector source represented by a marker mask."""
+
+    evidence_kinds_from_mask(mask)
+    return _cached_evidence_mask_source(mask)
+
+
+@cache
+def _cached_evidence_mask_source(mask: int) -> Source:
+    sources = {kind.source for kind in _cached_evidence_kinds(mask)}
+    if len(sources) != 1:
+        raise ValueError("a marker evidence mask must belong to one source")
+    return next(iter(sources))
+
+
+def supported_marker_evidence_masks() -> tuple[int, ...]:
+    """Return every evidence signature the current coalescing model can plot."""
+
+    singletons = tuple(evidence_mask((kind,)) for kind in EvidenceKind)
+    coalesced = (
+        evidence_mask((EvidenceKind.GIT_COMMIT_AUTHOR, EvidenceKind.GIT_COMMIT_COMMITTER)),
+        evidence_mask((EvidenceKind.GIT_FILE_CHANGE_AUTHOR, EvidenceKind.GIT_FILE_CHANGE_COMMITTER)),
+    )
+    return (*singletons, *coalesced)
+
+
 def _selector_suggestion(selector: str) -> str | None:
     if selector.startswith("git:committer"):
         return "git:*:committer"
@@ -230,4 +306,13 @@ def _require_evidence_kinds(values: tuple[object, ...]) -> None:
         raise TypeError("evidence selections accept only EvidenceKind values")
 
 
-__all__ = ["EvidenceKind", "EvidenceSelection", "expand_evidence_selectors"]
+__all__ = [
+    "EvidenceKind",
+    "EvidenceSelection",
+    "evidence_kinds_from_mask",
+    "evidence_mask",
+    "evidence_mask_source",
+    "expand_evidence_selectors",
+    "marker_evidence_mask",
+    "supported_marker_evidence_masks",
+]

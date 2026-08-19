@@ -9,7 +9,7 @@ from typing import cast, overload
 
 from workfold.domain.observations import Weekday
 from workfold.folding.bands import ClusterAnchor
-from workfold.folding.markers import VISUAL_ORDER, CellRunBuilder, ChartMarker
+from workfold.folding.markers import SOURCE_SCHEDULE_ORDER, CellRunBuilder, ChartMarker
 from workfold.folding.models import (
     NANOSECONDS_PER_DAY,
     NANOSECONDS_PER_MINUTE,
@@ -33,6 +33,7 @@ class CompactClusterSequence(Sequence[TimeCluster]):
         "_observed_starts",
         "_run_codes",
         "_run_counts",
+        "_run_evidence_masks",
         "_run_identity_ids",
         "_frozen",
     )
@@ -48,6 +49,7 @@ class CompactClusterSequence(Sequence[TimeCluster]):
         self._cell_run_offsets = array("Q", (0,))
         self._run_codes = array("B")
         self._run_counts = array("Q")
+        self._run_evidence_masks = array("Q")
         self._run_identity_ids = array("I")
         self._frozen = False
 
@@ -73,8 +75,9 @@ class CompactClusterSequence(Sequence[TimeCluster]):
             self._cell_compacted.append(int(cell.compacted))
             largest_cell = max(largest_cell, cell.event_count)
             for run in cell.runs:
-                self._run_codes.append(VISUAL_ORDER.index((run.source, run.within_schedule)))
+                self._run_codes.append(SOURCE_SCHEDULE_ORDER.index((run.source, run.within_schedule)))
                 self._run_counts.append(run.count)
+                self._run_evidence_masks.append(run.evidence_mask)
                 self._run_identity_ids.append(0 if run.identity_id is None else run.identity_id + 1)
             self._cell_run_offsets.append(len(self._run_codes))
         self._cluster_cell_offsets.append(len(self._cell_weekdays))
@@ -106,9 +109,12 @@ class CompactClusterSequence(Sequence[TimeCluster]):
         for cell_index in range(cell_start, cell_end):
             runs = tuple(
                 MarkerRun(
-                    *VISUAL_ORDER[self._run_codes[run_index]],
+                    *SOURCE_SCHEDULE_ORDER[self._run_codes[run_index]],
                     self._run_counts[run_index],
-                    None if self._run_identity_ids[run_index] == 0 else self._run_identity_ids[run_index] - 1,
+                    identity_id=(
+                        None if self._run_identity_ids[run_index] == 0 else self._run_identity_ids[run_index] - 1
+                    ),
+                    evidence_mask=self._run_evidence_masks[run_index],
                 )
                 for run_index in range(
                     self._cell_run_offsets[cell_index],
@@ -148,6 +154,7 @@ class CompactClusterSequence(Sequence[TimeCluster]):
                     (self._cell_run_offsets, other._cell_run_offsets),
                     (self._run_codes, other._run_codes),
                     (self._run_counts, other._run_counts),
+                    (self._run_evidence_masks, other._run_evidence_masks),
                     (self._run_identity_ids, other._run_identity_ids),
                 )
             )

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from workfold.configuration.options import BandLabel, GridStyle, MarkerStyle
+from workfold.configuration.styles import DEFAULT_EVENT_STYLE_SHEET, EventStyleSheet
 
 MIN_TERMINAL_WIDTH = 40
 
@@ -23,6 +24,7 @@ class TerminalOptions:
     band_label: BandLabel = BandLabel.RANGE
     show_empty_bands: bool = False
     coverage: bool = False
+    event_styles: EventStyleSheet = DEFAULT_EVENT_STYLE_SHEET
 
     def __post_init__(self) -> None:
         if self.width < MIN_TERMINAL_WIDTH:
@@ -33,6 +35,7 @@ class TerminalOptions:
         _require_option_type(self.show_event_list, bool, "show_event_list")
         _require_option_type(self.show_empty_bands, bool, "show_empty_bands")
         _require_option_type(self.coverage, bool, "coverage")
+        _require_option_type(self.event_styles, EventStyleSheet, "event_styles")
 
 
 def _require_option_type(value: object, expected: type[object], name: str) -> None:

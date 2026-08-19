@@ -33,7 +33,7 @@ GROUPING_SAMPLE_SIZE = 256
 GROUPING_SAMPLE_INTERVAL = 8_192
 GROUPING_REQUIRED_SAMPLES = 2
 
-MarkerGroupKey: TypeAlias = tuple[int, int, int, int, int, bool, int, str]
+MarkerGroupKey: TypeAlias = tuple[int, int, int, int, int, bool, int, int, str]
 
 
 class AggregationStorageError(RuntimeError):
@@ -122,6 +122,7 @@ class ChartMarkerStore:
                     source_rank,
                     weekday,
                     within_schedule,
+                    evidence_mask,
                     identity_id,
                     group_id,
                     marker_id
@@ -134,11 +135,11 @@ class ChartMarkerStore:
                 """
                 SELECT time_of_day_ns, occurred_at_seconds,
                        occurred_at_remainder_ns, source_rank, min(marker_id),
-                       weekday, within_schedule, identity_id, sum(event_count)
+                       weekday, within_schedule, evidence_mask, identity_id, sum(event_count)
                   FROM chart_markers
                  GROUP BY time_of_day_ns, occurred_at_seconds,
                           occurred_at_remainder_ns, source_rank, weekday,
-                          within_schedule, identity_id, group_id
+                          within_schedule, evidence_mask, identity_id, group_id
                  ORDER BY time_of_day_ns, occurred_at_seconds,
                           occurred_at_remainder_ns, source_rank, min(marker_id)
                 """
@@ -194,6 +195,7 @@ class ChartMarkerStore:
                     marker_id TEXT NOT NULL,
                     weekday INTEGER NOT NULL,
                     within_schedule INTEGER NOT NULL,
+                    evidence_mask INTEGER NOT NULL,
                     identity_id INTEGER NOT NULL,
                     group_id TEXT NOT NULL,
                     event_count INTEGER NOT NULL CHECK (event_count > 0)
@@ -223,14 +225,14 @@ class ChartMarkerStore:
             return
         try:
             connection.executemany(
-                "INSERT INTO chart_markers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO chart_markers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._buffer_rows(),
             )
         except (OSError, sqlite3.Error) as error:
             raise _storage_error("write temporary aggregation storage", error) from error
         self._buffer.clear()
 
-    def _buffer_rows(self) -> Iterable[tuple[int, int, int, int, str, int, int, int, str, int]]:
+    def _buffer_rows(self) -> Iterable[tuple[int, int, int, int, str, int, int, int, int, str, int]]:
         if self._grouped:
             grouped = cast(dict[MarkerGroupKey, tuple[ChartMarker, int]], self._buffer)
             return (
@@ -320,6 +322,7 @@ def _marker_group_key(marker: ChartMarker) -> MarkerGroupKey:
         0 if marker.source is Source.GIT else 1,
         int(marker.weekday),
         marker.within_schedule,
+        marker.evidence_mask,
         -1 if marker.identity_id is None else marker.identity_id,
         _marker_group_id(marker),
     )

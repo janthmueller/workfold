@@ -80,6 +80,7 @@ def test_terminal_preferences_are_grouped_away_from_collection_options() -> None
         "coverage",
         "strict",
         "verbose",
+        "event_styles",
     )
     assert unresolved_names[-6:] == (
         "strict",

@@ -19,7 +19,7 @@ from workfold.configuration import (
     global_config_path,
 )
 from workfold.configuration.schema import DEFAULT_SETTINGS, SETTING_BY_DESTINATION, SETTING_BY_KEY, SETTING_SPECS
-from workfold.domain.evidence import EvidenceKind, EvidenceSelection
+from workfold.domain.evidence import EvidenceKind, EvidenceSelection, evidence_mask
 from workfold.reporting.sanitization import display_width
 
 
@@ -113,6 +113,58 @@ def test_global_local_and_cli_layers_merge_by_key(tmp_path: Path) -> None:
     assert invocation.settings.origins["grid"].kind is OriginKind.CLI
 
 
+def test_global_and_local_event_styles_merge_by_property_and_selector(tmp_path: Path) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    global_path = global_config_path(environ=environ, platform_name="linux")
+    _write(
+        global_path,
+        '[styles."git:*"]\ncolor = "yellow"\noutside-color = "magenta"\n',
+    )
+    local_path = _write(
+        project / "workfold.toml",
+        '[styles."git:tag:*"]\nsymbol = "◆"\noutside-symbol = "◇"\n',
+    )
+
+    invocation = parse_invocation(
+        [str(project)],
+        cwd=tmp_path,
+        environ=environ,
+        platform_name="linux",
+    )
+
+    tag = invocation.options.terminal.event_styles.style_for(evidence_mask((EvidenceKind.GIT_TAG_TAGGER,)))
+    commit = invocation.options.terminal.event_styles.style_for(evidence_mask((EvidenceKind.GIT_COMMIT_AUTHOR,)))
+    assert (tag.inside.symbol, tag.inside.color) == ("◆", "yellow")
+    assert (tag.outside.symbol, tag.outside.color) == ("◇", "magenta")
+    assert (commit.inside.symbol, commit.inside.color) == ("●", "yellow")
+    assert [layer.origin.path for layer in invocation.settings.style_layers] == [
+        global_path.resolve(),
+        local_path.resolve(),
+    ]
+
+
+def test_pyproject_accepts_nested_event_style_tables(tmp_path: Path) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    _write(
+        project / "pyproject.toml",
+        '[tool.workfold.styles."fs:file:modified"]\nsymbol = "M"\ncolor = "cyan"\n',
+    )
+
+    invocation = parse_invocation(
+        [str(project)],
+        cwd=tmp_path,
+        environ=environ,
+        platform_name="linux",
+    )
+
+    visual = invocation.options.terminal.event_styles.style_for(evidence_mask((EvidenceKind.FS_FILE_MODIFIED,)))
+    assert (visual.inside.symbol, visual.inside.color) == ("M", "cyan")
+
+
 def test_nearest_pyproject_table_is_a_local_config(tmp_path: Path) -> None:
     environ = _environment(tmp_path)
     project = tmp_path / "project"
@@ -172,6 +224,24 @@ def test_unrelated_malformed_pyproject_does_not_become_a_config(tmp_path: Path) 
 
     assert invocation.options.timezone is not None and invocation.options.timezone.key == "UTC"
     assert invocation.settings.local_config == parent_config.resolve()
+
+
+def test_malformed_pyproject_event_style_table_is_an_actionable_error(tmp_path: Path) -> None:
+    environ = _environment(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    _write(
+        project / "pyproject.toml",
+        '[tool.workfold.styles."git:*"]\nsymbol = [\n',
+    )
+
+    with pytest.raises(UsageError, match="invalid TOML"):
+        parse_invocation(
+            [str(project)],
+            cwd=tmp_path,
+            environ=environ,
+            platform_name="linux",
+        )
 
 
 def test_standalone_config_wins_over_pyproject_in_the_same_directory(tmp_path: Path) -> None:
@@ -675,6 +745,8 @@ def test_cli_can_negate_booleans_and_disable_a_configured_event_list(tmp_path: P
         ('cluster-anchor = "noon"\n', "must be one of"),
         ('band-label = "compact"\n', "must be one of"),
         ('show-empty-bands = "yes"\n', "must be true or false"),
+        ('[styles."git:*"]\nsymbol = "XX"\n', "one printable terminal cell"),
+        ('[styles."git:*"]\ncolor = "not-a-color"\n', "valid terminal color"),
         ("hours = [\n", "invalid TOML"),
     ],
 )
@@ -794,7 +866,10 @@ def test_show_config_prints_values_origins_and_files_without_collecting(
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    local = _write(project / "workfold.toml", 'timezone = "UTC"\ngrid = "vertical"\n')
+    local = _write(
+        project / "workfold.toml",
+        'timezone = "UTC"\ngrid = "vertical"\n\n[styles."git:tag:*"]\nsymbol = "◆"\ncolor = "magenta"\n',
+    )
     monkeypatch.chdir(project)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
@@ -825,6 +900,8 @@ def test_show_config_prints_values_origins_and_files_without_collecting(
     assert re.search(r"^cluster-anchor\s+midnight\s+CLI$", output, re.MULTILINE)
     assert re.search(r"^band-label\s+start\s+CLI$", output, re.MULTILINE)
     assert re.search(r"^show-empty-bands\s+true\s+CLI$", output, re.MULTILINE)
+    assert "Event styles" in output
+    assert re.search(r"^git:tag:\*\s+symbol=◆ color=magenta\s+local$", output, re.MULTILINE)
     assert "Time band" not in output
 
 
@@ -837,7 +914,8 @@ def test_normal_cli_run_applies_project_defaults(
     project.mkdir()
     _write(
         project / "workfold.toml",
-        'events = ["fs:file:modified"]\ntime = "all"\ntimezone = "UTC"\nno-color = true\n',
+        'events = ["fs:file:modified"]\ntime = "all"\ntimezone = "UTC"\nno-color = true\n\n'
+        '[styles."fs:file:modified"]\nsymbol = "M"\ncolor = "cyan"\n',
     )
     monkeypatch.chdir(project)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -847,7 +925,7 @@ def test_normal_cli_run_applies_project_defaults(
     assert main([]) == 0
 
     output = capsys.readouterr().out
-    assert "Filesystem" in output
+    assert "M Filesystem files" in output
     assert "Events" in output
 
 

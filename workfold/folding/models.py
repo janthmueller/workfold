@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TypeVar
 
+from workfold.domain.evidence import evidence_mask_source
 from workfold.domain.identity import MarkerIdentity
 from workfold.domain.observations import ClassifiedMarker, RecordKind, Source, Weekday
 from workfold.folding.bands import (
@@ -31,11 +32,14 @@ class MarkerRun:
     source: Source
     within_schedule: bool
     count: int
+    evidence_mask: int
     identity_id: int | None = None
 
     def __post_init__(self) -> None:
         if self.count < 1:
             raise ValueError("a marker run must contain at least one event")
+        if evidence_mask_source(self.evidence_mask) is not self.source:
+            raise ValueError("a marker run's evidence must belong to its source")
         if self.identity_id is not None and self.identity_id < 0:
             raise ValueError("a marker identity ID must not be negative")
         if self.identity_id is not None and self.source is not Source.GIT:
@@ -56,6 +60,7 @@ class ClusterCell:
         if any(
             first.source is second.source
             and first.within_schedule == second.within_schedule
+            and first.evidence_mask == second.evidence_mask
             and first.identity_id == second.identity_id
             for first, second in zip(self.runs, self.runs[1:], strict=False)
         ):
@@ -156,7 +161,7 @@ class Aggregation:
     weekend_count: int
     source_counts: tuple[tuple[Source, int], ...]
     record_kind_counts: tuple[tuple[RecordKind, int], ...]
-    visual_counts: tuple[tuple[tuple[Source, bool], int], ...]
+    visual_counts: tuple[tuple[tuple[int, bool], int], ...]
     identities: tuple[MarkerIdentity, ...]
     identity_counts: tuple[tuple[int, int], ...]
     max_cell_event_count: int
@@ -201,7 +206,7 @@ class Aggregation:
         if identity_ids != tuple(range(len(self.identities))):
             raise ValueError("identity counts must cover the ordered identity registry exactly")
         if self.identities and sum(count for _identity_id, count in self.identity_counts) != sum(
-            count for (source, _within_schedule), count in self.visual_counts if source is Source.GIT
+            count for (mask, _within_schedule), count in self.visual_counts if evidence_mask_source(mask) is Source.GIT
         ):
             raise ValueError("identity counts must reconcile with displayed Git markers")
 
@@ -236,13 +241,10 @@ class Aggregation:
     def count_for_visual(self, source: Source, within_schedule: bool) -> int:
         """Return the number of markers sharing one rendered visual role."""
 
-        return next(
-            (
-                count
-                for (candidate_source, candidate_schedule), count in self.visual_counts
-                if candidate_source is source and candidate_schedule == within_schedule
-            ),
-            0,
+        return sum(
+            count
+            for (mask, candidate_schedule), count in self.visual_counts
+            if evidence_mask_source(mask) is source and candidate_schedule == within_schedule
         )
 
     def count_for_identity(self, identity_id: int) -> int:

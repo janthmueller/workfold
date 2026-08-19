@@ -323,14 +323,20 @@ def _compact_cell_lines(
     options: TerminalOptions,
     identity_symbols: tuple[IdentitySymbol, ...],
 ) -> tuple[Text, ...]:
-    counts: Counter[tuple[Source, bool, int | None]] = Counter()
+    counts: Counter[tuple[Source, bool, int, int | None]] = Counter()
     for run in runs:
-        counts[(run.source, run.within_schedule, run.identity_id)] += run.count
+        counts[(run.source, run.within_schedule, run.evidence_mask, run.identity_id)] += run.count
     lines: list[Text] = []
     current = Text()
-    for source, within_schedule, identity_id in sorted(counts, key=visual_sort_key):
-        count = counts[(source, within_schedule, identity_id)]
-        run = MarkerRun(source, within_schedule, count, identity_id)
+    for source, within_schedule, evidence_mask, identity_id in sorted(counts, key=visual_sort_key):
+        count = counts[(source, within_schedule, evidence_mask, identity_id)]
+        run = MarkerRun(
+            source,
+            within_schedule,
+            count,
+            identity_id=identity_id,
+            evidence_mask=evidence_mask,
+        )
         symbol, style = marker_visual(run, options, identity_symbols)
         token = Text(f"{symbol}×{count:,}", style=style)
         if token.cell_len > width:

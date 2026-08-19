@@ -8,6 +8,7 @@ from enum import Enum
 from pathlib import Path
 
 from workfold.configuration.schema import SettingValue
+from workfold.configuration.styles import EventStyleRules
 
 
 class OriginKind(str, Enum):
@@ -39,6 +40,15 @@ class ConfigLayer:
 
     path: Path
     values: Mapping[str, SettingValue]
+    styles: EventStyleRules = EventStyleRules()
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedStyleLayer:
+    """One ordered custom style layer with its configuration provenance."""
+
+    origin: SettingOrigin
+    rules: EventStyleRules
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +62,7 @@ class ResolvedSettings:
     local_config: Path | None
     explicit_config: Path | None
     config_disabled: bool
+    style_layers: tuple[ResolvedStyleLayer, ...] = ()
 
 
 BUILTIN_ORIGIN = SettingOrigin(OriginKind.BUILTIN, 0)
@@ -61,6 +72,7 @@ __all__ = [
     "ConfigLayer",
     "OriginKind",
     "ResolvedSettings",
+    "ResolvedStyleLayer",
     "SettingOrigin",
     "SettingValue",
 ]

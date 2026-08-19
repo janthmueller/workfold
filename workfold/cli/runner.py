@@ -73,6 +73,7 @@ def run(
         marker_style=preferences.marker_style,
         grid_style=preferences.grid_style,
         coverage=preferences.coverage,
+        event_styles=preferences.event_styles,
     )
     write_terminal(execution.report, output, options=presentation)
     if collection.diagnostics:

@@ -84,6 +84,11 @@ narrow for that representation, a cell switches to exact per-symbol `×N` counts
 very busy cells may make that same exact-count switch before rendering so their
 visual sequence cannot grow memory without bound. The underlying event,
 source/schedule, and coverage totals are unchanged.
+Event-style rules operate only on that retained plotted-marker projection.
+They cannot change discovery, timestamp selection, coalescing, scope, totals,
+or coverage. When equal Git author and committer instants coalesce, a style
+selector must cover both retained roles to apply; Workfold never discards a role
+or expands the pair into visually inflated duplicate markers for styling.
 Chart band labels use minute-level `HH:MM` clock values. Event anchoring starts
 a half-open band at the earliest unassigned event; midnight anchoring uses fixed
 half-open local-clock intervals from `00:00` and clips a nondividing final band

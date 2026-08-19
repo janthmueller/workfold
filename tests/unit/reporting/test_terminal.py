@@ -4,7 +4,14 @@ import re
 from datetime import timedelta
 
 import pytest
-from workfold.configuration import BandLabel, ClusterAnchor, GridStyle, MarkerStyle
+from workfold.configuration import (
+    BandLabel,
+    ClusterAnchor,
+    GridStyle,
+    MarkerStyle,
+    compile_event_style_sheet,
+    parse_event_style_rules,
+)
 from workfold.domain.observations import Source, Weekday
 from workfold.reporting.sanitization import display_width
 from workfold.reporting.terminal import TerminalOptions, render_terminal
@@ -66,6 +73,158 @@ def test_colored_renderer_colors_sources_and_outside_events_individually() -> No
     assert "\x1b[1;91m○\x1b[0m" in rendered
     assert rendered.count("○") == 2
     assert "\x1b[1;91m○ Outside working hours\x1b[0m" in rendered
+
+
+def test_source_markers_and_legend_use_configured_event_symbols_and_colors() -> None:
+    report = _report(
+        _classified("inside", 8, 0, source=Source.GIT, within_schedule=True),
+        _classified("outside", 18, 0, source=Source.GIT, within_schedule=False),
+        _classified("filesystem", 9, 0, source=Source.FILESYSTEM, within_schedule=True),
+    )
+    styles = compile_event_style_sheet(
+        (
+            parse_event_style_rules(
+                {
+                    "git:commit:author": {
+                        "symbol": "C",
+                        "color": "magenta",
+                        "outside-symbol": "c",
+                        "outside-color": "yellow",
+                    },
+                    "fs:file:modified": {"symbol": "M", "color": "cyan"},
+                },
+                location="styles",
+            ),
+        )
+    )
+
+    plain = render_terminal(report, options=TerminalOptions(width=80, color=False, event_styles=styles))
+    colored = render_terminal(report, options=TerminalOptions(width=80, color=True, event_styles=styles))
+
+    assert re.search(r"^08:00\s+C", plain, re.MULTILINE)
+    assert re.search(r"^09:00\s+M", plain, re.MULTILINE)
+    assert re.search(r"^18:00\s+c", plain, re.MULTILINE)
+    assert "C Git commits · M Filesystem files · c Outside working hours" in plain
+    assert "\x1b[35mC\x1b[0m" in colored
+    assert "\x1b[36mM\x1b[0m" in colored
+    assert "\x1b[1;33mc\x1b[0m" in colored
+
+
+def test_legend_shows_each_visible_custom_outside_color() -> None:
+    report = _report(
+        _classified("git-outside", 18, 0, source=Source.GIT, within_schedule=False),
+        _classified("filesystem-outside", 18, 1, source=Source.FILESYSTEM, within_schedule=False),
+    )
+    styles = compile_event_style_sheet(
+        (
+            parse_event_style_rules(
+                {
+                    "git:commit:author": {"outside-symbol": "g", "outside-color": "yellow"},
+                    "fs:file:modified": {"outside-symbol": "f", "outside-color": "magenta"},
+                },
+                location="styles",
+            ),
+        )
+    )
+
+    plain = render_terminal(report, options=TerminalOptions(width=80, color=False, event_styles=styles))
+    colored = render_terminal(report, options=TerminalOptions(width=80, color=True, event_styles=styles))
+
+    assert "● Git commits" in plain
+    assert "g/f Outside working hours" in plain
+    assert "\x1b[1;33mg\x1b[0m" in colored
+    assert "\x1b[1;35mf\x1b[0m" in colored
+
+
+def test_invisible_custom_style_does_not_make_the_visible_default_legend_more_specific() -> None:
+    report = _report(_classified("commit", 9, 0, source=Source.GIT, within_schedule=True))
+    styles = compile_event_style_sheet(
+        (
+            parse_event_style_rules(
+                {"git:tag:*": {"symbol": "T"}},
+                location="styles",
+            ),
+        )
+    )
+
+    rendered = render_terminal(report, options=TerminalOptions(width=80, color=False, event_styles=styles))
+
+    assert "● Git" in rendered
+    assert "Git commits" not in rendered and "Git tags" not in rendered
+
+
+def test_coalesced_git_marker_uses_a_style_selector_covering_both_roles() -> None:
+    report = _report(_coalesced_git("same", 9, within_schedule=True))
+    styles = compile_event_style_sheet(
+        (
+            parse_event_style_rules(
+                {
+                    "git:commit:author": {"symbol": "A"},
+                    "git:commit:*": {"symbol": "C"},
+                },
+                location="styles",
+            ),
+        )
+    )
+
+    rendered = render_terminal(report, options=TerminalOptions(width=80, color=False, event_styles=styles))
+
+    assert "C" in rendered
+    assert "A" not in rendered
+
+
+def test_identity_markers_keep_identity_symbols_and_schedule_colors_with_custom_event_styles() -> None:
+    report = _report(
+        _classified(
+            "inside",
+            8,
+            0,
+            source=Source.GIT,
+            within_schedule=True,
+            actor_name="Ada",
+            actor_email="ada@example.test",
+        ),
+        _classified(
+            "outside",
+            18,
+            0,
+            source=Source.GIT,
+            within_schedule=False,
+            actor_name="Ada",
+            actor_email="ada@example.test",
+        ),
+        retain_git_identities=True,
+    )
+    styles = compile_event_style_sheet(
+        (
+            parse_event_style_rules(
+                {
+                    "git:*": {
+                        "symbol": "X",
+                        "color": "magenta",
+                        "outside-symbol": "x",
+                        "outside-color": "yellow",
+                    }
+                },
+                location="styles",
+            ),
+        )
+    )
+
+    rendered = render_terminal(
+        report,
+        options=TerminalOptions(
+            width=80,
+            color=True,
+            marker_style=MarkerStyle.IDENTITY,
+            event_styles=styles,
+        ),
+    )
+
+    assert "\x1b[35mX\x1b[0m" not in rendered
+    assert "\x1b[1;33mx\x1b[0m" not in rendered
+    assert "\x1b[32mA\x1b[0m" in rendered
+    assert "\x1b[1;91ma\x1b[0m" in rendered
 
 
 def test_identity_markers_are_collision_free_mapped_and_schedule_aware_without_color() -> None:

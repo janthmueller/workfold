@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 import workfold.folding.spill as spill_module
+from workfold.domain.evidence import EvidenceKind, evidence_mask
 from workfold.domain.observations import Source, Weekday
 from workfold.folding.markers import ChartMarker
 from workfold.folding.models import NANOSECONDS_PER_SECOND
@@ -20,6 +21,7 @@ def _marker(marker_id: str, second: int) -> ChartMarker:
         weekday=Weekday.MONDAY,
         source=Source.GIT,
         within_schedule=True,
+        evidence_mask=evidence_mask((EvidenceKind.GIT_COMMIT_AUTHOR,)),
     )
 
 

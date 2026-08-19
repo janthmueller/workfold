@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable
 from contextlib import suppress
 from datetime import timedelta
 
+from workfold.domain.evidence import evidence_mask_source, marker_evidence_mask
 from workfold.domain.identity import MarkerIdentity, marker_identity, marker_identity_sort_key
 from workfold.domain.observations import ClassifiedMarker, RecordKind, Source, Weekday
 from workfold.folding.bands import (
@@ -17,7 +18,7 @@ from workfold.folding.bands import (
     validate_cluster_window_alignment,
 )
 from workfold.folding.layout import cluster_ordered_markers
-from workfold.folding.markers import VISUAL_ORDER, ChartMarker, marker_dimensions
+from workfold.folding.markers import SOURCE_SCHEDULE_ORDER, ChartMarker, marker_dimensions
 from workfold.folding.models import (
     MINUTES_PER_DAY,
     NANOSECONDS_PER_DAY,
@@ -81,7 +82,7 @@ class AggregationBuilder:
         self._finished = False
         self._source_counts: Counter[Source] = Counter()
         self._record_kind_counts: Counter[RecordKind] = Counter()
-        self._visual_counts: Counter[tuple[Weekday, Source, bool]] = Counter()
+        self._visual_counts: Counter[tuple[Weekday, int, bool]] = Counter()
         self._displayed_weekday_counts: Counter[Weekday] = Counter()
         self._identity_ids: dict[MarkerIdentity, int] = {}
         self._identities: list[MarkerIdentity] = []
@@ -106,6 +107,7 @@ class AggregationBuilder:
             raise RuntimeError("an aggregation builder cannot be reused after build")
         _validate_classified_marker(classified)
         source, record_kind = marker_dimensions(classified)
+        evidence_mask = marker_evidence_mask(classified.marker)
         time_of_day_ns = classified.time_of_day_ns
 
         self._event_count += 1
@@ -135,7 +137,7 @@ class AggregationBuilder:
         if display_start_ns is None or display_end_ns is None or display_start_ns <= time_of_day_ns < display_end_ns:
             self._displayed_weekday_counts[weekday] += 1
             if weekday not in self._hide_days:
-                self._visual_counts[(weekday, source, classified.within_schedule)] += 1
+                self._visual_counts[(weekday, evidence_mask, classified.within_schedule)] += 1
                 identity_id = self._register_identity(classified) if self._retain_git_identities else None
                 if identity_id is not None:
                     self._identity_counts[(identity_id, weekday)] += 1
@@ -147,6 +149,7 @@ class AggregationBuilder:
                         weekday=classified.weekday,
                         source=source,
                         within_schedule=classified.within_schedule,
+                        evidence_mask=evidence_mask,
                         identity_id=identity_id,
                     )
                 )
@@ -203,10 +206,10 @@ class AggregationBuilder:
             materialization_threshold=self._cluster_materialization_threshold,
         )
         retained_listed = tuple(item[2] for item in sorted(self._listed_heap, key=lambda item: (item[0], item[1])))
-        visible_visual_counts: Counter[tuple[Source, bool]] = Counter()
-        for (weekday, source, within_schedule), count in self._visual_counts.items():
+        visible_visual_counts: Counter[tuple[int, bool]] = Counter()
+        for (weekday, evidence_mask, within_schedule), count in self._visual_counts.items():
             if weekday in visible_weekday_set:
-                visible_visual_counts[(source, within_schedule)] += count
+                visible_visual_counts[(evidence_mask, within_schedule)] += count
         visible_identity_counts: Counter[int] = Counter()
         if not self._identity_overflow:
             for (identity_id, weekday), count in self._identity_counts.items():
@@ -234,7 +237,14 @@ class AggregationBuilder:
             source_counts=freeze_counter(self._source_counts),
             record_kind_counts=freeze_counter(self._record_kind_counts),
             visual_counts=tuple(
-                (visual, visible_visual_counts[visual]) for visual in VISUAL_ORDER if visible_visual_counts[visual]
+                (visual, count)
+                for visual, count in sorted(
+                    visible_visual_counts.items(),
+                    key=lambda item: (
+                        SOURCE_SCHEDULE_ORDER.index((evidence_mask_source(item[0][0]), item[0][1])),
+                        item[0][0],
+                    ),
+                )
             ),
             identities=identities,
             identity_counts=tuple(sorted(visible_identity_counts.items())),
@@ -375,6 +385,7 @@ def _remap_marker_identity(marker: ChartMarker, remap: dict[int, int]) -> ChartM
         weekday=marker.weekday,
         source=marker.source,
         within_schedule=marker.within_schedule,
+        evidence_mask=marker.evidence_mask,
         identity_id=remap[identity_id],
         count=marker.count,
     )
@@ -390,6 +401,7 @@ def _without_marker_identity(marker: ChartMarker) -> ChartMarker:
         weekday=marker.weekday,
         source=marker.source,
         within_schedule=marker.within_schedule,
+        evidence_mask=marker.evidence_mask,
         count=marker.count,
     )
 

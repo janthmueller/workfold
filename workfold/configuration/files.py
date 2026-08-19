@@ -14,13 +14,18 @@ from workfold.configuration.layers import (
     ConfigLayer,
     OriginKind,
     ResolvedSettings,
+    ResolvedStyleLayer,
     SettingOrigin,
 )
 from workfold.configuration.options import UsageError
 from workfold.configuration.schema import DEFAULT_SETTINGS, SETTING_BY_KEY, ConfigShape, SettingValue
+from workfold.configuration.styles import EventStyleRules, parse_event_style_rules
 
-_CONFIG_KEYS = frozenset(SETTING_BY_KEY)
-_PYPROJECT_TABLE_HEADER = re.compile(rb"(?m)^[ \t]*\[[ \t]*tool[ \t]*\.[ \t]*workfold[ \t]*\]")
+_CONFIG_KEYS = frozenset((*SETTING_BY_KEY, "styles"))
+_PYPROJECT_TABLE_HEADER = re.compile(
+    rb"""(?m)^[ \t]*\[[ \t]*(?:tool|"tool"|'tool')[ \t]*\.[ \t]*"""
+    rb"""(?:workfold|"workfold"|'workfold')[ \t]*(?:\.|\])"""
+)
 
 
 def resolve_settings(
@@ -41,6 +46,7 @@ def resolve_settings(
     global_layer: ConfigLayer | None = None
     local_layer: ConfigLayer | None = None
     explicit_layer: ConfigLayer | None = None
+    style_layers: list[ResolvedStyleLayer] = []
 
     if explicit_config is not None and no_config:
         raise UsageError("--config and --no-config are mutually exclusive")
@@ -49,7 +55,9 @@ def resolve_settings(
         config_path = _absolute_path(explicit_config, cwd)
         explicit_layer = _load_config(config_path, required=True)
         assert explicit_layer is not None
-        _apply_layer(values, origins, explicit_layer, SettingOrigin(OriginKind.EXPLICIT, 2, config_path))
+        explicit_origin = SettingOrigin(OriginKind.EXPLICIT, 2, config_path)
+        _apply_layer(values, origins, explicit_layer, explicit_origin)
+        _append_style_layer(style_layers, explicit_layer, explicit_origin)
     elif not no_config:
         global_candidate = global_config_path(environ=environ, platform_name=platform_name)
         global_layer = _load_config(global_candidate, required=False)
@@ -60,12 +68,22 @@ def resolve_settings(
                 global_layer,
                 SettingOrigin(OriginKind.GLOBAL, 1, global_layer.path),
             )
+            _append_style_layer(
+                style_layers,
+                global_layer,
+                SettingOrigin(OriginKind.GLOBAL, 1, global_layer.path),
+            )
 
         local_layer = _resolve_local_layer(paths, cwd=cwd)
         if local_layer is not None:
             _apply_layer(
                 values,
                 origins,
+                local_layer,
+                SettingOrigin(OriginKind.LOCAL, 2, local_layer.path),
+            )
+            _append_style_layer(
+                style_layers,
                 local_layer,
                 SettingOrigin(OriginKind.LOCAL, 2, local_layer.path),
             )
@@ -83,6 +101,7 @@ def resolve_settings(
         local_config=local_layer.path if local_layer is not None else None,
         explicit_config=explicit_layer.path if explicit_layer is not None else None,
         config_disabled=no_config,
+        style_layers=tuple(style_layers),
     )
 
 
@@ -211,11 +230,12 @@ def _load_config(
             return None
     else:
         table = cast(dict[str, object], document)
-    return ConfigLayer(path.resolve(), _validate_table(table, path=path))
+    values, styles = _validate_table(table, path=path)
+    return ConfigLayer(path.resolve(), values, styles)
 
 
 def _contains_workfold_table(content: bytes) -> bool:
-    """Conservatively recognize a literal table in malformed TOML."""
+    """Conservatively recognize Workfold or one of its subtables in malformed TOML."""
 
     return _PYPROJECT_TABLE_HEADER.search(content) is not None
 
@@ -235,7 +255,11 @@ def _pyproject_table(document: Mapping[str, object], *, path: Path) -> dict[str,
     return cast(dict[str, object], workfold)
 
 
-def _validate_table(table: Mapping[str, object], *, path: Path) -> dict[str, SettingValue]:
+def _validate_table(
+    table: Mapping[str, object],
+    *,
+    path: Path,
+) -> tuple[dict[str, SettingValue], EventStyleRules]:
     unknown = sorted(set(table) - _CONFIG_KEYS)
     if unknown:
         label = ", ".join(repr(key) for key in unknown)
@@ -244,7 +268,16 @@ def _validate_table(table: Mapping[str, object], *, path: Path) -> dict[str, Set
     if "events" in table and preset_keys:
         conflicts = ", ".join(preset_keys)
         raise UsageError(f"{path}: events cannot be combined with {conflicts} in the same precedence layer")
-    return {key: _validate_value(key, value, path=path) for key, value in table.items()}
+    settings = {key: _validate_value(key, value, path=path) for key, value in table.items() if key != "styles"}
+    try:
+        styles = (
+            parse_event_style_rules(table["styles"], location=f"{path}: styles")
+            if "styles" in table
+            else EventStyleRules()
+        )
+    except ValueError as error:
+        raise UsageError(str(error)) from error
+    return settings, styles
 
 
 def _validate_value(key: str, value: object, *, path: Path) -> SettingValue:
@@ -304,6 +337,15 @@ def _apply_layer(
     for key, value in layer.values.items():
         values[key] = value
         origins[key] = origin
+
+
+def _append_style_layer(
+    layers: list[ResolvedStyleLayer],
+    layer: ConfigLayer,
+    origin: SettingOrigin,
+) -> None:
+    if layer.styles.rules:
+        layers.append(ResolvedStyleLayer(origin, layer.styles))
 
 
 def _home_directory(environ: Mapping[str, str], *, platform_name: str) -> Path:

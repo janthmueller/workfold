@@ -8,6 +8,7 @@ from enum import Enum
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from workfold.configuration.styles import DEFAULT_EVENT_STYLE_SHEET, EventStyleSheet
 from workfold.domain.evidence import EvidenceKind, EvidenceSelection
 from workfold.domain.observations import Source, Weekday
 from workfold.domain.schedule import Schedule
@@ -158,6 +159,7 @@ class TerminalPreferences:
     coverage: bool
     strict: bool
     verbose: bool
+    event_styles: EventStyleSheet = DEFAULT_EVENT_STYLE_SHEET
 
 
 @dataclass(frozen=True, slots=True)
