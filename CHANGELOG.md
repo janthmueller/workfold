@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.1.0-alpha.6 (2026-08-19)
+
+### Bug Fixes
+
+- Stabilize cross-platform CI expectations
+  ([`3dca57f`](https://github.com/janthmueller/workfold/commit/3dca57f690fe4bfb51abc7db631393a55d6bf264))
+
+### Features
+
+- Add configurable event styles
+  ([`5d3297c`](https://github.com/janthmueller/workfold/commit/5d3297c7cbd8fea7f0a6b9a31c3517b020d720ea))
+
+
 ## v0.1.0-alpha.5 (2026-08-16)
 
 ### Bug Fixes
