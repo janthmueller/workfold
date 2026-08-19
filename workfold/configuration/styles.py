@@ -192,11 +192,11 @@ def _style_string(value: object, *, location: str) -> str:
 
 
 def _validate_symbol(value: str, *, location: str) -> None:
+    if any(unicodedata.category(character).startswith("C") for character in value):
+        raise ValueError(f"{location} must not contain terminal control characters")
     spans, width = split_graphemes(value)
     if len(spans) != 1 or width != 1:
         raise ValueError(f"{location} must be exactly one printable terminal cell")
-    if any(unicodedata.category(character).startswith("C") for character in value):
-        raise ValueError(f"{location} must not contain terminal control characters")
 
 
 def _validate_color(value: str, *, location: str) -> None:

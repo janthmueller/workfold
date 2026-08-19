@@ -47,8 +47,12 @@ def _assert_summary_count(rendered: str, label: str, count: int) -> None:
 
 
 def _assert_lean_success_output(rendered: str) -> None:
-    assert not re.search(r"^(?:Scope|Period|Breakdown)\b", rendered, re.MULTILINE)
+    _assert_no_verbose_output(rendered)
     assert not re.search(r"^Coverage\s{2,}", rendered, re.MULTILINE)
+
+
+def _assert_no_verbose_output(rendered: str) -> None:
+    assert not re.search(r"^(?:Scope|Period|Breakdown)\b", rendered, re.MULTILINE)
     assert "complete for all discoverable timestamps" not in rendered
 
 
@@ -413,7 +417,7 @@ def test_combined_profile_preserves_git_and_filesystem_as_distinct_evidence(tmp_
     assert "Filesystem events:" not in rendered
 
 
-def test_full_profile_keeps_default_report_lean_and_coverage_opt_in(tmp_path: Path) -> None:
+def test_full_profile_keeps_expanded_report_details_opt_in(tmp_path: Path) -> None:
     repo = GitRepo.create(tmp_path / "repo")
     instant = datetime(2026, 8, 3, 10, 5, tzinfo=UTC)
     repo.commit(
@@ -430,7 +434,7 @@ def test_full_profile_keeps_default_report_lean_and_coverage_opt_in(tmp_path: Pa
 
     rendered = output.getvalue()
     assert re.search(r"^Events\s+\d+$", rendered, re.MULTILINE)
-    _assert_lean_success_output(rendered)
+    _assert_no_verbose_output(rendered)
     assert "Mo-Fr 08:00-16:30" in rendered
     assert "Coverage details:" not in rendered
     assert "Details\n" not in rendered

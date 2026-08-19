@@ -70,7 +70,7 @@ def test_coalesced_roles_require_one_rule_covering_the_complete_marker() -> None
     [
         ({"git:*": {}}, "at least one"),
         ({"git:*": {"symbol": "XX"}}, "one printable terminal cell"),
-        ({"git:*": {"symbol": "\n"}}, "one printable terminal cell"),
+        ({"git:*": {"symbol": "\n"}}, "terminal control characters"),
         ({"git:*": {"color": "not-a-color"}}, "valid terminal color"),
         ({"git:*": {"weight": "bold"}}, "unknown property"),
         ({"remote:*": {"symbol": "R"}}, "unknown style selector"),
