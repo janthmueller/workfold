@@ -1,45 +1,56 @@
-# Workfold
-[![PyPI Latest Release](https://img.shields.io/pypi/v/workfold.svg)](https://pypi.org/project/workfold/)
-[![Pepy Total Downloads](https://img.shields.io/pepy/dt/workfold)](https://pepy.tech/project/workfold)
-[![GitHub License](https://img.shields.io/github/license/janthmueller/workfold)](https://github.com/janthmueller/workfold/blob/main/LICENSE)
+# Wuf
 
-Workfold folds local Git and filesystem timestamps onto one representative
+[![PyPI Latest Release](https://img.shields.io/pypi/v/wuf.svg)](https://pypi.org/project/wuf/)
+[![Pepy Total Downloads](https://img.shields.io/pepy/dt/wuf)](https://pepy.tech/project/wuf)
+[![GitHub License](https://img.shields.io/github/license/janthmueller/wuf)](https://github.com/janthmueller/wuf/blob/main/LICENSE)
+
+**WUF Unifies Footprints.**
+
+Wuf folds local Git and filesystem timestamp footprints onto one representative
 Monday-to-Sunday week. It highlights activity outside your intended working
 hours without pretending that timestamped events are hours worked.
 
-![Workfold terminal output](https://raw.githubusercontent.com/janthmueller/workfold/main/docs/public/workfold-output.svg)
+![Wuf terminal output](https://raw.githubusercontent.com/janthmueller/wuf/main/docs/public/wuf-output.svg)
 
-Workfold is local, private by design, terminal-only, and currently alpha.
+Wuf is local, private by design, terminal-only, and currently alpha.
 
 ## Install
 
 ```bash
-pip install workfold
-workfold --help
+pip install wuf
+wuf --help
 ```
 
-For an isolated installation, use `uv tool install workfold` or
-`pipx install workfold`. Standalone binaries are available from
-[GitHub releases](https://github.com/janthmueller/workfold/releases).
+For an isolated installation, use `uv tool install wuf` or
+`pipx install wuf`. Standalone binaries are available from
+[GitHub releases](https://github.com/janthmueller/wuf/releases).
+
+### Renamed from Workfold
+
+Wuf is the continuation of Workfold under its shorter, permanent name. Wuf
+packages also install `workfold` as a compatibility command, but `wuf` is the
+canonical command going forward. Existing configuration should be renamed from
+`workfold.toml` to `wuf.toml`, and `[tool.workfold]` tables should become
+`[tool.wuf]`.
 
 ## Quick start
 
-Run `workfold` inside a Git repository to see the current ISO week:
+Run `wuf` inside a Git repository to see the current ISO week:
 
 ```bash
-workfold
+wuf
 ```
 
 The selectors you will use most are:
 
 ```bash
-workfold . -t 2w3d                    # rolling elapsed window
-workfold . -t 2026-W31                # one ISO week
-workfold . -p fs                      # current filesystem metadata
-workfold . -p both                    # low-noise Git + filesystem view
-workfold . -p portable -t all         # evidence stored in Git objects
-workfold . -p full -t all --git-commits-from all-refs --include-ignored
-workfold . -e git:tag:tagger fs:file:modified
+wuf . -t 2w3d                    # rolling elapsed window
+wuf . -t 2026-W31                # one ISO week
+wuf . -p fs                      # current filesystem metadata
+wuf . -p both                    # low-noise Git + filesystem view
+wuf . -p portable -t all         # evidence stored in Git objects
+wuf . -p full -t all --git-commits-from all-refs --include-ignored
+wuf . -e git:tag:tagger fs:file:modified
 ```
 
 They control separate parts of the request:
@@ -69,19 +80,19 @@ before either space-separated selector, or after an option-terminating `--`.
 Schedules support daily intervals, breaks, overnight shifts, and `all`:
 
 ```bash
-workfold . --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
-workfold . --hours 'Mo-Fr 22:00-06:00'
-workfold . --hours all
+wuf . --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
+wuf . --hours 'Mo-Fr 22:00-06:00'
+wuf . --hours all
 ```
 
-See the [usage guide](https://janthmueller.github.io/workfold/guides/usage/)
+See the [usage guide](https://janthmueller.github.io/wuf/guides/usage/)
 for clustering, fixed bands, identity markers, day hiding, grids, exact event
 selection, configuration, and every CLI option.
 
 ## Configuration
 
 Put personal defaults in the platform configuration directory, or project
-defaults in `workfold.toml`:
+defaults in `wuf.toml`:
 
 ```toml
 timezone = "Europe/Berlin"
@@ -101,16 +112,16 @@ outside-symbol = "◇"
 outside-color = "bright_red"
 ```
 
-Python projects may use `[tool.workfold]` in `pyproject.toml` instead. Values
+Python projects may use `[tool.wuf]` in `pyproject.toml` instead. Values
 resolve as built-in → global → nearest project → CLI. Inspect the result and
 each value's origin without collecting timestamps:
 
 ```bash
-workfold . --show-config
+wuf . --show-config
 ```
 
 Use `--config FILE` for one exact file or `--no-config` for built-ins plus CLI
-only. The [usage guide](https://janthmueller.github.io/workfold/guides/usage/#configuration-files)
+only. The [usage guide](https://janthmueller.github.io/wuf/guides/usage/#configuration-files)
 documents locations, discovery, merging, and every supported key.
 
 ## Reading the chart
@@ -133,19 +144,19 @@ Weekend events can therefore also be outside working hours.
 ## Accuracy and privacy
 
 - Events are discrete timestamp observations, not work sessions or duration.
-- Collection is local: Workfold does not contact a Git host or telemetry service.
+- Collection is local: Wuf does not contact a Git host or telemetry service.
 - Git history can be rewritten; reflogs can expire; filesystem metadata is a
   mutable snapshot and birth time depends on platform and filesystem support.
 - Coverage reports unavailable, unsupported, and unreadable evidence that can
   prevent a complete answer. Known timestamps outside the requested time or
   identity scope are not counted as coverage outcomes.
 
-See the [documentation](https://janthmueller.github.io/workfold/) for every CLI
+See the [documentation](https://janthmueller.github.io/wuf/) for every CLI
 option, collector semantics, coverage guarantees, and platform notes.
 
 ## Development
 
-The Python package lives directly in `workfold/`; there is no `src/` wrapper.
+The Python package lives directly in `wuf/`; there is no `src/` wrapper.
 
 ```bash
 nix develop
@@ -158,6 +169,6 @@ uv run --locked pyright
 
 Use `nix run .#docs-dev` for the documentation site and
 `nix run .#docs-check` to validate it. The
-[architecture guide](https://janthmueller.github.io/workfold/reference/architecture/)
+[architecture guide](https://janthmueller.github.io/wuf/reference/architecture/)
 documents the package boundaries, dependency rules, data pipeline, and test
 layout.

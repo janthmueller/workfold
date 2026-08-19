@@ -1,8 +1,8 @@
 from pathlib import Path
 
 import pytest
-from workfold.domain.observations import RecordKind, RecordOrigin, Source, TimestampKind, TimestampObservation
-from workfold.folding.pipeline import ObservationBatch
+from wuf.domain.observations import RecordKind, RecordOrigin, Source, TimestampKind, TimestampObservation
+from wuf.folding.pipeline import ObservationBatch
 
 
 def _observation(kind: TimestampKind, *, record_id: str = "commit-1") -> TimestampObservation:

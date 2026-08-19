@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "workfold"
+version = "0.1.0-alpha.6"
+description = "Compatibility installer for Wuf, formerly known as Workfold."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = ["wuf==0.1.0a6"]
+classifiers = [
+    "Development Status :: 7 - Inactive",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+]
+
+[[project.authors]]
+name = "Jan T. Müller"
+email = "mail@jantmueller.com"
+
+[project.urls]
+homepage = "https://github.com/janthmueller/wuf"
+documentation = "https://janthmueller.github.io/wuf/"
+source = "https://github.com/janthmueller/wuf"
+tracker = "https://github.com/janthmueller/wuf/issues"
+
+[tool.setuptools]
+packages = []

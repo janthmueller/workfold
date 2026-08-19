@@ -2,14 +2,14 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from workfold.application.report import DiagnosticFacts
-from workfold.configuration import BandLabel, ClusterAnchor, CountGrouping, EventListSelection, GridStyle, MarkerStyle
-from workfold.domain.coverage import Capability, CapabilityKind, CapabilityReason, CapabilityStatus
-from workfold.domain.evidence import EvidenceKind
-from workfold.domain.observations import Source
-from workfold.reporting.sanitization import display_width, sanitize_terminal_text, truncate_end, truncate_middle
-from workfold.reporting.terminal import TerminalOptions, render_terminal, terminal_color_enabled
-from workfold.reporting.terminal.coverage_status import COMPLETE_COVERAGE_STATUS
+from wuf.application.report import DiagnosticFacts
+from wuf.configuration import BandLabel, ClusterAnchor, CountGrouping, EventListSelection, GridStyle, MarkerStyle
+from wuf.domain.coverage import Capability, CapabilityKind, CapabilityReason, CapabilityStatus
+from wuf.domain.evidence import EvidenceKind
+from wuf.domain.observations import Source
+from wuf.reporting.sanitization import display_width, sanitize_terminal_text, truncate_end, truncate_middle
+from wuf.reporting.terminal import TerminalOptions, render_terminal, terminal_color_enabled
+from wuf.reporting.terminal.coverage_status import COMPLETE_COVERAGE_STATUS
 
 from support.reports import classified_marker, coalesced_git_marker, report
 

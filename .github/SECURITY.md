@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Workfold is alpha software. Security fixes target the newest published release
+Wuf is alpha software. Security fixes target the newest published release
 and the current `main` branch; older alpha releases are not maintained
 independently.
 

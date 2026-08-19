@@ -3,19 +3,19 @@ import starlight from '@astrojs/starlight';
 
 export default defineConfig({
   site: 'https://janthmueller.github.io',
-  base: '/workfold',
+  base: '/wuf',
   scopedStyleStrategy: 'where',
   integrations: [
     starlight({
-      title: 'workfold',
-      description: 'Documentation for the workfold Python CLI.',
+      title: 'Wuf',
+      description: 'Documentation for the Wuf Python CLI.',
       disable404Route: true,
       customCss: ['./src/styles/custom.css'],
       social: [
         {
           icon: 'github',
           label: 'GitHub',
-          href: 'https://github.com/janthmueller/workfold',
+          href: 'https://github.com/janthmueller/wuf',
         },
       ],
       sidebar: [
@@ -23,7 +23,7 @@ export default defineConfig({
           label: 'Start Here',
           items: [
             { label: 'Overview', link: '/' },
-            { label: 'Using Workfold', link: '/guides/usage/' },
+            { label: 'Using Wuf', link: '/guides/usage/' },
             { label: 'Development', link: '/guides/development/' },
             { label: 'Architecture', link: '/reference/architecture/' },
           ],

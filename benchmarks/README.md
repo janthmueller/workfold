@@ -1,7 +1,7 @@
-# Workfold benchmarks
+# Wuf benchmarks
 
 These are opt-in end-to-end measurements, not ordinary correctness tests. A
-benchmark starts a complete Workfold process and includes configuration,
+benchmark starts a complete Wuf process and includes configuration,
 collection, folding, terminal rendering, and the local Git subprocesses it
 uses.
 
@@ -25,8 +25,8 @@ The built-in suites are:
 - `complete`: every named case.
 
 Repeat `--case NAME` to select an exact subset instead. Run `--help` for the
-case names and process controls. `--workfold-executable PATH` measures an
-installed script or release binary instead of `python -m workfold` from the
+case names and process controls. `--wuf-executable PATH` measures an
+installed script or release binary instead of `python -m wuf` from the
 checkout.
 
 ## Measurements
@@ -35,20 +35,20 @@ Each recorded sample includes:
 
 - monotonic wall time;
 - child user and system CPU time where the platform exposes it;
-- the Workfold process's kernel-recorded high-water RSS on Linux;
-- sampled peak RSS summed across the Workfold process tree on Linux;
+- the Wuf process's kernel-recorded high-water RSS on Linux;
+- sampled peak RSS summed across the Wuf process tree on Linux;
 - minor and major page faults and voluntary/involuntary context switches;
 - exit status, timeout state, stdout/stderr sizes, and a stdout digest;
 - the exact `Events` summary count.
 
 Every workload adds `--strict`, so incomplete collection fails instead of
 becoming a successful timing sample. The runner also rejects missing summaries,
-changed event counts, or changed stdout across repetitions. Raw JSON records Python, Workfold, Git,
-OS, CPU, load, total memory, Workfold checkout revision/dirty state, target
+changed event counts, or changed stdout across repetitions. Raw JSON records Python, Wuf, Git,
+OS, CPU, load, total memory, Wuf checkout revision/dirty state, target
 HEAD/tracked dirty state, all-ref commit count, Git object-store statistics,
 commands, cache policy, and every individual sample.
 
-Main RSS is the stable high-water mark for Workfold itself. Summed tree RSS also
+Main RSS is the stable high-water mark for Wuf itself. Summed tree RSS also
 captures concurrently running Git children, but it is not proportional-set
 size: shared pages can appear in more than one process. Sampling defaults to 5
 ms, so extremely short-lived child peaks can be missed. Non-Linux hosts report
@@ -79,8 +79,8 @@ To keep a fixture for profiling tools, create one explicitly in a new or empty
 directory:
 
 ```bash
-uv run python -m benchmarks.fixture /tmp/workfold-medium --size medium
-uv run python -m benchmarks.run /tmp/workfold-medium --suite complete
+uv run python -m benchmarks.fixture /tmp/wuf-medium --size medium
+uv run python -m benchmarks.run /tmp/wuf-medium --suite complete
 ```
 
 Fixture generation refuses non-empty targets and never deletes an existing

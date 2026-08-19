@@ -32,7 +32,7 @@ class ResourceSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class Sample:
-    """One complete end-to-end Workfold process measurement."""
+    """One complete end-to-end Wuf process measurement."""
 
     wall_seconds: float
     cpu_user_seconds: float | None

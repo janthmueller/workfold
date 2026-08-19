@@ -4,14 +4,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from workfold.application.collection import Collection
-from workfold.application.report import Report, build_report, matches_event_list
-from workfold.application.report_context import build_report_context
-from workfold.application.resolution import ResolvedTimeSelection
-from workfold.cli import parse_options
-from workfold.configuration import ClusterAnchor, EventListSelection, ListSchedule
-from workfold.domain.coverage import CoverageLedger
-from workfold.domain.observations import (
+from wuf.application.collection import Collection
+from wuf.application.report import Report, build_report, matches_event_list
+from wuf.application.report_context import build_report_context
+from wuf.application.resolution import ResolvedTimeSelection
+from wuf.cli import parse_options
+from wuf.configuration import ClusterAnchor, EventListSelection, ListSchedule
+from wuf.domain.coverage import CoverageLedger
+from wuf.domain.observations import (
     ActivityMarker,
     ClassifiedMarker,
     EntryType,
@@ -22,8 +22,8 @@ from workfold.domain.observations import (
     TimestampObservation,
     Weekday,
 )
-from workfold.domain.time import all_time_range
-from workfold.folding import aggregate_markers
+from wuf.domain.time import all_time_range
+from wuf.folding import aggregate_markers
 
 
 def classified_marker(

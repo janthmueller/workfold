@@ -1528,7 +1528,7 @@ wheels = [
 ]
 
 [[package]]
-name = "workfold"
+name = "wuf"
 version = "0.1.0a6"
 source = { editable = "." }
 dependencies = [

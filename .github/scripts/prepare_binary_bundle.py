@@ -26,7 +26,7 @@ def main() -> int:
         _copy_file(repository / name, bundle / name)
 
     license_root = bundle / "licenses"
-    for package_name in (*_runtime_dependency_names("workfold"), "pyinstaller"):
+    for package_name in (*_runtime_dependency_names("wuf"), "pyinstaller"):
         _copy_distribution_notices(package_name, license_root)
     _copy_python_license(license_root)
     return 0

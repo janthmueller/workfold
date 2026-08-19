@@ -1,24 +1,24 @@
 ---
 title: Coverage, privacy, and accuracy
-description: Understand what Workfold can account for and what timestamps prove.
+description: Understand what Wuf can account for and what timestamps prove.
 ---
 
 ## What an event means
 
-A Workfold event is a discrete activity marker derived from a timestamp that is
+A Wuf event is a discrete activity marker derived from a timestamp that is
 still discoverable in the requested local sources. It is evidence that a record
 has that timestamp; it is not proof of continuous work before or after it.
 
-Workfold does not estimate hours worked, billable time, focus, or productivity.
+Wuf does not estimate hours worked, billable time, focus, or productivity.
 Its within/outside percentages count classifiable activity markers, not time
 duration.
 
 ## The completeness boundary
 
-Workfold treats the selected paths, time range, sources, evidence kinds,
+Wuf treats the selected paths, time range, sources, evidence kinds,
 identities, ignore policy, and explicit exclusions as the requested query scope.
 Every discoverable timestamp inside that scope must become a selected
-observation, or Workfold must report why it could not determine or obtain it.
+observation, or Wuf must report why it could not determine or obtain it.
 Known timestamps outside the requested time or identity scope are not part of
 the answer and are not counted as coverage outcomes.
 
@@ -32,11 +32,11 @@ identical observation while retaining all provenance roles.
 There is deliberately no equality between values read and observations
 selected: an exact collector may reject a known non-matching value as soon as
 it reads it. Every scope match must, however, become a selected observation or
-an explicit materialization error. An error that prevents Workfold from
+an explicit materialization error. An error that prevents Wuf from
 deciding whether a value was in scope remains a conservative coverage
 exception.
 
-Workfold therefore uses qualified wording such as:
+Wuf therefore uses qualified wording such as:
 
 > complete for all discoverable timestamps in the requested scope
 
@@ -93,7 +93,7 @@ coverage. The grouping decision is made before ANSI color suppression, so
 Event-style rules operate only on that retained plotted-marker projection.
 They cannot change discovery, timestamp selection, coalescing, scope, totals,
 or coverage. When equal Git author and committer instants coalesce, a style
-selector must cover both retained roles to apply; Workfold never discards a role
+selector must cover both retained roles to apply; Wuf never discards a role
 or expands the pair into visually inflated duplicate markers for styling.
 Chart band labels use minute-level `HH:MM` clock values. Event anchoring starts
 a half-open band at the earliest unassigned event; midnight anchoring uses fixed
@@ -118,7 +118,7 @@ for second-based event windows.
 Rolling `-t` durations are fixed elapsed windows ending at one clock value
 captured at run start. Their start is inclusive and captured `now` is exclusive;
 weeks mean seven 24-hour days and days mean 24 hours, including across a local
-daylight-saving transition. Workfold does not reinterpret them as calendar
+daylight-saving transition. Wuf does not reinterpret them as calendar
 weeks, dates, or months.
 
 ## Source-specific limitations
@@ -126,12 +126,12 @@ weeks, dates, or months.
 ### Git
 
 - Author and committer dates can differ, be manually assigned, and be rewritten.
-- For a bounded query, Workfold scans the requested author/committer roles and
+- For a bounded query, Wuf scans the requested author/committer roles and
   selects them independently. It does not rely on ordinary `git --since` for
   author dates because author timestamps are not ordered by commit topology.
 - Commit and file-change timestamp roles are independently selectable. A file
   change inherits the requested author or committer role from its commit.
-  Workfold therefore derives tree differences only for commits with at least
+  Wuf therefore derives tree differences only for commits with at least
   one matching file-change role; this is an exact scope optimization, not a
   history shortcut.
 - File changes are derived from first-parent tree differences, not stored human
@@ -140,7 +140,7 @@ weeks, dates, or months.
 - Reflogs are machine-local, optional, and subject to expiration.
 - The portable profile means timestamps stored in commit and annotated-tag
   objects. It does not prove when an object was pushed or published, and
-  Workfold does not contact a remote to guess.
+  Wuf does not contact a remote to guess.
 - Git file creation means first recorded addition in selected reachable history,
   not operating-system creation.
 - A deleted untracked file leaves no Git evidence.
@@ -151,7 +151,7 @@ weeks, dates, or months.
 - A bounded filesystem query still discovers and stats every candidate needed
   by the requested entry, ignore, and exclusion scope. Directory mtimes cannot
   safely prove that descendants are out of range. Once a timestamp value is
-  known, Workfold can discard a non-matching value without building a normalized
+  known, Wuf can discard a non-matching value without building a normalized
   observation for it.
 - Inside a Git worktree, the normal respect-ignore scan uses local Git plumbing
   only to inventory tracked and untracked path candidates. A successful current
@@ -179,16 +179,16 @@ weeks, dates, or months.
   Git-administration boundaries remain accounted separately.
 - Copying, checkout, archive extraction, formatting, and builds may alter times.
 - Creation/birth time is not exposed by every operating system or filesystem.
-  On Linux, Workfold requests `STATX_BTIME` through libc `statx`; the individual
+  On Linux, Wuf requests `STATX_BTIME` through libc `statx`; the individual
   slot remains unavailable when the filesystem does not return that mask bit.
 - POSIX ctime means inode/status metadata change; it is never labeled creation.
 - Atime may be disabled, delayed by `relatime`, or changed by another read.
 - Deleted untracked entries and earlier mutable metadata values are
   unrecoverable. Unsaved and past uncommitted edit sessions cannot be
-  reconstructed without a watcher, which Workfold does not provide.
+  reconstructed without a watcher, which Wuf does not provide.
 
 Collection is not an atomic snapshot. A repository or tree changing during a
-run can produce partial coverage; Workfold reports detected failures but does
+run can produce partial coverage; Wuf reports detected failures but does
 not lock the user's working tree.
 
 Weekday-column controls are presentation-only. `--hide-days` may omit occupied
@@ -199,11 +199,11 @@ requested event list, and receive a compact hidden-event count.
 
 The collection pipeline is local:
 
-- Git is invoked without fetching or contacting remote hosting APIs; Workfold
+- Git is invoked without fetching or contacting remote hosting APIs; Wuf
   also disables configured credentials, protocols, pagers, and filesystem
   monitor hooks for its read-only Git subprocesses;
 - filesystem scans do not read arbitrary date-like text from file contents;
-- Workfold has no telemetry, persistent activity database, background watcher,
+- Wuf has no telemetry, persistent activity database, background watcher,
   or web server;
 - terminal-facing repository text is sanitized before rendering.
 

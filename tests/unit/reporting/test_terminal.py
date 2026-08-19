@@ -4,7 +4,7 @@ import re
 from datetime import timedelta
 
 import pytest
-from workfold.configuration import (
+from wuf.configuration import (
     BandLabel,
     ClusterAnchor,
     CountGrouping,
@@ -13,10 +13,10 @@ from workfold.configuration import (
     compile_event_style_sheet,
     parse_event_style_rules,
 )
-from workfold.domain.observations import Source, TimestampKind, Weekday
-from workfold.reporting.sanitization import display_width
-from workfold.reporting.terminal import TerminalOptions, render_terminal
-from workfold.reporting.terminal.coverage_status import COMPLETE_COVERAGE_STATUS
+from wuf.domain.observations import Source, TimestampKind, Weekday
+from wuf.reporting.sanitization import display_width
+from wuf.reporting.terminal import TerminalOptions, render_terminal
+from wuf.reporting.terminal.coverage_status import COMPLETE_COVERAGE_STATUS
 
 from support.reports import classified_marker as _classified
 from support.reports import coalesced_git_marker as _coalesced_git
@@ -35,7 +35,7 @@ def test_plain_renderer_uses_event_symbols_for_mixed_and_outside_activity() -> N
     assert rendered.index("Working hours") < rendered.index("Events")
     assert "Legend" not in rendered
     assert "Summary" not in rendered
-    assert "Workfold ·" not in rendered
+    assert "Wuf ·" not in rendered
     assert "08:05–08:09" in rendered
     assert "●□" in rendered
     assert "G=" not in rendered and "F=" not in rendered and "M=" not in rendered

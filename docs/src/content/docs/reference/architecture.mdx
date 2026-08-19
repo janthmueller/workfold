@@ -1,9 +1,9 @@
 ---
 title: Architecture
-description: Understand Workfold's module boundaries, dependency rules, and event pipeline.
+description: Understand Wuf's module boundaries, dependency rules, and event pipeline.
 ---
 
-Workfold is a **layered modular monolith with capability-oriented adapters**. It
+Wuf is a **layered modular monolith with capability-oriented adapters**. It
 is one Python package, one process, and one distributable CLI. Top-level
 packages express dependency direction, while Git and filesystem internals are
 grouped by the capabilities they implement.
@@ -19,17 +19,17 @@ The design combines three ideas:
   [pipes and filters](https://www.enterpriseintegrationpatterns.com/patterns/messaging/PipesAndFilters.html)
   style.
 
-Workfold does not reproduce every layer or abstraction from those patterns.
+Wuf does not reproduce every layer or abstraction from those patterns.
 The boundaries exist to protect observable behavior and make the code easier
 to navigate, not to add ceremony.
 
 ## Source tree
 
 The repository uses Python's supported flat package layout: the import package
-lives directly in `workfold/`, with no additional `src/` directory.
+lives directly in `wuf/`, with no additional `src/` directory.
 
 ```text
-workfold/
+wuf/
 ├── __init__.py
 ├── __main__.py
 ├── cli/                    # argparse, invocation, composition, process output
@@ -45,7 +45,7 @@ workfold/
     └── terminal/           # Rich chart, prose, summary, and event list
 ```
 
-The extra `workfold/workfold` visible from the repository parent is expected:
+The extra `wuf/wuf` visible from the repository parent is expected:
 the outer directory is the Git project and the inner directory is the Python
 import package. PyPA calls this a
 [flat layout](https://packaging.python.org/en/latest/discussions/src-layout-vs-flat-layout/).
@@ -125,7 +125,7 @@ browser application.
 
 ## Selection axes
 
-Workfold keeps four independent questions separate instead of encoding all
+Wuf keeps four independent questions separate instead of encoding all
 scope in one flag:
 
 | Axis | Question | Examples |
@@ -316,6 +316,6 @@ Do not introduce catch-all `utils.py`, `helpers.py`, `types.py`, `base.py`, or
 with unclear ownership; split it only when the resulting responsibilities can
 be named independently.
 
-Workfold remains a modular monolith. Introducing a service, plugin system,
+Wuf remains a modular monolith. Introducing a service, plugin system,
 persistent database, or framework layer requires an actual product need rather
 than anticipated reuse.

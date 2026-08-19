@@ -6,7 +6,7 @@ from typing import Callable, cast
 from zoneinfo import ZoneInfo
 
 import pytest
-from workfold.domain.observations import (
+from wuf.domain.observations import (
     ActivityMarker,
     RecordKind,
     RecordOrigin,
@@ -15,7 +15,7 @@ from workfold.domain.observations import (
     TimestampObservation,
     Weekday,
 )
-from workfold.domain.schedule import (
+from wuf.domain.schedule import (
     Schedule,
     ScheduleError,
     TimeInterval,
@@ -23,7 +23,7 @@ from workfold.domain.schedule import (
     default_schedule,
     parse_schedule,
 )
-from workfold.domain.time import datetime_to_utc_ns
+from wuf.domain.time import datetime_to_utc_ns
 
 BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -130,7 +130,7 @@ def test_invalid_schedule_grammar_is_rejected(value: str) -> None:
 
 
 def test_day_set_parser_defensively_rejects_more_than_one_range_separator() -> None:
-    import workfold.domain.schedule as schedule_module
+    import wuf.domain.schedule as schedule_module
 
     parser = cast(Callable[[str], tuple[Weekday, ...]], schedule_module._parse_day_set)  # type: ignore[reportPrivateUsage]
     with pytest.raises(ScheduleError, match="day set"):

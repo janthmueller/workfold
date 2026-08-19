@@ -1,5 +1,5 @@
 {
-  description = "workfold Python CLI";
+  description = "Wuf Python CLI";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -48,6 +48,8 @@
                 "result"
                 "workfold.egg-info"
                 "workfold.spec"
+                "wuf.egg-info"
+                "wuf.spec"
               ];
             in
             pkgs.lib.cleanSourceFilter path _type
@@ -55,7 +57,7 @@
             && relativePath != "benchmarks/results";
         };
 
-        workfold = pythonPackages.buildPythonPackage {
+        wuf = pythonPackages.buildPythonPackage {
           pname = project.project.name;
           version = project.project.version;
           pyproject = true;
@@ -71,19 +73,19 @@
             "--prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git ]}"
           ];
           nativeCheckInputs = [ pkgs.git pythonPackages.pytestCheckHook ];
-          pythonImportsCheck = [ "workfold" ];
+          pythonImportsCheck = [ "wuf" ];
 
           meta = with pkgs.lib; {
             inherit (project.project) description;
             homepage = project.project.urls.homepage;
             license = licenses.mit;
-            mainProgram = "workfold";
+            mainProgram = "wuf";
             platforms = platforms.unix;
           };
         };
 
         docsCommand = name: command: pkgs.writeShellApplication {
-          name = "workfold-docs-${name}";
+          name = "wuf-docs-${name}";
           runtimeInputs = [ pkgs.nodejs_24 pkgs.pnpm ];
           text = ''
             export PNPM_HOME="$PWD/.pnpm-home"
@@ -96,7 +98,7 @@
         };
 
         docs-install = pkgs.writeShellApplication {
-          name = "workfold-docs-install";
+          name = "wuf-docs-install";
           runtimeInputs = [ pkgs.nodejs_24 pkgs.pnpm ];
           text = ''
             export PNPM_HOME="$PWD/.pnpm-home"
@@ -113,17 +115,21 @@
           };
       in
       {
-        packages.default = workfold;
-
-        apps = {
-          default = app workfold project.project.description;
-          docs-install = app docs-install "Install Workfold documentation dependencies";
-          docs-dev = app docs-dev "Run the Workfold documentation development server";
-          docs-check = app docs-check "Validate the Workfold documentation site";
-          docs-build = app docs-build "Build the Workfold documentation site";
+        packages = {
+          default = wuf;
+          inherit wuf;
         };
 
-        checks.default = workfold;
+        apps = {
+          default = app wuf project.project.description;
+          wuf = app wuf project.project.description;
+          docs-install = app docs-install "Install Wuf documentation dependencies";
+          docs-dev = app docs-dev "Run the Wuf documentation development server";
+          docs-check = app docs-check "Validate the Wuf documentation site";
+          docs-build = app docs-build "Build the Wuf documentation site";
+        };
+
+        checks.default = wuf;
 
         devShells.default = pkgs.mkShell {
           packages = [

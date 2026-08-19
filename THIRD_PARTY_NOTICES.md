@@ -1,7 +1,7 @@
-# Third-party notices for standalone Workfold bundles
+# Third-party notices for standalone Wuf bundles
 
 The standalone archives are produced with PyInstaller and include portions of
-the Python runtime plus Workfold's runtime dependencies. Their exact license
+the Python runtime plus Wuf's runtime dependencies. Their exact license
 files are copied into the archive's `licenses/` directory at build time.
 
 - Python and its standard library: Python Software Foundation License.

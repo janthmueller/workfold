@@ -1,4 +1,4 @@
-"""Executable dependency rules for Workfold's modular monolith."""
+"""Executable dependency rules for Wuf's modular monolith."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import ast
 import sys
 from pathlib import Path
 
-PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "workfold"
+PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "wuf"
 
 ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "domain": frozenset({"domain"}),
@@ -23,12 +23,12 @@ def test_internal_dependencies_point_toward_stable_capabilities() -> None:
     violations: list[str] = []
     for source_layer, allowed in ALLOWED_DEPENDENCIES.items():
         for path in sorted((PACKAGE_ROOT / source_layer).rglob("*.py")):
-            for dependency, line in _workfold_dependencies(path):
+            for dependency, line in _wuf_dependencies(path):
                 if dependency not in allowed:
                     relative = path.relative_to(PACKAGE_ROOT.parent)
                     violations.append(f"{relative}:{line}: {source_layer} -> {dependency}")
 
-    assert not violations, "forbidden Workfold package dependencies:\n" + "\n".join(violations)
+    assert not violations, "forbidden Wuf package dependencies:\n" + "\n".join(violations)
 
 
 def test_package_root_contains_only_entrypoint_modules() -> None:
@@ -43,13 +43,13 @@ def test_package_root_contains_only_entrypoint_modules() -> None:
     assert root_packages == set(ALLOWED_DEPENDENCIES)
 
 
-def test_core_uses_only_the_standard_library_and_workfold() -> None:
+def test_core_uses_only_the_standard_library_and_wuf() -> None:
     violations: list[str] = []
     for package in ("domain", "folding"):
         for path in sorted((PACKAGE_ROOT / package).rglob("*.py")):
             for dependency, line in _imports(path):
                 root = dependency.split(".", maxsplit=1)[0]
-                if root != "workfold" and root not in sys.stdlib_module_names:
+                if root != "wuf" and root not in sys.stdlib_module_names:
                     relative = path.relative_to(PACKAGE_ROOT.parent)
                     violations.append(f"{relative}:{line}: imports {root}")
 
@@ -66,7 +66,7 @@ def test_argparse_is_owned_by_the_cli() -> None:
                 relative = path.relative_to(PACKAGE_ROOT.parent)
                 violations.append(f"{relative}:{line}")
 
-    assert not violations, "argparse imports outside workfold.cli:\n" + "\n".join(violations)
+    assert not violations, "argparse imports outside wuf.cli:\n" + "\n".join(violations)
 
 
 def test_collection_adapters_do_not_import_each_other() -> None:
@@ -74,9 +74,7 @@ def test_collection_adapters_do_not_import_each_other() -> None:
     for source, forbidden in (("git", "filesystem"), ("filesystem", "git")):
         for path in sorted((PACKAGE_ROOT / "collection" / source).rglob("*.py")):
             for dependency, line in _imports(path):
-                if dependency == f"workfold.collection.{forbidden}" or dependency.startswith(
-                    f"workfold.collection.{forbidden}."
-                ):
+                if dependency == f"wuf.collection.{forbidden}" or dependency.startswith(f"wuf.collection.{forbidden}."):
                     relative = path.relative_to(PACKAGE_ROOT.parent)
                     violations.append(f"{relative}:{line}: {source} -> {forbidden}")
 
@@ -85,10 +83,10 @@ def test_collection_adapters_do_not_import_each_other() -> None:
 
 def test_application_uses_the_git_source_boundary() -> None:
     violations: list[str] = []
-    allowed_prefix = "workfold.collection.git.evidence"
+    allowed_prefix = "wuf.collection.git.evidence"
     for path in sorted((PACKAGE_ROOT / "application").rglob("*.py")):
         for dependency, line in _imports(path):
-            if dependency.startswith("workfold.collection.git.") and not dependency.startswith(allowed_prefix):
+            if dependency.startswith("wuf.collection.git.") and not dependency.startswith(allowed_prefix):
                 relative = path.relative_to(PACKAGE_ROOT.parent)
                 violations.append(f"{relative}:{line}: imports {dependency}")
 
@@ -97,10 +95,10 @@ def test_application_uses_the_git_source_boundary() -> None:
 
 def test_reporting_consumes_only_the_stable_report_contract() -> None:
     forbidden = (
-        "workfold.application.collection",
-        "workfold.application.execution",
-        "workfold.application.report_context",
-        "workfold.collection",
+        "wuf.application.collection",
+        "wuf.application.execution",
+        "wuf.application.report_context",
+        "wuf.collection",
     )
     violations: list[str] = []
     for path in sorted((PACKAGE_ROOT / "reporting").rglob("*.py")):
@@ -125,17 +123,17 @@ def test_filesystem_root_scan_has_explicit_boundary_bundles() -> None:
     assert [item.arg for item in function.args.kwonlyargs] == ["request", "sinks", "services"]
 
 
-def test_workfold_module_graph_is_acyclic() -> None:
+def test_wuf_module_graph_is_acyclic() -> None:
     graph = _module_graph()
     cycle = _find_cycle(graph)
-    assert cycle is None, "Workfold module dependency cycle: " + " -> ".join(cycle or ())
+    assert cycle is None, "Wuf module dependency cycle: " + " -> ".join(cycle or ())
 
 
-def _workfold_dependencies(path: Path) -> tuple[tuple[str, int], ...]:
+def _wuf_dependencies(path: Path) -> tuple[tuple[str, int], ...]:
     dependencies: list[tuple[str, int]] = []
     for name, line in _imports(path):
         parts = name.split(".")
-        if len(parts) >= 2 and parts[0] == "workfold":
+        if len(parts) >= 2 and parts[0] == "wuf":
             dependencies.append((parts[1], line))
     return tuple(dependencies)
 
@@ -156,7 +154,7 @@ def _imports(path: Path) -> tuple[tuple[str, int], ...]:
 def _absolute_import_name(path: Path, node: ast.ImportFrom) -> str | None:
     if node.level == 0:
         return node.module
-    source_package = ("workfold", *path.parent.relative_to(PACKAGE_ROOT).parts)
+    source_package = ("wuf", *path.parent.relative_to(PACKAGE_ROOT).parts)
     ancestor_length = len(source_package) - node.level + 1
     if ancestor_length < 1:
         return node.module
@@ -170,7 +168,7 @@ def _module_graph() -> dict[str, set[str]]:
     for name, path in modules.items():
         for dependency, _line in _imports(path):
             candidate = dependency
-            while candidate.startswith("workfold"):
+            while candidate.startswith("wuf"):
                 if candidate in modules:
                     if candidate != name:
                         graph[name].add(candidate)

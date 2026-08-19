@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from workfold.collection.diagnostics import (
+from wuf.collection.diagnostics import (
     CollectorDiagnostic,
     DiagnosticBuffer,
     DiagnosticCategory,

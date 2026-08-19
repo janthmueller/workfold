@@ -1,10 +1,12 @@
 ---
-title: Workfold
+title: Wuf
 slug: /
 description: Fold local Git and filesystem timestamps into an honest weekly terminal view.
 ---
 
-Workfold is a local, terminal-only CLI for answering two questions:
+**WUF Unifies Footprints.**
+
+Wuf is a local, terminal-only CLI for answering two questions:
 
 1. When did discoverable work activity happen?
 2. Which recorded events occurred inside or outside an intended working schedule?
@@ -14,32 +16,39 @@ onto a representative Monday-to-Sunday week, and renders a compact terminal
 chart. The result describes discrete evidence, not continuous work duration.
 
 :::note[Development status]
-Workfold is an alpha. The terminal-only CLI includes the sparse Rich-based
+Wuf is an alpha. The terminal-only CLI includes the sparse Rich-based
 chart, Git files/tags/reflogs, filesystem metadata, combined-source views, and
 exhaustive coverage.
 :::
 
 ## Quick start
 
-Workfold requires Python 3.11 or newer. Git views also require the local `git`
+Wuf requires Python 3.11 or newer. Git views also require the local `git`
 executable.
 
 ```bash
-pip install workfold
-workfold --help
+pip install wuf
+wuf --help
 ```
 
-For an isolated CLI environment, use `uv tool install workfold` or
-`pipx install workfold`. Standalone archives are available from
-[GitHub releases](https://github.com/janthmueller/workfold/releases).
+For an isolated CLI environment, use `uv tool install wuf` or
+`pipx install wuf`. Standalone archives are available from
+[GitHub releases](https://github.com/janthmueller/wuf/releases).
+
+:::note[Renamed from Workfold]
+Wuf continues the same project under its permanent short name. Python packages
+retain `workfold` as a compatibility command, while `wuf` is canonical. Rename
+`workfold.toml` to `wuf.toml` and `[tool.workfold]` to `[tool.wuf]` when moving
+an existing configuration.
+:::
 
 Inside a Git repository, run:
 
 ```bash
-workfold
+wuf
 ```
 
-With no flags, Workfold selects the current ISO week in the operating system's
+With no flags, Wuf selects the current ISO week in the operating system's
 local timezone (`-t this-week`), reads commit author timestamps from local
 branches plus a detached `HEAD` under the `git` event profile (`-p git`), uses
 a configurable cluster window (default: `1h`),
@@ -47,27 +56,27 @@ anchors bands at events, labels them as ranges, and classifies against
 `Mo-Fr 08:00-16:30`.
 
 ```bash
-workfold . -t 2026-W31
-workfold . -t 2w3d
-workfold . -t 2026-07-01..2026-07-31
-workfold . --timezone Europe/Berlin --list outside
-workfold . -t all -p portable
-workfold . -t all -p full --git-commits-from all-refs --include-ignored
-workfold . --events git:tag:tagger fs:file:modified
-workfold . --events 'fs:*:modified'
-workfold . --events 'git:*:committer'
-workfold . --cluster-window 1m30s --cluster-anchor event
-workfold . --cluster-window 10m
-workfold . --cluster-window 1h5m --cluster-anchor midnight
-workfold . --cluster-anchor midnight --show-empty-bands
-workfold . --band-label start
-workfold . --hours all
-workfold . --marker-style identity
-workfold . --grid vertical
-workfold . --hide-empty-days all
-workfold . --hide-empty-days weekend
-workfold . --hide-days weekend
-workfold . --show-config
+wuf . -t 2026-W31
+wuf . -t 2w3d
+wuf . -t 2026-07-01..2026-07-31
+wuf . --timezone Europe/Berlin --list outside
+wuf . -t all -p portable
+wuf . -t all -p full --git-commits-from all-refs --include-ignored
+wuf . --events git:tag:tagger fs:file:modified
+wuf . --events 'fs:*:modified'
+wuf . --events 'git:*:committer'
+wuf . --cluster-window 1m30s --cluster-anchor event
+wuf . --cluster-window 10m
+wuf . --cluster-window 1h5m --cluster-anchor midnight
+wuf . --cluster-anchor midnight --show-empty-bands
+wuf . --band-label start
+wuf . --hours all
+wuf . --marker-style identity
+wuf . --grid vertical
+wuf . --hide-empty-days all
+wuf . --hide-empty-days weekend
+wuf . --hide-days weekend
+wuf . --show-config
 ```
 
 `-p/--profile` selects a named event set and defaults to `git`. The `fs` and
@@ -160,7 +169,7 @@ required. Persistent `styles` rules can replace the source-marker symbol/color
 pairs per exact or wildcard event selector; they do not alter evidence scope,
 counts, or coverage.
 When an unusually busy cell cannot fit individual symbols, exact tokens such as
-`●×12` replace that cell; Workfold never substitutes an approximate density
+`●×12` replace that cell; Wuf never substitutes an approximate density
 band.
 
 `--marker-style identity` replaces Git circles with deterministic identity codes
@@ -177,10 +186,10 @@ markers remain squares.
 
 Collection reads local Git records and current filesystem metadata. It does not
 call GitHub, GitLab, Bitbucket, or another remote service, and it does not start
-a web server. This Astro site is product documentation only; Workfold itself
+a web server. This Astro site is product documentation only; Wuf itself
 produces a terminal report.
 
-Continue with [Using Workfold](./guides/usage/) or read
+Continue with [Using Wuf](./guides/usage/) or read
 [Coverage, privacy, and accuracy](./reference/accuracy/). Contributors can use
 the [development guide](./guides/development/) for the repository architecture,
 quality checks, packaging, and release workflow.

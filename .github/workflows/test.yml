@@ -77,13 +77,15 @@ jobs:
           version: "0.11.28"
       - run: uv sync --locked --extra release
       - run: uv run --locked python -m build
+      - run: uv run --locked python -m build compat/workfold --outdir dist
       - run: uv run --locked python -m twine check dist/*
       - name: Smoke-test wheel
         shell: bash
         run: |
           python -m venv wheel-smoke
           wheel-smoke/bin/python -m pip install dist/*.whl
-          wheel-smoke/bin/workfold --version
+          wheel-smoke/bin/wuf --version
+          wheel-smoke/bin/workfold --version | grep -Eq '^wuf '
           FIXTURE="$(mktemp -d)"
           git -C "$FIXTURE" init --initial-branch=main
           git -C "$FIXTURE" config user.name "CI Fixture"
@@ -91,15 +93,15 @@ jobs:
           echo activity > "$FIXTURE/work.txt"
           git -C "$FIXTURE" add work.txt
           GIT_AUTHOR_DATE="2026-08-03T10:00:00+02:00" GIT_COMMITTER_DATE="2026-08-03T10:00:00+02:00" git -C "$FIXTURE" commit -m "fixture activity"
-          wheel-smoke/bin/workfold "$FIXTURE" --time all --timezone Europe/Berlin --no-color > wheel-report.txt
+          wheel-smoke/bin/wuf "$FIXTURE" --time all --timezone Europe/Berlin --no-color > wheel-report.txt
           grep -Eq '^Events[[:space:]]+1[[:space:]]*$' wheel-report.txt
       - name: Smoke-test source distribution
         shell: bash
         run: |
           python -m venv sdist-smoke
           sdist-smoke/bin/python -m pip install dist/*.tar.gz
-          sdist-smoke/bin/workfold --version
-          sdist-smoke/bin/workfold --help > /dev/null
+          sdist-smoke/bin/wuf --version
+          sdist-smoke/bin/wuf --help > /dev/null
 
   binaries:
     uses: ./.github/workflows/binaries.yml

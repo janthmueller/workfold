@@ -6,8 +6,8 @@ from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
-from workfold.collection.git import GitCollector, GitCommandError, GitRepository, GitRunner
-from workfold.collection.git.tags import (
+from wuf.collection.git import GitCollector, GitCommandError, GitRepository, GitRunner
+from wuf.collection.git.tags import (
     CollectedGitTag,
     GitTagCollector,
     GitTagParseError,
@@ -15,7 +15,7 @@ from workfold.collection.git.tags import (
     parse_tag_object,
     parse_tag_refs,
 )
-from workfold.domain.observations import RecordKind, TimestampKind
+from wuf.domain.observations import RecordKind, TimestampKind
 
 from support.git_repo import GitRepo
 

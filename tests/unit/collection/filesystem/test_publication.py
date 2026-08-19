@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from workfold.collection.filesystem.scan import ValidatedBatchPublisher
+from wuf.collection.filesystem.scan import ValidatedBatchPublisher
 
 
 def test_publishes_at_the_exact_batch_boundary_after_validation() -> None:

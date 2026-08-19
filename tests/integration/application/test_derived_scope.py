@@ -10,16 +10,16 @@ from pathlib import Path
 from typing import BinaryIO
 from zoneinfo import ZoneInfo
 
-from workfold.application.collection import CollectorServices
-from workfold.application.collection import collect as collect_sources
-from workfold.cli import parse_options
-from workfold.cli.runner import default_collector_services, run
-from workfold.collection.git import GitCommandError, GitRunner
-from workfold.collection.git.changes import GitFileChangeCollector
-from workfold.domain.observations import RecordKind, TimestampKind, TimestampObservation
-from workfold.domain.scope import ObservationScope
-from workfold.domain.time import InstantRange, InstantRangeUnion, datetime_to_utc_ns
-from workfold.folding.pipeline import ObservationBatch
+from wuf.application.collection import CollectorServices
+from wuf.application.collection import collect as collect_sources
+from wuf.cli import parse_options
+from wuf.cli.runner import default_collector_services, run
+from wuf.collection.git import GitCommandError, GitRunner
+from wuf.collection.git.changes import GitFileChangeCollector
+from wuf.domain.observations import RecordKind, TimestampKind, TimestampObservation
+from wuf.domain.scope import ObservationScope
+from wuf.domain.time import InstantRange, InstantRangeUnion, datetime_to_utc_ns
+from wuf.folding.pipeline import ObservationBatch
 
 from support.git_repo import GitRepo
 

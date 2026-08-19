@@ -6,8 +6,8 @@ from io import BytesIO, TextIOWrapper
 from pathlib import Path
 
 import pytest
-from workfold.application.errors import OperationalError
-from workfold.cli import build_parser, configure_windows_stdio, main, parse_options
+from wuf.application.errors import OperationalError
+from wuf.cli import build_parser, configure_windows_stdio, main, parse_options
 
 from support.git_repo import GitRepo
 
@@ -35,7 +35,7 @@ def test_cli_accepts_no_arguments_in_a_git_repository(
     assert not re.search(r"^Coverage\s{2,}", rendered, re.MULTILINE)
     assert "Coverage details:" not in rendered
     assert "Details\n" not in rendered
-    assert "Workfold ·" not in rendered
+    assert "Wuf ·" not in rendered
     assert re.search(r"^Events\s+0$", rendered, re.MULTILINE)
     assert re.search(r"^Schedule\s+0 inside \(n/a\) · 0 outside \(n/a\)$", rendered, re.MULTILINE)
     assert re.search(r"^Calendar\s+0 weekday \(n/a\) · 0 weekend \(n/a\)$", rendered, re.MULTILINE)
@@ -46,7 +46,7 @@ def test_cli_reports_version(capsys: pytest.CaptureFixture[str]) -> None:
         main(["--version"])
 
     assert error.value.code == 0
-    assert capsys.readouterr().out.startswith("workfold ")
+    assert capsys.readouterr().out.startswith("wuf ")
 
 
 def test_truncated_missing_path_diagnostics_keep_the_usage_exit_status(
@@ -276,7 +276,7 @@ def test_cli_maps_usage_errors_to_status_two(capsys: pytest.CaptureFixture[str])
     captured = capsys.readouterr()
     assert not captured.out
     assert captured.err.startswith("error: ")
-    assert "workfold: error:" not in captured.err
+    assert "wuf: error:" not in captured.err
     assert "unknown IANA timezone" in captured.err
 
 
@@ -299,7 +299,7 @@ def test_argparse_escapes_control_characters_in_unknown_options(
     captured = capsys.readouterr()
     assert "\x1b" not in captured.err
     assert "\nerror: " in captured.err
-    assert "workfold: error:" not in captured.err
+    assert "wuf: error:" not in captured.err
     assert r"\x1b[31mforged" in captured.err
 
 
@@ -323,7 +323,7 @@ def test_cli_treats_a_closed_output_pipe_as_a_clean_exit(monkeypatch: pytest.Mon
     def closed_pipe(*args: object, **kwargs: object) -> int:
         raise BrokenPipeError
 
-    monkeypatch.setattr("workfold.cli.runner.run", closed_pipe)
+    monkeypatch.setattr("wuf.cli.runner.run", closed_pipe)
 
     assert main([]) == 0
 
@@ -335,7 +335,7 @@ def test_cli_reports_operational_failures_without_a_traceback(
     def failed(*args: object, **kwargs: object) -> int:
         raise OperationalError("temporary aggregation storage is unavailable")
 
-    monkeypatch.setattr("workfold.cli.runner.run", failed)
+    monkeypatch.setattr("wuf.cli.runner.run", failed)
 
     assert main([]) == 1
     assert capsys.readouterr().err == "error: temporary aggregation storage is unavailable\n"
@@ -348,7 +348,7 @@ def test_cli_maps_keyboard_interrupt_to_standard_exit_status(
     def interrupted(*args: object, **kwargs: object) -> int:
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("workfold.cli.runner.run", interrupted)
+    monkeypatch.setattr("wuf.cli.runner.run", interrupted)
 
     assert main([]) == 130
     assert capsys.readouterr().err == "interrupted\n"

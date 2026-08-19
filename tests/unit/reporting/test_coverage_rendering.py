@@ -1,7 +1,7 @@
 """Terminal coverage presentation tests."""
 
-from workfold.application.report import CollectionFacts, DiagnosticFacts, assess_completeness
-from workfold.domain.coverage import (
+from wuf.application.report import CollectionFacts, DiagnosticFacts, assess_completeness
+from wuf.domain.coverage import (
     Capability,
     CapabilityKind,
     CapabilityStatus,
@@ -11,8 +11,8 @@ from workfold.domain.coverage import (
     RecordDisposition,
     TimestampCoverageKey,
 )
-from workfold.domain.observations import RecordKind, Source, TimestampKind
-from workfold.reporting.terminal.coverage_status import coverage_status_label
+from wuf.domain.observations import RecordKind, Source, TimestampKind
+from wuf.reporting.terminal.coverage_status import coverage_status_label
 
 from support.reports import report
 

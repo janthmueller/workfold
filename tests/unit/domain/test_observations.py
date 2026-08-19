@@ -5,7 +5,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from workfold.domain.observations import (
+from wuf.domain.observations import (
     ActivityMarker,
     ClassifiedMarker,
     EntryType,
@@ -17,7 +17,7 @@ from workfold.domain.observations import (
     TimestampObservation,
     coalesce_observations,
 )
-from workfold.domain.provenance import (
+from wuf.domain.provenance import (
     absolute_filesystem_entry_id,
     activity_marker_id,
     canonical_bytes,

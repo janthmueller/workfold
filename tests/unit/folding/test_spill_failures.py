@@ -5,12 +5,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import workfold.folding.spill as spill_module
-from workfold.domain.evidence import EvidenceKind, evidence_mask
-from workfold.domain.observations import Source, Weekday
-from workfold.folding.markers import ChartMarker
-from workfold.folding.models import NANOSECONDS_PER_SECOND
-from workfold.folding.spill import AggregationStorageError, ChartMarkerStore
+import wuf.folding.spill as spill_module
+from wuf.domain.evidence import EvidenceKind, evidence_mask
+from wuf.domain.observations import Source, Weekday
+from wuf.folding.markers import ChartMarker
+from wuf.folding.models import NANOSECONDS_PER_SECOND
+from wuf.folding.spill import AggregationStorageError, ChartMarkerStore
 
 
 def _marker(marker_id: str, second: int) -> ChartMarker:
@@ -106,7 +106,7 @@ def test_spill_cleanup_failure_is_structured_and_close_remains_idempotent(
 
     class CleanupFailingDirectory:
         def __init__(self, *, prefix: str) -> None:
-            assert prefix == "workfold-aggregation-"
+            assert prefix == "wuf-aggregation-"
             spill_path.mkdir()
             self.name = str(spill_path)
 

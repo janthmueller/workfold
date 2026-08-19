@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import pytest
-from workfold.configuration.styles import (
+from wuf.configuration.styles import (
     DEFAULT_EVENT_STYLE_SHEET,
     EventStyleSheet,
     MarkerVisual,
     compile_event_style_sheet,
     parse_event_style_rules,
 )
-from workfold.domain.evidence import EvidenceKind, evidence_mask
+from wuf.domain.evidence import EvidenceKind, evidence_mask
 
 
 def _mask(*kinds: EvidenceKind) -> int:

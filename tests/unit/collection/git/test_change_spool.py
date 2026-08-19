@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import NoReturn
 
 import pytest
-from workfold.collection.git.changes.diff import ParsedGitChange
-from workfold.collection.git.changes.spool import GitChangeSpool, GitChangeSpoolError
-from workfold.domain.observations import GitChangeKind
+from wuf.collection.git.changes.diff import ParsedGitChange
+from wuf.collection.git.changes.spool import GitChangeSpool, GitChangeSpoolError
+from wuf.domain.observations import GitChangeKind
 
 
 def _change(

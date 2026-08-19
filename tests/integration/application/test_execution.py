@@ -8,13 +8,13 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from workfold.application.collection import collect as collect_sources
-from workfold.application.coverage import build_coverage
-from workfold.cli import parse_options
-from workfold.cli.runner import default_collector_services, run
-from workfold.domain.coverage import CoverageInvariantError
-from workfold.domain.scope import ObservationScope
-from workfold.domain.time import InstantRange, InstantRangeUnion
+from wuf.application.collection import collect as collect_sources
+from wuf.application.coverage import build_coverage
+from wuf.cli import parse_options
+from wuf.cli.runner import default_collector_services, run
+from wuf.domain.coverage import CoverageInvariantError
+from wuf.domain.scope import ObservationScope
+from wuf.domain.time import InstantRange, InstantRangeUnion
 
 from support.git_repo import GitRepo
 

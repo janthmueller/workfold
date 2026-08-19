@@ -9,18 +9,18 @@ from pathlib import Path, PurePosixPath
 from typing import NoReturn, cast
 
 import pytest
-import workfold.collection.filesystem.entries as filesystem_entries
-import workfold.collection.filesystem.traversal as filesystem_traversal
-from workfold.collection.diagnostics import DiagnosticSeverity
-from workfold.collection.filesystem import (
+import wuf.collection.filesystem.entries as filesystem_entries
+import wuf.collection.filesystem.traversal as filesystem_traversal
+from wuf.collection.diagnostics import DiagnosticSeverity
+from wuf.collection.filesystem import (
     CollectedFilesystemEntry,
     FilesystemAccounting,
     FilesystemCollector,
     TimestampExtractionCoverage,
     scandir_no_follow,
 )
-from workfold.collection.filesystem.accounting import AccountingBuilder
-from workfold.collection.filesystem.ignore import (
+from wuf.collection.filesystem.accounting import AccountingBuilder
+from wuf.collection.filesystem.ignore import (
     GitFilesystemInventory,
     GitFilesystemInventoryBackend,
     GitFilesystemInventoryVisit,
@@ -33,13 +33,13 @@ from workfold.collection.filesystem.ignore import (
     IgnoreCandidate,
     InventoryStrategy,
 )
-from workfold.collection.filesystem.inventory_metadata import (
+from wuf.collection.filesystem.inventory_metadata import (
     AnchoredInventoryMetadata,
     anchored_inventory_metadata_supported,
 )
-from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter
-from workfold.collection.filesystem.scan import DirectoryEntry, StatSnapshot
-from workfold.domain.coverage import (
+from wuf.collection.filesystem.metadata import FilesystemTimestampAdapter
+from wuf.collection.filesystem.scan import DirectoryEntry, StatSnapshot
+from wuf.domain.coverage import (
     CapabilityStatus,
     ExtractionDisposition,
     PlottingDisposition,
@@ -48,9 +48,9 @@ from workfold.domain.coverage import (
     RecordDisposition,
     TimestampCoverageKey,
 )
-from workfold.domain.observations import EntryType, RecordKind, Source, TimestampKind, TimestampObservation
-from workfold.domain.scope import ObservationScope
-from workfold.domain.time import InstantRange, InstantRangeUnion
+from wuf.domain.observations import EntryType, RecordKind, Source, TimestampKind, TimestampObservation
+from wuf.domain.scope import ObservationScope
+from wuf.domain.time import InstantRange, InstantRangeUnion
 
 from support.git_repo import GitRepo
 

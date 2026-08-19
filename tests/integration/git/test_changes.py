@@ -11,18 +11,18 @@ from pathlib import Path
 from typing import BinaryIO
 
 import pytest
-from workfold.collection.git import GitCollector, GitCommandError, GitRunner
-from workfold.collection.git.changes import (
+from wuf.collection.git import GitCollector, GitCommandError, GitRunner
+from wuf.collection.git.changes import (
     CollectedGitFileChange,
     GitChangeParseError,
     GitFileChangeCollector,
     GitFileChangeRepositoryAccounting,
     parse_diff_tree_name_status,
 )
-from workfold.collection.git.changes.diff import DiffCommitComplete, iter_diff_tree_name_status
-from workfold.domain.observations import GitChangeKind, RecordKind, TimestampKind
-from workfold.domain.scope import ObservationScope
-from workfold.domain.time import InstantRange, InstantRangeUnion
+from wuf.collection.git.changes.diff import DiffCommitComplete, iter_diff_tree_name_status
+from wuf.domain.observations import GitChangeKind, RecordKind, TimestampKind
+from wuf.domain.scope import ObservationScope
+from wuf.domain.time import InstantRange, InstantRangeUnion
 
 from support.git_repo import GitRepo
 
@@ -453,7 +453,7 @@ def test_command_failure_is_structured_for_the_whole_repository_batch(tmp_path: 
             allowed_returncodes: Collection[int] = (0,),
         ) -> subprocess.CompletedProcess[bytes]:
             if arguments[0] == "diff-tree":
-                from workfold.collection.git import GitCommandError
+                from wuf.collection.git import GitCommandError
 
                 raise GitCommandError(
                     code="git_command_failed",

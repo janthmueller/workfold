@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkCase:
-    """One stable Workfold argument combination."""
+    """One stable Wuf argument combination."""
 
     name: str
     arguments: tuple[str, ...]

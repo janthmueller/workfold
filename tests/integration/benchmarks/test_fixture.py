@@ -35,7 +35,7 @@ def test_synthetic_fixture_refuses_to_modify_a_nonempty_target(tmp_path: Path) -
     assert marker.read_text(encoding="utf-8") == "user data"
 
 
-def test_synthetic_fixture_exercises_complete_workfold_collection(tmp_path: Path) -> None:
+def test_synthetic_fixture_exercises_complete_wuf_collection(tmp_path: Path) -> None:
     root = tmp_path / "repository"
     manifest = create_fixture(
         root,
@@ -63,7 +63,7 @@ def test_synthetic_fixture_exercises_complete_workfold_collection(tmp_path: Path
         (
             sys.executable,
             "-m",
-            "workfold",
+            "wuf",
             os.fspath(root),
             "-p",
             "full",

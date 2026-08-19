@@ -365,7 +365,7 @@ def _git_environment() -> dict[str, str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Generate a synthetic Workfold benchmark repository.")
+    parser = argparse.ArgumentParser(description="Generate a synthetic Wuf benchmark repository.")
     parser.add_argument("target", type=Path, help="new or empty target directory")
     parser.add_argument("--size", choices=tuple(PRESETS), default="medium")
     return parser

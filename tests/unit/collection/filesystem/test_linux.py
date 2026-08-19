@@ -7,16 +7,16 @@ from errno import ENOSYS, EPERM
 from pathlib import Path
 
 import pytest
-from workfold.collection.filesystem import FilesystemCollector
-from workfold.collection.filesystem.linux import (
+from wuf.collection.filesystem import FilesystemCollector
+from wuf.collection.filesystem.linux import (
     LinuxStatxBirthTime,
     LinuxStatxCallError,
     LinuxStatxReader,
     LinuxStatxSnapshot,
 )
-from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter
-from workfold.domain.coverage import CapabilityStatus
-from workfold.domain.observations import EntryType, TimestampKind
+from wuf.collection.filesystem.metadata import FilesystemTimestampAdapter
+from wuf.domain.coverage import CapabilityStatus
+from wuf.domain.observations import EntryType, TimestampKind
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux statx is available only on Linux")
 

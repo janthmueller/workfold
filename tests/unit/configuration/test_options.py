@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from workfold.cli import parse_options
-from workfold.configuration import (
+from wuf.cli import parse_options
+from wuf.configuration import (
     BandLabel,
     ClusterAnchor,
     CountGrouping,
@@ -32,8 +32,8 @@ from workfold.configuration import (
     parse_weekday_scopes,
     validate_iso_week,
 )
-from workfold.domain.evidence import EvidenceKind, EvidenceSelection
-from workfold.domain.observations import Source, Weekday
+from wuf.domain.evidence import EvidenceKind, EvidenceSelection
+from wuf.domain.observations import Source, Weekday
 
 
 def test_default_options_are_the_quick_git_view_for_this_week() -> None:

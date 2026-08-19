@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
-from workfold.collection.git.objects import (
+from wuf.collection.git.objects import (
     BatchObject,
     GitObjectParseError,
     InvalidBatchCommit,

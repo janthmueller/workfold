@@ -6,14 +6,14 @@ from types import SimpleNamespace
 from typing import NoReturn, cast
 
 import pytest
-import workfold.collection.filesystem.timestamps as timestamp_collection
-from workfold.collection.filesystem.accounting import AccountingBuilder
-from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter
-from workfold.collection.filesystem.scan import PendingEntry
-from workfold.domain.coverage import ExtractionDisposition, RecordDisposition
-from workfold.domain.observations import EntryType, TimestampKind
-from workfold.domain.scope import ObservationScope
-from workfold.domain.time import InstantRange, InstantRangeUnion
+import wuf.collection.filesystem.timestamps as timestamp_collection
+from wuf.collection.filesystem.accounting import AccountingBuilder
+from wuf.collection.filesystem.metadata import FilesystemTimestampAdapter
+from wuf.collection.filesystem.scan import PendingEntry
+from wuf.domain.coverage import ExtractionDisposition, RecordDisposition
+from wuf.domain.observations import EntryType, TimestampKind
+from wuf.domain.scope import ObservationScope
+from wuf.domain.time import InstantRange, InstantRangeUnion
 
 
 def test_out_of_scope_timestamp_does_not_materialize_provenance(

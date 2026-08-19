@@ -1,4 +1,4 @@
-"""Run repeatable end-to-end Workfold timing and memory benchmarks."""
+"""Run repeatable end-to-end Wuf timing and memory benchmarks."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from workfold import __version__
+from wuf import __version__
 
 from benchmarks.cases import CASE_BY_NAME, SUITES, BenchmarkCase, select_cases
 from benchmarks.fixture import PRESETS, FixtureManifest, create_fixture
@@ -67,13 +67,13 @@ def summarize_samples(samples: Sequence[Sample]) -> SampleSummary:
         raise ValueError("at least one benchmark sample is required")
     event_counts = {sample.event_count for sample in samples}
     if None in event_counts:
-        raise BenchmarkError("Workfold output did not contain an Events summary")
+        raise BenchmarkError("Wuf output did not contain an Events summary")
     concrete_event_counts = {value for value in event_counts if value is not None}
     if len(concrete_event_counts) != 1:
         raise BenchmarkError(f"event count changed across repetitions: {sorted(concrete_event_counts)}")
     output_hashes = {sample.stdout_sha256 for sample in samples}
     if len(output_hashes) != 1:
-        raise BenchmarkError("Workfold output changed across repetitions; the target was not stable")
+        raise BenchmarkError("Wuf output changed across repetitions; the target was not stable")
     wall_values = [sample.wall_seconds for sample in samples]
     cpu_values = [
         sample.cpu_user_seconds + sample.cpu_system_seconds
@@ -187,9 +187,9 @@ def _validate_sample(case: BenchmarkCase, sample: Sample) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Benchmark complete Workfold CLI processes with stable no-color output.",
+        description="Benchmark complete Wuf CLI processes with stable no-color output.",
         epilog=(
-            "Memory includes Workfold's high-water RSS and sampled summed process-tree RSS on Linux. "
+            "Memory includes Wuf's high-water RSS and sampled summed process-tree RSS on Linux. "
             "Use warmups for comparable warm-cache results; the runner never drops OS caches."
         ),
     )
@@ -218,9 +218,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--json", type=Path, help="write raw samples and metadata to this JSON file")
     parser.add_argument(
-        "--workfold-executable",
+        "--wuf-executable",
         type=Path,
-        help="benchmark this installed executable instead of the checkout through python -m workfold",
+        help="benchmark this installed executable instead of the checkout through python -m wuf",
     )
     return parser
 
@@ -231,9 +231,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         _validate_arguments(arguments)
         cases = select_cases(arguments.suite, tuple(arguments.case))
-        command_prefix = _command_prefix(arguments.workfold_executable)
+        command_prefix = _command_prefix(arguments.wuf_executable)
         if arguments.fixture is not None:
-            with tempfile.TemporaryDirectory(prefix="workfold-benchmark-") as temporary:
+            with tempfile.TemporaryDirectory(prefix="wuf-benchmark-") as temporary:
                 root = Path(temporary) / "repository"
                 print(f"Generating {arguments.fixture} fixture at {root} ...", file=sys.stderr, flush=True)
                 started = time.perf_counter()
@@ -267,7 +267,7 @@ def _validate_arguments(arguments: argparse.Namespace) -> None:
 
 def _command_prefix(executable: Path | None) -> tuple[str, ...]:
     if executable is None:
-        return (sys.executable, "-m", "workfold")
+        return (sys.executable, "-m", "wuf")
     return (os.fspath(executable.expanduser().resolve(strict=True)),)
 
 
@@ -298,7 +298,7 @@ def _run_benchmarks(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "host": _host_metadata(),
         "tool": {
-            "workfold_version": __version__,
+            "wuf_version": __version__,
             "command_prefix": command_prefix,
             "git_version": _command_output(("git", "--version")),
             "checkout_head": _command_output(("git", "-C", os.fspath(PROJECT_ROOT), "rev-parse", "HEAD")),

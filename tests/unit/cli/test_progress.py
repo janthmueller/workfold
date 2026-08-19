@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from io import StringIO
 
-from workfold.cli.runner import _TransientStatus  # pyright: ignore[reportPrivateUsage]
+from wuf.cli.runner import _TransientStatus  # pyright: ignore[reportPrivateUsage]
 
 
 class _TTYBuffer(StringIO):

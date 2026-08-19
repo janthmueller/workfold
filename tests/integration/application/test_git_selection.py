@@ -10,10 +10,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from workfold.application.collection import CollectorServices
-from workfold.cli import parse_options
-from workfold.cli.runner import default_collector_services, run
-from workfold.collection.git import GitCollector, GitRunner
+from wuf.application.collection import CollectorServices
+from wuf.cli import parse_options
+from wuf.cli.runner import default_collector_services, run
+from wuf.collection.git import GitCollector, GitRunner
 
 from support.git_repo import GitRepo
 

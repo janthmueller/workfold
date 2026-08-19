@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from workfold.domain.observations import (
+from wuf.domain.observations import (
     EntryType,
     RecordKind,
     RecordOrigin,
@@ -10,8 +10,8 @@ from workfold.domain.observations import (
     TimestampKind,
     TimestampObservation,
 )
-from workfold.domain.scope import ObservationScope
-from workfold.domain.time import InstantRange, InstantRangeUnion
+from wuf.domain.scope import ObservationScope
+from wuf.domain.time import InstantRange, InstantRangeUnion
 
 
 def _git_observation(

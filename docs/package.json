@@ -1,5 +1,5 @@
 {
-  "name": "workfold-docs",
+  "name": "wuf-docs",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.11.0",

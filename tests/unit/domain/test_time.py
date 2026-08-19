@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
-from workfold.domain.time import (
+from wuf.domain.time import (
     InstantRange,
     InstantRangeUnion,
     TimeRangeError,

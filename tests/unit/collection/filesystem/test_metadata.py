@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from workfold.collection.filesystem.linux import LinuxStatxBirthTime
-from workfold.collection.filesystem.metadata import FilesystemTimestampAdapter, TimestampExtraction
-from workfold.domain.coverage import CapabilityStatus, ExtractionDisposition
-from workfold.domain.observations import TimestampKind
+from wuf.collection.filesystem.linux import LinuxStatxBirthTime
+from wuf.collection.filesystem.metadata import FilesystemTimestampAdapter, TimestampExtraction
+from wuf.domain.coverage import CapabilityStatus, ExtractionDisposition
+from wuf.domain.observations import TimestampKind
 
 
 @dataclass

@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
-from workfold.application.collection_plan import CollectionPlan
-from workfold.domain.evidence import (
+from wuf.application.collection_plan import CollectionPlan
+from wuf.domain.evidence import (
     EvidenceKind,
     EvidenceSelection,
     evidence_kinds_from_mask,
@@ -13,7 +13,7 @@ from workfold.domain.evidence import (
     expand_evidence_selectors,
     supported_marker_evidence_masks,
 )
-from workfold.domain.observations import EntryType, RecordKind, Source, TimestampKind
+from wuf.domain.observations import EntryType, RecordKind, Source, TimestampKind
 
 
 def test_evidence_catalog_round_trips_normalized_dimensions() -> None:

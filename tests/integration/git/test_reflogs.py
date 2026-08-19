@@ -6,9 +6,9 @@ from collections.abc import Collection, Sequence
 from pathlib import Path
 
 import pytest
-import workfold.collection.git.reflogs as reflog_module
-from workfold.collection.git import GitCollector, GitCommandError, GitRepository, GitRunner
-from workfold.collection.git.reflogs import (
+import wuf.collection.git.reflogs as reflog_module
+from wuf.collection.git import GitCollector, GitCommandError, GitRepository, GitRunner
+from wuf.collection.git.reflogs import (
     GitReflogCollector,
     GitReflogParseError,
     GitReflogReadError,
@@ -21,7 +21,7 @@ from workfold.collection.git.reflogs import (
     read_semantic_reflog,
     visit_semantic_reflog,
 )
-from workfold.domain.observations import RecordKind, TimestampKind
+from wuf.domain.observations import RecordKind, TimestampKind
 
 from support.git_repo import GitRepo
 

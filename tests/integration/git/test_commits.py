@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any, BinaryIO, NoReturn
 
 import pytest
-from workfold.collection.diagnostics import CollectorDiagnostic, DiagnosticSeverity
-from workfold.collection.git import (
+from wuf.collection.diagnostics import CollectorDiagnostic, DiagnosticSeverity
+from wuf.collection.git import (
     CollectedGitCommit,
     GitCollectionResult,
     GitCollector,
@@ -25,8 +25,8 @@ from workfold.collection.git import (
     parse_commit_ids,
     resolve_repository,
 )
-from workfold.collection.git.objects import GitObjectParseError
-from workfold.domain.observations import RecordKind, TimestampKind
+from wuf.collection.git.objects import GitObjectParseError
+from wuf.domain.observations import RecordKind, TimestampKind
 
 from support.git_repo import GitRepo
 
@@ -142,7 +142,7 @@ def test_streaming_runner_structures_temporary_capture_failure(
     def fail(*_args: object, **_kwargs: object) -> NoReturn:
         raise OSError("temporary storage unavailable")
 
-    monkeypatch.setattr("workfold.collection.git.process.tempfile.TemporaryFile", fail)
+    monkeypatch.setattr("wuf.collection.git.process.tempfile.TemporaryFile", fail)
 
     with pytest.raises(GitCommandError) as failure:
         with GitRunner().open_stdout(("cat-file", "--batch"), cwd=tmp_path):
@@ -248,7 +248,7 @@ def test_streaming_runner_reports_timeout_after_consumer_finishes(
         return TimedOutProcess(stderr)
 
     monkeypatch.setattr(subprocess, "Popen", popen)
-    monkeypatch.setattr("workfold.collection.git.process.streaming_deadline", expired_deadline)
+    monkeypatch.setattr("wuf.collection.git.process.streaming_deadline", expired_deadline)
 
     with pytest.raises(GitCommandError) as failure:
         with GitRunner(timeout=1).open_stdout(("cat-file", "--batch"), cwd=tmp_path) as stdout:

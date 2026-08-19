@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="330" viewBox="0 0 960 330" role="img">
+  <title>Example Wuf terminal report</title>
+  <desc>A colored weekly activity matrix with a compressed time gap, working hours, and summary.</desc>
+  <rect width="960" height="330" rx="12" fill="#0d1117"/>
+  <style>
+    text {
+      fill: #c9d1d9;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 16px;
+      font-variant-ligatures: none;
+    }
+    .strong { fill: #f0f6fc; font-weight: 600; }
+    .muted { fill: #8b949e; }
+    .git-marker { fill: #3fb950; }
+    .filesystem-marker { fill: #58a6ff; }
+    .outside-marker {
+      fill: none;
+      stroke: #ff7b72;
+      stroke-width: 1.5;
+      vector-effect: non-scaling-stroke;
+    }
+    .outside-separator { fill: #ff7b72; }
+  </style>
+
+  <g transform="translate(24 32)">
+    <text class="strong" x="0" y="0">Time band</text>
+    <text class="strong" x="165" y="0">Mon</text>
+    <text class="strong" x="270" y="0">Tue</text>
+    <text class="strong" x="375" y="0">Wed</text>
+    <text class="strong" x="480" y="0">Thu</text>
+    <text class="strong" x="585" y="0">Fri</text>
+    <text class="strong" x="690" y="0">Sat</text>
+    <text class="strong" x="795" y="0">Sun</text>
+
+    <text x="0" y="42">07:48–08:12</text>
+    <circle class="outside-marker" cx="170" cy="36" r="4.25"/>
+    <circle class="git-marker" cx="188" cy="36" r="5"/>
+    <rect class="filesystem-marker" x="201" y="31" width="10" height="10"/>
+    <circle class="git-marker" cx="275" cy="36" r="5"/>
+    <rect class="outside-marker" x="795.75" y="31.75" width="8.5" height="8.5"/>
+
+    <text class="muted" x="0" y="74">⋮ 1h 8m</text>
+
+    <text x="0" y="106">09:20–09:29</text>
+    <rect class="filesystem-marker" x="480" y="95" width="10" height="10"/>
+    <circle class="git-marker" cx="503" cy="100" r="5"/>
+
+    <circle class="git-marker" cx="5" cy="146" r="5"/>
+    <text x="18" y="152"> Git · </text>
+    <rect class="filesystem-marker" x="90" y="141" width="10" height="10"/>
+    <text x="108" y="152"> Filesystem · </text>
+    <circle class="outside-marker" cx="255" cy="146" r="4.25"/>
+    <text class="outside-separator" x="262" y="152">/</text>
+    <rect class="outside-marker" x="274.75" y="141.75" width="8.5" height="8.5"/>
+    <text x="292" y="152"> Outside working hours</text>
+
+    <text x="0" y="184">Working hours: Mo-Fr 08:00-16:30</text>
+
+    <text class="strong" x="0" y="226">Events</text>
+    <text x="96" y="226">7</text>
+    <text class="strong" x="0" y="252">Schedule</text>
+    <text x="96" y="252">5 inside (71.4%) · 2 outside (28.6%)</text>
+    <text class="strong" x="0" y="278">Calendar</text>
+    <text x="96" y="278">6 weekday (85.7%) · 1 weekend (14.3%)</text>
+  </g>
+</svg>

@@ -7,10 +7,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-import workfold.folding.spill as spill_module
-from workfold.configuration import ClusterAnchor
-from workfold.domain.evidence import EvidenceKind, evidence_mask
-from workfold.domain.observations import (
+import wuf.folding.spill as spill_module
+from wuf.configuration import ClusterAnchor
+from wuf.domain.evidence import EvidenceKind, evidence_mask
+from wuf.domain.observations import (
     ActivityMarker,
     ClassifiedMarker,
     EntryType,
@@ -21,8 +21,8 @@ from workfold.domain.observations import (
     TimestampObservation,
     Weekday,
 )
-from workfold.domain.time import datetime_to_utc_ns
-from workfold.folding import (
+from wuf.domain.time import datetime_to_utc_ns
+from wuf.folding import (
     NANOSECONDS_PER_MINUTE,
     NANOSECONDS_PER_SECOND,
     AggregationBuilder,
@@ -31,8 +31,8 @@ from workfold.folding import (
     TimeCluster,
     aggregate_markers,
 )
-from workfold.folding.markers import ChartMarker
-from workfold.folding.spill import ChartMarkerStore
+from wuf.folding.markers import ChartMarker
+from wuf.folding.spill import ChartMarkerStore
 
 GIT_EVIDENCE_MASK = evidence_mask((EvidenceKind.GIT_COMMIT_AUTHOR,))
 FS_EVIDENCE_MASK = evidence_mask((EvidenceKind.FS_FILE_MODIFIED,))

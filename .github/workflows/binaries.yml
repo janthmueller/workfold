@@ -26,11 +26,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
-            asset-name: workfold-linux-ubuntu-22.04
+            asset-name: wuf-linux-ubuntu-22.04
           - os: macos-15
-            asset-name: workfold-macos-15
+            asset-name: wuf-macos-15
           - os: windows-2022
-            asset-name: workfold-windows-2022
+            asset-name: wuf-windows-2022
     steps:
       - name: Select tag
         shell: bash
@@ -73,9 +73,9 @@ jobs:
         with:
           version: "0.11.28"
       - run: uv sync --locked --extra release
-      - run: uv run --locked pyinstaller --noconfirm --clean --paths . --name workfold workfold/__main__.py
+      - run: uv run --locked pyinstaller --noconfirm --clean --paths . --name wuf wuf/__main__.py
       - name: Add project and dependency notices
-        run: uv run --locked python .github/scripts/prepare_binary_bundle.py dist/workfold
+        run: uv run --locked python .github/scripts/prepare_binary_bundle.py dist/wuf
       - name: Verify version
         shell: bash
         env:
@@ -85,14 +85,14 @@ jobs:
             TAG_VERSION="${RELEASE_TAG#v}"
             EXPECTED="$(uv run --locked python -c 'import sys; from packaging.version import Version; print(Version(sys.argv[1]))' "$TAG_VERSION")"
           else
-            EXPECTED="$(uv run --locked python -c 'from importlib.metadata import version; print(version("workfold"))')"
+            EXPECTED="$(uv run --locked python -c 'from importlib.metadata import version; print(version("wuf"))')"
           fi
           if [ "${{ runner.os }}" = Windows ]; then
-            BINARY=dist/workfold/workfold.exe
+            BINARY=dist/wuf/wuf.exe
           else
-            BINARY=dist/workfold/workfold
+            BINARY=dist/wuf/wuf
           fi
-          test "$("$BINARY" --version)" = "workfold $EXPECTED"
+          test "$("$BINARY" --version)" = "wuf $EXPECTED"
           FIXTURE="$(mktemp -d)"
           git -C "$FIXTURE" init --initial-branch=main
           git -C "$FIXTURE" config user.name "CI Fixture"
@@ -107,10 +107,10 @@ jobs:
           grep -F "Git commits discovered: 1" combined-report.txt
           grep -F "filesystem entries discovered: 2; eligible=1, Git admin excluded=1" combined-report.txt
           uv run --locked python -c 'from pathlib import Path; assert b"\x1b" not in Path("combined-report.txt").read_bytes()'
-          test -f dist/workfold/LICENSE
-          test -f dist/workfold/README.md
-          test -f dist/workfold/THIRD_PARTY_NOTICES.md
-          test -n "$(find dist/workfold/licenses -type f -print -quit)"
+          test -f dist/wuf/LICENSE
+          test -f dist/wuf/README.md
+          test -f dist/wuf/THIRD_PARTY_NOTICES.md
+          test -n "$(find dist/wuf/licenses -type f -print -quit)"
           NON_REPOSITORY="$(mktemp -d)"
           if "$BINARY" "$NON_REPOSITORY" --timezone Europe/Berlin >/dev/null 2>&1; then
             echo "Expected a non-repository Git target to fail" >&2
@@ -124,7 +124,7 @@ jobs:
         shell: bash
         run: |
           ARCHIVE="dist/${{ matrix.asset-name }}-${BINARY_ARCH}-${RELEASE_TAG}.tar.gz"
-          tar -czf "$ARCHIVE" -C dist workfold
+          tar -czf "$ARCHIVE" -C dist wuf
           CHECKSUM="$ARCHIVE.sha256"
           shasum -a 256 "$ARCHIVE" > "$CHECKSUM"
           echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
@@ -135,7 +135,7 @@ jobs:
         shell: pwsh
         run: |
           $archive = "dist/${{ matrix.asset-name }}-$env:BINARY_ARCH-$env:RELEASE_TAG.zip"
-          Compress-Archive -Path "dist/workfold/*" -DestinationPath $archive
+          Compress-Archive -Path "dist/wuf/*" -DestinationPath $archive
           $checksum = "$archive.sha256"
           $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
           "$hash  $([IO.Path]::GetFileName($archive))" | Set-Content -Encoding ascii $checksum

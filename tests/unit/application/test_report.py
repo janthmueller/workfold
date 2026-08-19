@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from workfold.application.report import ReportRequirements
+from wuf.application.report import ReportRequirements
 
 
 def test_report_requirements_reject_a_negative_event_limit() -> None:

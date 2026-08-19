@@ -4,9 +4,9 @@ import re
 from pathlib import Path
 
 import pytest
-from workfold.cli import main, parse_invocation, parse_options
-from workfold.cli.config_display import format_resolved_settings
-from workfold.configuration import (
+from wuf.cli import main, parse_invocation, parse_options
+from wuf.cli.config_display import format_resolved_settings
+from wuf.configuration import (
     BandLabel,
     ClusterAnchor,
     CountGrouping,
@@ -18,10 +18,10 @@ from workfold.configuration import (
     UsageError,
     global_config_path,
 )
-from workfold.configuration.schema import DEFAULT_SETTINGS, SETTING_BY_DESTINATION, SETTING_BY_KEY, SETTING_SPECS
-from workfold.domain.evidence import EvidenceKind, EvidenceSelection, evidence_mask
-from workfold.domain.observations import Source
-from workfold.reporting.sanitization import display_width
+from wuf.configuration.schema import DEFAULT_SETTINGS, SETTING_BY_DESTINATION, SETTING_BY_KEY, SETTING_SPECS
+from wuf.domain.evidence import EvidenceKind, EvidenceSelection, evidence_mask
+from wuf.domain.observations import Source
+from wuf.reporting.sanitization import display_width
 
 
 def _environment(tmp_path: Path) -> dict[str, str]:
@@ -51,22 +51,22 @@ def test_setting_schema_is_the_complete_ordered_config_and_cli_catalog() -> None
         (
             "linux",
             {"HOME": "/home/ada", "XDG_CONFIG_HOME": "/var/config"},
-            Path("/var/config/workfold/workfold.toml"),
+            Path("/var/config/wuf/wuf.toml"),
         ),
         (
             "linux",
             {"HOME": "/home/ada", "XDG_CONFIG_HOME": "relative"},
-            Path("/home/ada/.config/workfold/workfold.toml"),
+            Path("/home/ada/.config/wuf/wuf.toml"),
         ),
         (
             "darwin",
             {"HOME": "/Users/ada"},
-            Path("/Users/ada/Library/Application Support/workfold/workfold.toml"),
+            Path("/Users/ada/Library/Application Support/wuf/wuf.toml"),
         ),
         (
             "win32",
             {"USERPROFILE": "C:/Users/Ada", "APPDATA": "C:/Users/Ada/AppData/Roaming"},
-            Path("C:/Users/Ada/AppData/Roaming/workfold/workfold.toml"),
+            Path("C:/Users/Ada/AppData/Roaming/wuf/wuf.toml"),
         ),
     ],
 )
@@ -89,7 +89,7 @@ def test_global_local_and_cli_layers_merge_by_key(tmp_path: Path) -> None:
         'timezone = "Europe/Berlin"\nhours = "Mo-Fr 09:00-17:00"\ncluster-anchor = "midnight"\ngrid = "vertical"\n',
     )
     local_path = _write(
-        project / "workfold.toml",
+        project / "wuf.toml",
         'hours = "Mo-Thu 08:00-16:00"\nband-label = "start"\ncount-grouping = "visual"\n'
         'hide-empty-days = ["weekend"]\n',
     )
@@ -127,7 +127,7 @@ def test_global_and_local_event_styles_merge_by_property_and_selector(tmp_path: 
         '[styles."git:*"]\ncolor = "yellow"\noutside-color = "magenta"\n',
     )
     local_path = _write(
-        project / "workfold.toml",
+        project / "wuf.toml",
         '[styles."git:tag:*"]\nsymbol = "◆"\noutside-symbol = "◇"\n',
     )
 
@@ -155,7 +155,7 @@ def test_pyproject_accepts_nested_event_style_tables(tmp_path: Path) -> None:
     project.mkdir()
     _write(
         project / "pyproject.toml",
-        '[tool.workfold.styles."fs:file:modified"]\nsymbol = "M"\ncolor = "cyan"\n',
+        '[tool.wuf.styles."fs:file:modified"]\nsymbol = "M"\ncolor = "cyan"\n',
     )
 
     invocation = parse_invocation(
@@ -176,7 +176,7 @@ def test_nearest_pyproject_table_is_a_local_config(tmp_path: Path) -> None:
     child.mkdir(parents=True)
     pyproject = _write(
         project / "pyproject.toml",
-        '[project]\nname = "fixture"\n\n[tool.workfold]\ntimezone = "UTC"\ncluster-window = "15m"\n',
+        '[project]\nname = "fixture"\n\n[tool.wuf]\ntimezone = "UTC"\ncluster-window = "15m"\n',
     )
 
     invocation = parse_invocation(
@@ -197,7 +197,7 @@ def test_valid_quoted_pyproject_table_is_discovered_semantically(tmp_path: Path)
     project.mkdir()
     pyproject = _write(
         project / "pyproject.toml",
-        '[project]\nname = "fixture"\n\n[tool."workfold"]\ntimezone = "Europe/Berlin"\n',
+        '[project]\nname = "fixture"\n\n[tool."wuf"]\ntimezone = "Europe/Berlin"\n',
     )
 
     invocation = parse_invocation(
@@ -216,7 +216,7 @@ def test_unrelated_malformed_pyproject_does_not_become_a_config(tmp_path: Path) 
     parent = tmp_path / "parent"
     project = parent / "project"
     project.mkdir(parents=True)
-    parent_config = _write(parent / "workfold.toml", 'timezone = "UTC"\n')
+    parent_config = _write(parent / "wuf.toml", 'timezone = "UTC"\n')
     _write(project / "pyproject.toml", "this is not valid TOML = [\n")
 
     invocation = parse_invocation(
@@ -236,7 +236,7 @@ def test_malformed_pyproject_event_style_table_is_an_actionable_error(tmp_path: 
     project.mkdir()
     _write(
         project / "pyproject.toml",
-        '[tool.workfold.styles."git:*"]\nsymbol = [\n',
+        '[tool.wuf.styles."git:*"]\nsymbol = [\n',
     )
 
     with pytest.raises(UsageError, match="invalid TOML"):
@@ -252,8 +252,8 @@ def test_standalone_config_wins_over_pyproject_in_the_same_directory(tmp_path: P
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
-    _write(project / "pyproject.toml", '[tool.workfold]\ngrid = "horizontal"\n')
-    standalone = _write(project / "workfold.toml", 'grid = "vertical"\n')
+    _write(project / "pyproject.toml", '[tool.wuf]\ngrid = "horizontal"\n')
+    standalone = _write(project / "wuf.toml", 'grid = "vertical"\n')
 
     invocation = parse_invocation(
         [str(project)],
@@ -272,10 +272,10 @@ def test_multiple_paths_must_resolve_to_the_same_local_config(tmp_path: Path) ->
     second = tmp_path / "second"
     first.mkdir()
     second.mkdir()
-    _write(first / "workfold.toml", 'timezone = "UTC"\n')
-    _write(second / "workfold.toml", 'timezone = "Europe/Berlin"\n')
+    _write(first / "wuf.toml", 'timezone = "UTC"\n')
+    _write(second / "wuf.toml", 'timezone = "Europe/Berlin"\n')
 
-    with pytest.raises(UsageError, match="different local Workfold configurations"):
+    with pytest.raises(UsageError, match="different local Wuf configurations"):
         parse_invocation(
             [str(first), str(second)],
             cwd=tmp_path,
@@ -289,7 +289,7 @@ def test_explicit_config_replaces_automatic_discovery(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
     _write(global_config_path(environ=environ, platform_name="linux"), 'grid = "horizontal"\n')
-    _write(project / "workfold.toml", 'grid = "vertical"\n')
+    _write(project / "wuf.toml", 'grid = "vertical"\n')
     explicit = _write(tmp_path / "chosen.toml", 'grid = "none"\ntimezone = "UTC"\n')
 
     invocation = parse_invocation(
@@ -311,7 +311,7 @@ def test_no_config_uses_only_builtins_and_cli(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
     _write(global_config_path(environ=environ, platform_name="linux"), 'grid = "horizontal"\n')
-    _write(project / "workfold.toml", 'grid = "vertical"\n')
+    _write(project / "wuf.toml", 'grid = "vertical"\n')
 
     invocation = parse_invocation(
         [str(project), "--no-config", "--grid", "both"],
@@ -330,7 +330,7 @@ def test_internal_option_parser_is_isolated_from_developer_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _write(tmp_path / "workfold.toml", 'grid = "vertical"\n')
+    _write(tmp_path / "wuf.toml", 'grid = "vertical"\n')
     monkeypatch.chdir(tmp_path)
 
     assert parse_options([]).terminal.grid_style is GridStyle.NONE
@@ -344,7 +344,7 @@ def test_local_array_replaces_and_can_clear_a_global_array(tmp_path: Path) -> No
         global_config_path(environ=environ, platform_name="linux"),
         'git-identity = ["global@example.test"]\nhide-empty-days = ["weekend"]\n',
     )
-    _write(project / "workfold.toml", 'git-identity = []\nhide-empty-days = ["all"]\n')
+    _write(project / "wuf.toml", 'git-identity = []\nhide-empty-days = ["all"]\n')
 
     invocation = parse_invocation(
         [str(project)],
@@ -366,7 +366,7 @@ def test_local_sentinels_can_restore_dynamic_defaults(tmp_path: Path) -> None:
         global_config_path(environ=environ, platform_name="linux"),
         'timezone = "Europe/Berlin"\ndisplay-hours = "06:00-22:00"\n',
     )
-    _write(project / "workfold.toml", 'timezone = "local"\ndisplay-hours = "auto"\n')
+    _write(project / "wuf.toml", 'timezone = "local"\ndisplay-hours = "auto"\n')
 
     invocation = parse_invocation(
         [str(project)],
@@ -399,7 +399,7 @@ def test_higher_precedence_profile_replaces_lower_custom_events(tmp_path: Path) 
         global_config_path(environ=environ, platform_name="linux"),
         'events = ["git:file-change:committer"]\n',
     )
-    _write(project / "workfold.toml", 'profile = "portable"\n')
+    _write(project / "wuf.toml", 'profile = "portable"\n')
 
     options = parse_invocation(
         [str(project)],
@@ -435,7 +435,7 @@ def test_higher_precedence_profile_discards_lower_disabled_collector_settings(
     project = tmp_path / "project"
     project.mkdir()
     _write(global_config_path(environ=environ, platform_name="linux"), global_setting)
-    _write(project / "workfold.toml", f'profile = "{local_profile}"\n')
+    _write(project / "wuf.toml", f'profile = "{local_profile}"\n')
 
     options = parse_invocation(
         [str(project)],
@@ -457,7 +457,7 @@ def test_higher_precedence_profile_replaces_lower_custom_source_details(tmp_path
         global_config_path(environ=environ, platform_name="linux"),
         'events = ["fs:file:modified"]\ninclude-ignored = true\nfs-exclude = ["*.log"]\n',
     )
-    _write(project / "workfold.toml", 'profile = "git"\n')
+    _write(project / "wuf.toml", 'profile = "git"\n')
 
     invocation = parse_invocation(
         [str(project)],
@@ -552,7 +552,7 @@ def test_higher_precedence_custom_events_discard_lower_disabled_collector_settin
     project = tmp_path / "project"
     project.mkdir()
     _write(global_config_path(environ=environ, platform_name="linux"), global_settings)
-    _write(project / "workfold.toml", local_events)
+    _write(project / "wuf.toml", local_events)
 
     options = parse_invocation(
         [str(project)],
@@ -577,7 +577,7 @@ def test_higher_precedence_non_commit_events_discard_lower_commit_reachability(
         global_config_path(environ=environ, platform_name="linux"),
         'git-commits-from = "all-refs"\n',
     )
-    _write(project / "workfold.toml", 'events = ["git:tag:tagger"]\n')
+    _write(project / "wuf.toml", 'events = ["git:tag:tagger"]\n')
 
     invocation = parse_invocation(
         [str(project)],
@@ -595,7 +595,7 @@ def test_profile_and_custom_events_cannot_share_one_config_layer(tmp_path: Path)
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
-    config = _write(project / "workfold.toml", 'profile = "git"\nevents = ["git:tag:tagger"]\n')
+    config = _write(project / "wuf.toml", 'profile = "git"\nevents = ["git:tag:tagger"]\n')
 
     with pytest.raises(UsageError, match=rf"{re.escape(str(config))}.*same precedence layer"):
         parse_invocation(
@@ -616,7 +616,7 @@ def test_invalid_selection_family_in_lower_layer_cannot_be_hidden_by_partial_ove
         global_config_path(environ=environ, platform_name="linux"),
         'profile = "fs"\nevents = ["git:tag:tagger"]\n',
     )
-    _write(project / "workfold.toml", 'profile = "git"\n')
+    _write(project / "wuf.toml", 'profile = "git"\n')
 
     with pytest.raises(UsageError, match=rf"{re.escape(str(global_path))}.*same precedence layer"):
         parse_invocation(
@@ -635,7 +635,7 @@ def test_incompatible_inherited_list_selector_identifies_its_config_file(tmp_pat
         global_config_path(environ=environ, platform_name="linux"),
         'list = ["git:commit:author"]\n',
     )
-    _write(project / "workfold.toml", 'events = ["fs:file:modified"]\n')
+    _write(project / "wuf.toml", 'events = ["fs:file:modified"]\n')
 
     expected = rf"{re.escape(str(global_path))}: list: .*matches no event kind enabled"
     with pytest.raises(UsageError, match=expected):
@@ -651,7 +651,7 @@ def test_combined_profile_is_supported_in_configuration(tmp_path: Path) -> None:
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
-    _write(project / "workfold.toml", 'profile = "both"\n')
+    _write(project / "wuf.toml", 'profile = "both"\n')
 
     options = parse_invocation(
         [str(project)],
@@ -668,9 +668,9 @@ def test_retired_mode_key_is_rejected_in_configuration(tmp_path: Path) -> None:
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
-    _write(project / "workfold.toml", 'mode = "both"\n')
+    _write(project / "wuf.toml", 'mode = "both"\n')
 
-    with pytest.raises(UsageError, match="unknown Workfold configuration key.*mode"):
+    with pytest.raises(UsageError, match="unknown Wuf configuration key.*mode"):
         parse_invocation(
             [str(project)],
             cwd=tmp_path,
@@ -683,7 +683,7 @@ def test_profile_and_independent_scope_details_can_share_one_layer(tmp_path: Pat
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
-    _write(project / "workfold.toml", 'profile = "portable"\ngit-commits-from = "head"\n')
+    _write(project / "wuf.toml", 'profile = "portable"\ngit-commits-from = "head"\n')
 
     options = parse_invocation(
         [str(project)],
@@ -702,7 +702,7 @@ def test_cross_setting_error_identifies_origins_from_distinct_config_layers(tmp_
     project.mkdir()
     global_path = global_config_path(environ=environ, platform_name="linux")
     _write(global_path, 'profile = "fs"\n')
-    local_path = _write(project / "workfold.toml", 'git-commits-from = "head"\n')
+    local_path = _write(project / "wuf.toml", 'git-commits-from = "head"\n')
 
     with pytest.raises(UsageError) as captured:
         parse_invocation(
@@ -723,7 +723,7 @@ def test_cli_can_negate_booleans_and_disable_a_configured_event_list(tmp_path: P
     project = tmp_path / "project"
     project.mkdir()
     _write(
-        project / "workfold.toml",
+        project / "wuf.toml",
         'no-color = true\nlist = ["outside"]\nlimit = 7\ncoverage = true\nstrict = true\nverbose = true\n',
     )
 
@@ -762,7 +762,7 @@ def test_cli_can_negate_booleans_and_disable_a_configured_event_list(tmp_path: P
 @pytest.mark.parametrize(
     ("content", "message"),
     [
-        ('unknown-setting = "value"\n', "unknown Workfold configuration key"),
+        ('unknown-setting = "value"\n', "unknown Wuf configuration key"),
         ('coverage = "yes"\n', "must be true or false"),
         ('events = "git:commit:author"\n', "must be an array of strings"),
         ('profile = "remote"\n', "must be one of"),
@@ -783,7 +783,7 @@ def test_invalid_configuration_is_an_actionable_usage_error(
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
-    _write(project / "workfold.toml", content)
+    _write(project / "wuf.toml", content)
 
     with pytest.raises(UsageError, match=message):
         parse_invocation(
@@ -798,7 +798,7 @@ def test_domain_value_errors_identify_the_config_file_and_key(tmp_path: Path) ->
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
-    config = _write(project / "workfold.toml", 'hours = "not a schedule"\n')
+    config = _write(project / "wuf.toml", 'hours = "not a schedule"\n')
 
     expected = rf"{re.escape(str(config.resolve()))}: hours:"
     with pytest.raises(UsageError, match=expected):
@@ -816,7 +816,7 @@ def test_midnight_anchor_error_identifies_values_from_distinct_config_layers(tmp
     project.mkdir()
     global_path = global_config_path(environ=environ, platform_name="linux")
     _write(global_path, 'cluster-anchor = "midnight"\n')
-    local_path = _write(project / "workfold.toml", 'cluster-window = "1m30s"\n')
+    local_path = _write(project / "wuf.toml", 'cluster-window = "1m30s"\n')
 
     with pytest.raises(UsageError) as captured:
         parse_invocation(
@@ -838,7 +838,7 @@ def test_show_empty_bands_conflict_identifies_config_origins(tmp_path: Path) -> 
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
-    local_path = _write(project / "workfold.toml", "show-empty-bands = true\n")
+    local_path = _write(project / "wuf.toml", "show-empty-bands = true\n")
 
     with pytest.raises(UsageError) as captured:
         parse_invocation(
@@ -859,7 +859,7 @@ def test_configured_show_empty_bands_is_valid_with_midnight_anchor(tmp_path: Pat
     project = tmp_path / "project"
     project.mkdir()
     local_path = _write(
-        project / "workfold.toml",
+        project / "wuf.toml",
         'cluster-anchor = "midnight"\nshow-empty-bands = true\n',
     )
 
@@ -892,7 +892,7 @@ def test_show_config_prints_values_origins_and_files_without_collecting(
     project = tmp_path / "project"
     project.mkdir()
     local = _write(
-        project / "workfold.toml",
+        project / "wuf.toml",
         'timezone = "UTC"\ngrid = "vertical"\n\n[styles."git:tag:*"]\nsymbol = "◆"\ncolor = "magenta"\n',
     )
     monkeypatch.chdir(project)
@@ -941,7 +941,7 @@ def test_normal_cli_run_applies_project_defaults(
     project = tmp_path / "project"
     project.mkdir()
     _write(
-        project / "workfold.toml",
+        project / "wuf.toml",
         'events = ["fs:file:modified"]\ntime = "all"\ntimezone = "UTC"\nno-color = true\n\n'
         '[styles."fs:file:modified"]\nsymbol = "M"\ncolor = "cyan"\n',
     )
@@ -957,11 +957,11 @@ def test_normal_cli_run_applies_project_defaults(
     assert "Events" in output
 
 
-def test_explicit_pyproject_requires_a_workfold_table(tmp_path: Path) -> None:
+def test_explicit_pyproject_requires_a_wuf_table(tmp_path: Path) -> None:
     environ = _environment(tmp_path)
     pyproject = _write(tmp_path / "pyproject.toml", '[project]\nname = "fixture"\n')
 
-    with pytest.raises(UsageError, match=r"no \[tool.workfold\] table"):
+    with pytest.raises(UsageError, match=r"no \[tool.wuf\] table"):
         parse_invocation(
             ["--config", str(pyproject)],
             cwd=tmp_path,

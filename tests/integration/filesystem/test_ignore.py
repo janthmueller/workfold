@@ -9,8 +9,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
-import workfold.collection.filesystem.ignore.inventory as inventory_module
-from workfold.collection.filesystem.ignore import (
+import wuf.collection.filesystem.ignore.inventory as inventory_module
+from wuf.collection.filesystem.ignore import (
     ExclusionPatternError,
     ExplicitExcluder,
     GitFilesystemInventory,
@@ -25,7 +25,7 @@ from workfold.collection.filesystem.ignore import (
     is_nested_repository_boundary,
     looks_like_bare_repository,
 )
-from workfold.collection.filesystem.ignore.inventory_spool import InventoryStorageError
+from wuf.collection.filesystem.ignore.inventory_spool import InventoryStorageError
 
 from support.git_repo import GitRepo
 

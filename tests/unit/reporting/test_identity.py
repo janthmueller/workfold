@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 # Identity glyph allocation belongs to terminal presentation, not the domain.
-from workfold.domain.identity import MarkerIdentity, RecordedIdentity
-from workfold.reporting.terminal.identity import allocate_identity_symbols
+from wuf.domain.identity import MarkerIdentity, RecordedIdentity
+from wuf.reporting.terminal.identity import allocate_identity_symbols
 
 
 def _identity(name: str, email: str) -> MarkerIdentity:

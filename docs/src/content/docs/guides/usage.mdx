@@ -1,21 +1,21 @@
 ---
-title: Using Workfold
+title: Using Wuf
 description: Select local activity, schedules, sources, and terminal detail.
 ---
 
 :::note[Alpha surface]
 The terminal behavior below, including the sparse chart, is implemented. The
-CLI remains an alpha surface, so use `workfold --help` for the exact build you
+CLI remains an alpha surface, so use `wuf --help` for the exact build you
 are running.
 :::
 
 ## Default view
 
 ```bash
-workfold [PATH ...]
+wuf [PATH ...]
 ```
 
-With no path, Workfold uses `.`. For Git collection, a path selects its entire
+With no path, Wuf uses `.`. For Git collection, a path selects its entire
 containing repository, not a history pathspec. Multiple paths in the same
 repository are deduplicated. If the selected path is not in a repository, use
 `-p fs` or pass a repository path.
@@ -39,7 +39,7 @@ checked-out branch or detached `HEAD`.
 
 ## Configuration files
 
-Workfold can load personal and project defaults without changing the meaning of
+Wuf can load personal and project defaults without changing the meaning of
 its CLI flags. Resolution is deterministic:
 
 ```text
@@ -55,20 +55,20 @@ The automatic global file is platform-specific:
 
 | Platform | Location |
 | --- | --- |
-| Linux and other Unix | `${XDG_CONFIG_HOME:-~/.config}/workfold/workfold.toml` |
-| macOS | `~/Library/Application Support/workfold/workfold.toml` |
-| Windows | `%APPDATA%\workfold\workfold.toml` |
+| Linux and other Unix | `${XDG_CONFIG_HOME:-~/.config}/wuf/wuf.toml` |
+| macOS | `~/Library/Application Support/wuf/wuf.toml` |
+| Windows | `%APPDATA%\wuf\wuf.toml` |
 
-Starting at each selected `PATH`, Workfold searches upward for the nearest
-`workfold.toml` or a `pyproject.toml` containing `[tool.workfold]`. A standalone
-`workfold.toml` wins if both exist in the same directory. Multiple input paths
+Starting at each selected `PATH`, Wuf searches upward for the nearest
+`wuf.toml` or a `pyproject.toml` containing `[tool.wuf]`. A standalone
+`wuf.toml` wins if both exist in the same directory. Multiple input paths
 must resolve to the same project configuration because one chart has one
-timezone, schedule, and rendering policy; otherwise Workfold asks for an
+timezone, schedule, and rendering policy; otherwise Wuf asks for an
 explicit choice.
 
 A standalone file stores keys at its root:
 
-```toml title="workfold.toml"
+```toml title="wuf.toml"
 time = "this-week"
 profile = "git"
 
@@ -87,12 +87,12 @@ hide-empty-days = ["weekend"]
 The same settings fit inside a Python project file:
 
 ```toml title="pyproject.toml"
-[tool.workfold]
+[tool.wuf]
 timezone = "Europe/Berlin"
 hours = "Mo-Fr 08:00-16:30"
 grid = "vertical"
 
-[tool.workfold.styles."git:tag:*"]
+[tool.wuf.styles."git:tag:*"]
 symbol = "◆"
 color = "magenta"
 outside-symbol = "◇"
@@ -103,9 +103,9 @@ outside-color = "bright_red"
 
 Persistent source-marker visuals use the same exact and wildcard selectors as
 `--events`. In a standalone file, put style rules beneath `styles`; in a
-Python project, put them beneath `tool.workfold.styles`:
+Python project, put them beneath `tool.wuf.styles`:
 
-```toml title="workfold.toml"
+```toml title="wuf.toml"
 [styles."git:commit:*"]
 symbol = "C"
 color = "green"
@@ -196,8 +196,8 @@ configuration precedence whenever they apply to the resulting event sources.
 Inspect the fully validated result without collecting Git or filesystem data:
 
 ```bash
-workfold . --show-config
-workfold . --grid both --show-config  # includes this CLI override and its origin
+wuf . --show-config
+wuf . --grid both --show-config  # includes this CLI override and its origin
 ```
 
 `--show-config` prints the loaded files followed by every effective value and
@@ -215,12 +215,12 @@ defaults.
 
 Use one exact file and disable automatic global/project discovery with
 `--config FILE`. An explicitly named `pyproject.toml` still reads
-`[tool.workfold]`; any other filename uses the standalone root schema. Use
+`[tool.wuf]`; any other filename uses the standalone root schema. Use
 `--no-config` for built-ins plus CLI only:
 
 ```bash
-workfold . --config ~/workfold/client.toml
-workfold . --no-config
+wuf . --config ~/wuf/client.toml
+wuf . --no-config
 ```
 
 ## Select dates
@@ -229,30 +229,30 @@ workfold . --no-config
 
 ```bash
 # One ISO week, or a union of repeated weeks
-workfold . -t 2026-W31
-workfold . -t 2026-W30 -t 2026-W31
+wuf . -t 2026-W31
+wuf . -t 2026-W30 -t 2026-W31
 
 # Inclusive local calendar dates; either endpoint may be open
-workfold . -t 2026-07-01..2026-07-31
-workfold . -t 2026-01-01..
-workfold . -t ..2026-07-31
+wuf . -t 2026-07-01..2026-07-31
+wuf . -t 2026-01-01..
+wuf . -t ..2026-07-31
 
 # A rolling elapsed window ending when this run starts
-workfold . -t 2w
-workfold . -t 2w3d
-workfold . -t 6h30m
+wuf . -t 2w
+wuf . -t 2w3d
+wuf . -t 6h30m
 
 # Every available date for the otherwise selected profile/event scope
-workfold . -t all
+wuf . -t all
 ```
 
 `this-week`, ranges, and `all` occur once. Repetition is reserved for ISO weeks;
 mixing selector kinds is invalid. All selected dates still fold onto one
-Monday-to-Sunday chart. Internally, Workfold converts inclusive calendar choices
+Monday-to-Sunday chart. Internally, Wuf converts inclusive calendar choices
 to half-open instant ranges so a boundary event is not counted twice.
 
 Rolling selectors are also single-use and form the half-open instant range
-`[captured-now - duration, captured-now)`. Workfold captures `now` once for the
+`[captured-now - duration, captured-now)`. Wuf captures `now` once for the
 run. Components use ordered, nonrepeating `w`, `d`, `h`, and `m` units;
 `w` is seven elapsed 24-hour days, `d` is 24 elapsed hours, and `m` means
 minutes. This fixed-duration behavior remains exact across daylight-saving
@@ -266,15 +266,15 @@ time, and schedule classification are derived. This preserves daylight-saving
 rules.
 
 ```bash
-workfold . --timezone Europe/Berlin
-workfold . --hours 'Mo-Fr 08:00-16:30'
-workfold . --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
-workfold . --hours 'Mo-Fr 08:00-12:00,13:00-16:30'
-workfold . --hours all
+wuf . --timezone Europe/Berlin
+wuf . --hours 'Mo-Fr 08:00-16:30'
+wuf . --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
+wuf . --hours 'Mo-Fr 08:00-12:00,13:00-16:30'
+wuf . --hours all
 ```
 
 Schedule intervals are half-open: the start is inside and the end is outside.
-A weekday accepts either Workfold's two-letter token (`Mo`, `Th`) or its common
+A weekday accepts either Wuf's two-letter token (`Mo`, `Th`) or its common
 three-letter English alias (`Mon`, `Thu`), case-insensitively. Output is
 normalized to the two-letter form.
 A weekday with no interval is entirely outside. An interval whose end is
@@ -289,7 +289,7 @@ it does not select more dates, enable sources, or force empty chart rows.
 ## Read and tune the chart
 
 By default, the chart renders only occupied bands in implicit
-`00:00`-toward-`24:00` order and compresses empty time. Workfold sorts visible
+`00:00`-toward-`24:00` order and compresses empty time. Wuf sorts visible
 events by localized wall-clock time and shares every band across all visible
 weekday columns.
 
@@ -325,24 +325,24 @@ anchoring requires a whole-minute result. The default is `1h`; smaller values
 such as `1m30s` and `10m` are custom views:
 
 ```bash
-workfold . --cluster-window 1m30s --cluster-anchor event
-workfold . --cluster-window 10m
-workfold . --cluster-window 1h
-workfold . --cluster-window 1h5m --cluster-anchor midnight
-workfold . --cluster-window '1h 5m'
-workfold . --cluster-anchor event
-workfold . --cluster-anchor midnight --show-empty-bands
-workfold . --band-label range
-workfold . --band-label start
+wuf . --cluster-window 1m30s --cluster-anchor event
+wuf . --cluster-window 10m
+wuf . --cluster-window 1h
+wuf . --cluster-window 1h5m --cluster-anchor midnight
+wuf . --cluster-window '1h 5m'
+wuf . --cluster-anchor event
+wuf . --cluster-anchor midnight --show-empty-bands
+wuf . --band-label range
+wuf . --band-label start
 ```
 
 Internal grid lines are optional:
 
 ```bash
-workfold . --grid none        # default
-workfold . --grid vertical
-workfold . --grid horizontal
-workfold . --grid both
+wuf . --grid none        # default
+wuf . --grid vertical
+wuf . --grid horizontal
+wuf . --grid both
 ```
 
 Vertical lines separate the time band from each visible weekday column.
@@ -355,12 +355,12 @@ Weekday columns are independently controllable without filtering the event
 scope:
 
 ```bash
-workfold . -E all
-workfold . -H weekend
-workfold . --hide-empty-days weekend
-workfold . --hide-empty-days weekdays
-workfold . --hide-empty-days mon,wed,sunday
-workfold . --hide-days weekend --hide-empty-days weekdays
+wuf . -E all
+wuf . -H weekend
+wuf . --hide-empty-days weekend
+wuf . --hide-empty-days weekdays
+wuf . --hide-empty-days mon,wed,sunday
+wuf . --hide-days weekend --hide-empty-days weekdays
 ```
 
 `-H` is short for `--hide-days`; `-E` is short for `--hide-empty-days`. Both
@@ -407,8 +407,8 @@ Use `--show-empty-bands` to replace sparse gap compression with every fixed
 interval in the resolved display range:
 
 ```bash
-workfold . --cluster-anchor midnight --show-empty-bands
-workfold . --cluster-anchor midnight --show-empty-bands --display-hours 06:30-20:15
+wuf . --cluster-anchor midnight --show-empty-bands
+wuf . --cluster-anchor midnight --show-empty-bands --display-hours 06:30-20:15
 ```
 
 The option requires midnight anchoring. Event-anchored bands begin at events,
@@ -426,7 +426,7 @@ Use `--marker-style identity` when contributor recognition matters more than a
 single Git source symbol:
 
 ```bash
-workfold . -t 2w --marker-style identity
+wuf . -t 2w --marker-style identity
 ```
 
 Each visible Git marker then uses a deterministic code derived from the exact
@@ -472,7 +472,7 @@ without those verbose details. Partial collection, explicit narrowing,
 unsupported capabilities, and nonzero cropping remain visible by default as
 exception notices.
 
-Interactive terminals show one transient collection status while Workfold is
+Interactive terminals show one transient collection status while Wuf is
 busy; it is erased before the report. Redirected output and redirected errors
 stay free of progress text. The adaptive layout remains usable down to 40
 columns, while wider terminals devote more space to event cells and details.
@@ -480,7 +480,7 @@ columns, while wider terminals devote more space to event cells and details.
 `--display-hours` crops chart rows only. It does not change classification:
 
 ```bash
-workfold . --hours 'Mo-Fr 08:00-16:30' --display-hours '06:00-22:00'
+wuf . --hours 'Mo-Fr 08:00-16:30' --display-hours '06:00-22:00'
 ```
 
 A compact notice after the summary reports nonzero event counts hidden before or
@@ -495,12 +495,12 @@ Profiles provide common named event sets. `-e/--events` is the exact alternative
 when a profile is not the question you want to ask:
 
 ```bash
-workfold . --events git:commit:author
-workfold . --events git:commit:committer git:tag:tagger
-workfold . --events git:file-change:author fs:file:modified
-workfold . --events 'git:*:committer'
-workfold . --events 'fs:*'
-workfold . --events '*'
+wuf . --events git:commit:author
+wuf . --events git:commit:committer git:tag:tagger
+wuf . --events git:file-change:author fs:file:modified
+wuf . --events 'git:*:committer'
+wuf . --events 'fs:*'
+wuf . --events '*'
 ```
 
 The supported identifiers are:
@@ -537,7 +537,7 @@ those independent axes are changed explicitly.
 
 Because `--events` and `--list` accept one or more whitespace-separated values,
 put every positional `PATH` before either option. If a generated command must
-place paths later, terminate option values explicitly: `workfold --events
+place paths later, terminate option values explicitly: `wuf --events
 git:commit:author -- path/to/repo`.
 
 ## Inspect Git evidence
@@ -546,16 +546,16 @@ Git event kind, timestamp role, reachability, and identity are independently
 controllable:
 
 ```bash
-workfold . --events git:commit:author
-workfold . --events git:commit:committer
-workfold . --events git:commit:author git:commit:committer
-workfold . --events git:file-change:author
-workfold . --events git:file-change:committer
-workfold . --events git:tag:tagger git:reflog:update
-workfold . --git-commits-from head
-workfold . --git-commits-from local-branches
-workfold . --git-commits-from all-refs
-workfold . --git-identity 'Ada' --git-identity 'ada@example.com'
+wuf . --events git:commit:author
+wuf . --events git:commit:committer
+wuf . --events git:commit:author git:commit:committer
+wuf . --events git:file-change:author
+wuf . --events git:file-change:committer
+wuf . --events git:tag:tagger git:reflog:update
+wuf . --git-commits-from head
+wuf . --git-commits-from local-branches
+wuf . --git-commits-from all-refs
+wuf . --git-identity 'Ada' --git-identity 'ada@example.com'
 ```
 
 Commit reachability has three explicit scopes:
@@ -571,7 +571,7 @@ A commit is considered once by object ID even when several selected refs reach
 it. Reachability is established before timestamp-role selection. Each requested
 author or committer role is then matched independently, so a reachable commit
 can contribute its author event, committer event, both, or neither. For bounded
-queries Workfold may apply that exact predicate during its lightweight revision
+queries Wuf may apply that exact predicate during its lightweight revision
 scan; known non-matching values are outside the query rather than reported as
 filtered coverage outcomes. Ordinary `git --since` is not used for author-date
 selection because author timestamps are not ordered by commit topology.
@@ -579,7 +579,7 @@ selection because author timestamps are not ordered by commit topology.
 Commit and file-change roles are separate selectors: a request may show commit
 author events while deriving file changes only at committer times. File-change
 observations inherit the matching timestamp role and identity of their commit.
-Workfold derives commit-versus-parent tree differences only for commits with at
+Wuf derives commit-versus-parent tree differences only for commits with at
 least one matching role, producing the same result as deriving every reachable
 change and filtering afterward. Commits known only to an unfetched remote or no
 longer reachable from the selected refs are outside the commit scope. A full
@@ -605,7 +605,7 @@ no tag observation, as reported by coverage.
 
 Annotated tags carry tagger timestamps; lightweight tags have no independent
 tagger time. Reflogs are local and may be disabled or expired. Git stores tree
-snapshots, not human file-change actions: Workfold derives each change from the
+snapshots, not human file-change actions: Wuf derives each change from the
 commit-versus-first-parent tree difference (or root-versus-empty tree), uses
 Git's reported change kind, and preserves renames when Git reports one.
 
@@ -615,18 +615,18 @@ Filesystem collection scans current metadata rather than reconstructing editing
 history:
 
 ```bash
-workfold . --events fs:file:birth fs:file:modified
-workfold . --events fs:directory:metadata-changed fs:symlink:accessed
-workfold . --events 'fs:*:modified'
-workfold . --events 'fs:directory:*'
-workfold . -p fs
-workfold . -p full
+wuf . --events fs:file:birth fs:file:modified
+wuf . --events fs:directory:metadata-changed fs:symlink:accessed
+wuf . --events 'fs:*:modified'
+wuf . --events 'fs:directory:*'
+wuf . -p fs
+wuf . -p full
 ```
 
 Timestamp labels are deliberately precise:
 
 - `birth` uses a real birth/creation time only where available; on Linux,
-  Workfold requests `STATX_BTIME` through `statx`;
+  Wuf requests `STATX_BTIME` through `statx`;
 - `modified` is mtime;
 - `metadata-changed` is POSIX metadata-change ctime, never creation time;
 - `accessed` is atime and is labeled potentially unreliable.
@@ -641,9 +641,9 @@ time is reported as unavailable rather than receiving a fabricated ctime value.
 In a Git worktree, standard Git ignore semantics are respected by default:
 
 ```bash
-workfold . -p fs --respect-gitignore
-workfold . -p fs --include-ignored
-workfold . -p fs --fs-exclude node_modules --fs-exclude '*.log'
+wuf . -p fs --respect-gitignore
+wuf . -p fs --include-ignored
+wuf . -p fs --fs-exclude node_modules --fs-exclude '*.log'
 ```
 
 Tracked files remain included even if a current ignore pattern matches them.
@@ -655,7 +655,7 @@ included. Event profiles never alter ignore policy.
 
 An embedded Git repository inherits the containing scan's visibility decision
 at its boundary. If the outer repository ignores that directory, the normal
-scan prunes it; if it is visible, Workfold gives it an independent scan context
+scan prunes it; if it is visible, Wuf gives it an independent scan context
 so its own ignore rules apply below the boundary. Naming the embedded
 repository as an explicit `PATH` also scans it independently, even when a
 separately selected parent repository ignores it.
@@ -663,11 +663,11 @@ separately selected parent repository ignores it.
 ## Choose an event profile
 
 ```bash
-workfold . -p git
-workfold . -p fs
-workfold . -p both
-workfold . -t all -p portable
-workfold . -t all -p full --git-commits-from all-refs --include-ignored
+wuf . -p git
+wuf . -p fs
+wuf . -p both
+wuf . -t all -p portable
+wuf . -t all -p full --git-commits-from all-refs --include-ignored
 ```
 
 `-p/--profile` selects a fixed, named event set and defaults to `git`. A profile
@@ -707,7 +707,7 @@ Friday 09:00    Bob creates annotated tag v1.0       → tagger date
 
 The `git` profile shows the Monday author event. Portable retains all three
 object-backed observations. If one commit's author and committer timestamps are
-identical, Workfold may plot one marker carrying both roles; provenance and
+identical, Wuf may plot one marker carrying both roles; provenance and
 coverage still retain both timestamp roles.
 
 Portable selects commit author and committer dates plus annotated-tag tagger
@@ -719,7 +719,7 @@ changed file.
 
 These timestamps travel when their Git objects are transferred, but they do
 not say when an object was pushed or published. Portable therefore excludes
-local reflogs and filesystem metadata, and Workfold never invents push,
+local reflogs and filesystem metadata, and Wuf never invents push,
 branch-creation, or lightweight-tag creation times.
 
 ### Full: What do all supported event kinds show?
@@ -746,29 +746,29 @@ output.
 ## Control terminal detail
 
 ```bash
-workfold . --cluster-window 1m30s --cluster-anchor event
-workfold . --cluster-window 10m
-workfold . --cluster-window 1h
-workfold . --cluster-window 1h5m --cluster-anchor midnight
-workfold . --cluster-window '1h 5m'
-workfold . --band-label start
-workfold . --cluster-anchor midnight --show-empty-bands
-workfold . --hours all
-workfold . --marker-style identity
-workfold . --count-grouping visual
-workfold . --grid both
-workfold . --hide-empty-days all
-workfold . --hide-days weekend
-workfold . --color
-workfold . --no-color
-NO_COLOR=1 workfold .
-workfold . --list all --limit 50
-workfold . --list outside
-workfold . --events git:tag:tagger fs:file:accessed --list git:tag:tagger fs:file:accessed
-workfold . --events git:tag:tagger fs:file:accessed --list outside git:tag:tagger fs:file:accessed
-workfold . --coverage
-workfold . --strict
-workfold . --verbose
+wuf . --cluster-window 1m30s --cluster-anchor event
+wuf . --cluster-window 10m
+wuf . --cluster-window 1h
+wuf . --cluster-window 1h5m --cluster-anchor midnight
+wuf . --cluster-window '1h 5m'
+wuf . --band-label start
+wuf . --cluster-anchor midnight --show-empty-bands
+wuf . --hours all
+wuf . --marker-style identity
+wuf . --count-grouping visual
+wuf . --grid both
+wuf . --hide-empty-days all
+wuf . --hide-days weekend
+wuf . --color
+wuf . --no-color
+NO_COLOR=1 wuf .
+wuf . --list all --limit 50
+wuf . --list outside
+wuf . --events git:tag:tagger fs:file:accessed --list git:tag:tagger fs:file:accessed
+wuf . --events git:tag:tagger fs:file:accessed --list outside git:tag:tagger fs:file:accessed
+wuf . --coverage
+wuf . --strict
+wuf . --verbose
 ```
 
 Color is automatic by default and is emitted only for a capable terminal.

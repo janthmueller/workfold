@@ -1,7 +1,7 @@
-# Contributing to Workfold
+# Contributing to Wuf
 
-Thanks for helping improve Workfold. Start with the
-[development guide](https://janthmueller.github.io/workfold/guides/development/),
+Thanks for helping improve Wuf. Start with the
+[development guide](https://janthmueller.github.io/wuf/guides/development/),
 which documents the architecture, collector invariants, tests, and release
 flow.
 

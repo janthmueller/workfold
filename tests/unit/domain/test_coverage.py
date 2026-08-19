@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from workfold.domain.coverage import (
+from wuf.domain.coverage import (
     Capability,
     CapabilityKind,
     CapabilityReason,
@@ -21,7 +21,7 @@ from workfold.domain.coverage import (
     finalize_coverage_fragments,
     merge_ledgers,
 )
-from workfold.domain.observations import EntryType, RecordKind, Source, TimestampKind
+from wuf.domain.observations import EntryType, RecordKind, Source, TimestampKind
 
 RECORD_KEY = RecordCoverageKey(Source.GIT, "/repo", RecordKind.COMMIT)
 AUTHOR_KEY = TimestampCoverageKey(Source.GIT, "/repo", RecordKind.COMMIT, TimestampKind.GIT_AUTHOR)

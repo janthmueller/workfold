@@ -5,15 +5,15 @@ import stat
 from pathlib import Path, PurePosixPath
 
 import pytest
-from workfold.collection.filesystem.git_inventory import (
+from wuf.collection.filesystem.git_inventory import (
     _InventoryCandidate,  # pyright: ignore[reportPrivateUsage]
     _ValidatedInventoryPublisher,  # pyright: ignore[reportPrivateUsage]
 )
-from workfold.collection.filesystem.inventory_metadata import (
+from wuf.collection.filesystem.inventory_metadata import (
     AnchoredInventoryMetadata,
     anchored_inventory_metadata_supported,
 )
-from workfold.collection.filesystem.scan import DirectorySafetyError, RootSnapshot
+from wuf.collection.filesystem.scan import DirectorySafetyError, RootSnapshot
 
 pytestmark = pytest.mark.skipif(
     not anchored_inventory_metadata_supported(),

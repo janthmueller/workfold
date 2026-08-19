@@ -1,4 +1,4 @@
-"""Synchronize Workfold's release version into its committed uv lockfile."""
+"""Synchronize Wuf's release version into committed release metadata."""
 
 from __future__ import annotations
 
@@ -12,10 +12,14 @@ from pathlib import Path
 from packaging.version import InvalidVersion, Version
 
 _VERSION_LINE = re.compile(r'version = "[^"]+"(?P<newline>\r?\n)?\Z')
+_COMPATIBILITY_DEPENDENCIES_LINE = re.compile(
+    r'^dependencies = \["wuf[^"]*"\](?P<newline>\r?\n)?$',
+    re.MULTILINE,
+)
 
 
 def synchronize_version(repository: Path, requested_version: str) -> None:
-    """Update exactly the editable Workfold package block and validate the result."""
+    """Update the editable lock entry and Workfold compatibility requirement."""
 
     try:
         normalized = str(Version(requested_version))
@@ -29,31 +33,56 @@ def synchronize_version(repository: Path, requested_version: str) -> None:
     if Version(configured) != Version(normalized):
         raise ValueError(f"release version {normalized!r} does not match pyproject.toml version {configured!r}")
 
+    _synchronize_compatibility_requirement(repository, normalized)
+
     lines = lock_path.read_text(encoding="utf-8").splitlines(keepends=True)
     matching_blocks = _editable_project_blocks(lines)
     if len(matching_blocks) != 1:
-        raise ValueError(f"expected one editable workfold package in uv.lock, found {len(matching_blocks)}")
+        raise ValueError(f"expected one editable wuf package in uv.lock, found {len(matching_blocks)}")
     start, end = matching_blocks[0]
     version_indexes = tuple(index for index in range(start, end) if _VERSION_LINE.fullmatch(lines[index]) is not None)
     if len(version_indexes) != 1:
-        raise ValueError("editable workfold package must contain exactly one version in uv.lock")
+        raise ValueError("editable wuf package must contain exactly one version in uv.lock")
 
     index = version_indexes[0]
     newline = "\r\n" if lines[index].endswith("\r\n") else "\n"
     replacement = f'version = "{normalized}"{newline}'
-    if lines[index] == replacement:
-        return
-    lines[index] = replacement
-    _atomic_write(lock_path, "".join(lines))
+    if lines[index] != replacement:
+        lines[index] = replacement
+        _atomic_write(lock_path, "".join(lines))
 
     locked = tomllib.loads(lock_path.read_text(encoding="utf-8"))
     packages = tuple(
         package
         for package in locked.get("package", ())
-        if package.get("name") == "workfold" and package.get("source") == {"editable": "."}
+        if package.get("name") == "wuf" and package.get("source") == {"editable": "."}
     )
     if len(packages) != 1 or Version(str(packages[0].get("version"))) != Version(normalized):
         raise RuntimeError("uv.lock version synchronization did not validate")
+
+
+def _synchronize_compatibility_requirement(repository: Path, normalized: str) -> None:
+    compatibility_path = repository / "compat" / "workfold" / "pyproject.toml"
+    content = compatibility_path.read_text(encoding="utf-8")
+    project = tomllib.loads(content)
+    configured = str(project["project"]["version"])
+    if Version(configured) != Version(normalized):
+        raise ValueError(f"release version {normalized!r} does not match compatibility package version {configured!r}")
+
+    matches = tuple(_COMPATIBILITY_DEPENDENCIES_LINE.finditer(content))
+    if len(matches) != 1:
+        raise ValueError(f"expected one Wuf compatibility dependency, found {len(matches)}")
+    match = matches[0]
+    newline = match.group("newline") or ""
+    replacement = f'dependencies = ["wuf=={normalized}"]{newline}'
+    if match.group(0) != replacement:
+        content = content[: match.start()] + replacement + content[match.end() :]
+        _atomic_write(compatibility_path, content)
+
+    synchronized = tomllib.loads(compatibility_path.read_text(encoding="utf-8"))
+    dependencies = synchronized["project"].get("dependencies", ())
+    if dependencies != [f"wuf=={normalized}"]:
+        raise RuntimeError("Workfold compatibility dependency synchronization did not validate")
 
 
 def _editable_project_blocks(lines: list[str]) -> tuple[tuple[int, int], ...]:
@@ -62,7 +91,7 @@ def _editable_project_blocks(lines: list[str]) -> tuple[tuple[int, int], ...]:
     for ordinal, start in enumerate(starts):
         end = starts[ordinal + 1] if ordinal + 1 < len(starts) else len(lines)
         content = {line.rstrip("\r\n") for line in lines[start:end]}
-        if 'name = "workfold"' in content and 'source = { editable = "." }' in content:
+        if 'name = "wuf"' in content and 'source = { editable = "." }' in content:
             blocks.append((start, end))
     return tuple(blocks)
 

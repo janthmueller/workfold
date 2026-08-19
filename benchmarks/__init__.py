@@ -1,1 +1,1 @@
-"""Opt-in end-to-end performance benchmarks for Workfold."""
+"""Opt-in end-to-end performance benchmarks for Wuf."""

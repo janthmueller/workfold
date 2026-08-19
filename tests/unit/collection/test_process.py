@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 
-from workfold.collection.process import streaming_deadline
+from wuf.collection.process import streaming_deadline
 
 
 class _Process:
