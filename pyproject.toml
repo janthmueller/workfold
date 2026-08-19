@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wuf"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 description = "Unify local Git and filesystem timestamp footprints in a representative weekly activity view."
 readme = "README.md"
 license = "MIT"

@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.1.0-alpha.7 (2026-08-19)
+
+### Features
+
+- Rename Workfold to Wuf
+  ([`0f0d421`](https://github.com/janthmueller/wuf/commit/0f0d421b0cc0182b4b70ccdeb5eaa01864a29b44))
+
+
 ## v0.1.0-alpha.6 (2026-08-19)
 
 ### Bug Fixes
