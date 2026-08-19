@@ -40,9 +40,9 @@ workfold
 ```
 
 With no flags, Workfold selects the current ISO week in the operating system's
-local timezone (`-t this-week`), uses Git mode (`-m git`), reads commit author
-timestamps from local branches plus a detached `HEAD` under the `standard`
-evidence preset (`-p standard`), uses a configurable cluster window (default: `1h`),
+local timezone (`-t this-week`), reads commit author timestamps from local
+branches plus a detached `HEAD` under the `git` event profile (`-p git`), uses
+a configurable cluster window (default: `1h`),
 anchors bands at events, labels them as ranges, and classifies against
 `Mo-Fr 08:00-16:30`.
 
@@ -51,8 +51,8 @@ workfold . -t 2026-W31
 workfold . -t 2w3d
 workfold . -t 2026-07-01..2026-07-31
 workfold . --timezone Europe/Berlin --list outside
-workfold . -t all -m git -p portable
-workfold . -t all -m both -p full
+workfold . -t all -p portable
+workfold . -t all -p full --git-commits-from all-refs --include-ignored
 workfold . --events git:tag:tagger fs:file:modified
 workfold . --events 'fs:*:modified'
 workfold . --events 'git:*:committer'
@@ -70,13 +70,17 @@ workfold . --hide-days weekend
 workfold . --show-config
 ```
 
-`-p/--profile` selects an evidence preset and defaults to `standard`. The
-`portable` preset is Git-only commit author/committer and annotated-tag tagger
-evidence stored in Git objects; it says nothing about remote publication. The
-`full` preset expands evidence only inside the selected time and mode, so the
-canonical exhaustive command spells out `-t all -m both -p full`.
+`-p/--profile` selects a named event set and defaults to `git`. The `fs` and
+`both` profiles provide low-noise filesystem and combined views. `portable`
+selects Git commit author/committer and annotated-tag tagger evidence stored in
+Git objects; it says nothing about remote publication. `full` selects every
+supported Git and filesystem event kind.
 
-For a custom scope, `--events` replaces mode/profile with exact identifiers and
+Profiles never change time, commit reachability, or ignore policy. A complete
+all-date, all-ref, ignored-files-included request therefore spells those scopes
+out as `-t all -p full --git-commits-from all-refs --include-ignored`.
+
+For a custom scope, `--events` replaces the profile with exact identifiers and
 wildcards. Values are space-separated, and wildcard values should be quoted.
 For example, `--events git:tag:tagger fs:file:modified` combines annotated-tag
 and regular-file mtime observations, while `--events 'fs:*:modified'` selects
@@ -126,6 +130,9 @@ as the matrix. Custom outside colors are shown on their corresponding symbols.
 Colorless output retains that structure without styling. There is no
 Summary heading: Events shows the total, Schedule splits it into inside/outside,
 and Calendar independently splits it into weekday/weekend.
+Busy cells keep exact-count tokens separate per event kind by default;
+`--count-grouping visual` merges only tokens with the same resolved symbol and
+configured style without changing event totals or collection scope.
 `--verbose` adds scope, period, the full successful coverage status,
 source/record breakdowns, cluster/compression policy, exact collector choices,
 Git identity scope, collection extents, ignore/exclusion policy, and the detailed
@@ -149,7 +156,7 @@ Each ordinary symbol is one activity marker:
 
 Circle/square identifies the source and filled/hollow identifies schedule state
 with built-in source markers. Color reinforces those meanings but is never
-required. Persistent `styles` rules can replace the source-mode symbol/color
+required. Persistent `styles` rules can replace the source-marker symbol/color
 pairs per exact or wildcard event selector; they do not alter evidence scope,
 counts, or coverage.
 When an unusually busy cell cannot fit individual symbols, exact tokens such as

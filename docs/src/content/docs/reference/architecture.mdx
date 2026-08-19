@@ -225,8 +225,12 @@ constructs production adapters nor coordinates Git subcollectors nor uses
 optional collaborators with hidden defaults.
 
 The resolved `EvidenceSelection` is the single semantic event scope.
+Configuration profiles are named event sets whose contents derive the enabled
+collector sources. Exact `--events` selectors are their inline alternative;
+neither representation owns time, commit reachability, or filesystem ignore
+policy.
 `CollectionPlan` projects it into an exact Git source request and filesystem
-entry-type/timestamp work; source adapters do not reinterpret CLI presets or
+entry-type/timestamp work; source adapters do not reinterpret CLI profiles or
 keep a second scope model. Filesystem record discovery remains one
 root-level accounting partition because ignored candidates can be counted
 without an extra stat and may therefore have an intentionally unknown entry
@@ -264,6 +268,10 @@ covers every evidence role retained by that marker.
 renderables, applies terminal styles, or turns report facts into scope and
 coverage prose. Generic terminal-safe text handling is in
 `reporting.sanitization` and is shared with configuration display.
+Busy-cell count grouping also belongs here: the default preserves distinct
+retained evidence signatures, while the optional visual projection merges only
+identical resolved symbol/style pairs. The report and folding layers retain the
+same fine-grained runs in either presentation mode.
 
 `cli` is the outer composition boundary. It owns argparse, standard-stream
 handling, effective configuration display, diagnostic output, process exit

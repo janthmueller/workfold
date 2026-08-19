@@ -124,10 +124,10 @@ def _hidden_event_parts(report: Report) -> list[str]:
     return parts
 
 
-def _scope_label(sources: tuple[Source, ...], profile: str) -> str:
+def _scope_label(sources: tuple[Source, ...], profile: str | None) -> str:
     source_names = {Source.GIT: "Git", Source.FILESYSTEM: "filesystem"}
     source_text = " + ".join(source_names[source] for source in sources) or "none"
-    safe_profile = sanitize_terminal_text(profile)
+    safe_profile = sanitize_terminal_text(profile) if profile is not None else ""
     return f"{source_text} · {safe_profile}" if safe_profile else source_text
 
 

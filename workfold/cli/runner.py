@@ -71,6 +71,7 @@ def run(
         band_label=preferences.band_label,
         show_empty_bands=preferences.show_empty_bands,
         marker_style=preferences.marker_style,
+        count_grouping=preferences.count_grouping,
         grid_style=preferences.grid_style,
         coverage=preferences.coverage,
         event_styles=preferences.event_styles,

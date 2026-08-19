@@ -7,12 +7,13 @@ import pytest
 from workfold.configuration import (
     BandLabel,
     ClusterAnchor,
+    CountGrouping,
     GridStyle,
     MarkerStyle,
     compile_event_style_sheet,
     parse_event_style_rules,
 )
-from workfold.domain.observations import Source, Weekday
+from workfold.domain.observations import Source, TimestampKind, Weekday
 from workfold.reporting.sanitization import display_width
 from workfold.reporting.terminal import TerminalOptions, render_terminal
 from workfold.reporting.terminal.coverage_status import COMPLETE_COVERAGE_STATUS
@@ -44,7 +45,7 @@ def test_plain_renderer_uses_event_symbols_for_mixed_and_outside_activity() -> N
     assert "Calendar  2 weekday (100.0%) · 0 weekend (0.0%)" in rendered
     assert "● Git · ■ Filesystem · □ Outside working hours" in rendered
     assert "Working hours: Mo-Fr 08:00-16:30" in rendered
-    assert "×N exact count" not in rendered
+    assert "×N exact per event kind" not in rendered
     assert "Breakdown" not in rendered
     assert "Scope" not in rendered
     assert "Period" not in rendered
@@ -782,8 +783,133 @@ def test_busy_cells_compact_to_exact_symbol_counts() -> None:
 
     assert "●×25" in rendered
     assert "□×1" in rendered
-    assert "×N exact count" in rendered
+    assert "×N exact per event kind" in rendered
     assert "Events    26" in rendered
+
+
+def test_busy_count_tokens_can_group_matching_event_kinds_by_resolved_visual() -> None:
+    markers = tuple(
+        _classified(
+            f"modified-{index}",
+            8,
+            0,
+            source=Source.FILESYSTEM,
+            within_schedule=True,
+            timestamp_kind=TimestampKind.FS_MODIFIED,
+        )
+        for index in range(15)
+    ) + tuple(
+        _classified(
+            f"birth-{index}",
+            8,
+            0,
+            source=Source.FILESYSTEM,
+            within_schedule=True,
+            timestamp_kind=TimestampKind.FS_CREATED,
+        )
+        for index in range(15)
+    )
+    report = _report(*markers)
+
+    per_event = render_terminal(report, options=TerminalOptions(width=80))
+    per_visual = render_terminal(
+        report,
+        options=TerminalOptions(width=80, count_grouping=CountGrouping.VISUAL),
+    )
+
+    assert "■×15 ■×15" in per_event
+    assert "×N exact per event kind" in per_event
+    assert "■×30" in per_visual
+    assert "■×15" not in per_visual
+    assert "×N exact per visual" in per_visual
+    assert "Events    30" in per_event and "Events    30" in per_visual
+
+
+def test_visual_count_grouping_uses_configured_color_even_without_ansi_output() -> None:
+    markers = tuple(
+        _classified(
+            f"modified-{index}",
+            8,
+            0,
+            source=Source.FILESYSTEM,
+            within_schedule=True,
+            timestamp_kind=TimestampKind.FS_MODIFIED,
+        )
+        for index in range(15)
+    ) + tuple(
+        _classified(
+            f"birth-{index}",
+            8,
+            0,
+            source=Source.FILESYSTEM,
+            within_schedule=True,
+            timestamp_kind=TimestampKind.FS_CREATED,
+        )
+        for index in range(15)
+    )
+    styles = compile_event_style_sheet(
+        (
+            parse_event_style_rules(
+                {"fs:file:birth": {"color": "magenta"}},
+                location="styles",
+            ),
+        )
+    )
+    report = _report(*markers)
+
+    plain = render_terminal(
+        report,
+        options=TerminalOptions(
+            width=80,
+            color=False,
+            count_grouping=CountGrouping.VISUAL,
+            event_styles=styles,
+        ),
+    )
+    colored = render_terminal(
+        report,
+        options=TerminalOptions(
+            width=80,
+            color=True,
+            count_grouping=CountGrouping.VISUAL,
+            event_styles=styles,
+        ),
+    )
+
+    assert "■×15 ■×15" in plain
+    assert "■×30" not in plain
+    assert colored.count("×15") == 2
+    assert "\x1b[94m■×15\x1b[0m" in colored
+    assert "\x1b[35m■×15\x1b[0m" in colored
+
+
+def test_visual_count_grouping_merges_folding_precompacted_event_kinds() -> None:
+    markers = tuple(
+        _classified(
+            f"event-{index:03d}",
+            8,
+            0,
+            source=Source.FILESYSTEM,
+            within_schedule=True,
+            timestamp_kind=(TimestampKind.FS_MODIFIED if index % 2 else TimestampKind.FS_CREATED),
+            fractional_nanoseconds=index * 1_000,
+        )
+        for index in range(300)
+    )
+    report = _report(*markers)
+    cell = report.aggregation.clusters[0].cell(Weekday.MONDAY)
+
+    assert cell is not None and cell.compacted
+
+    per_event = render_terminal(report, options=TerminalOptions(width=80))
+    per_visual = render_terminal(
+        report,
+        options=TerminalOptions(width=80, count_grouping=CountGrouping.VISUAL),
+    )
+
+    assert per_event.count("■×150") == 2
+    assert "■×300" in per_visual
+    assert "Events    300" in per_event and "Events    300" in per_visual
 
 
 @pytest.mark.parametrize("width", [60, 80, 120])
@@ -830,7 +956,7 @@ def test_no_color_shapes_preserve_source_and_schedule_status() -> None:
     assert "●■" in rendered
     assert "○□" in rendered
     assert "● Git · ■ Filesystem · ○/□ Outside working hours" in rendered
-    assert "×N exact count" not in rendered
+    assert "×N exact per event kind" not in rendered
     assert "\x1b[" not in rendered
 
 
@@ -846,7 +972,7 @@ def test_legend_describes_only_visible_matrix_categories() -> None:
     assert "● Git" in rendered
     assert "Filesystem" not in rendered
     assert "Outside working hours" not in rendered
-    assert "×N exact count" not in rendered
+    assert "×N exact per event kind" not in rendered
     assert re.search(r"^Hidden\s+after display 1$", rendered, re.MULTILINE)
 
 

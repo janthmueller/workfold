@@ -124,7 +124,7 @@ def test_git_runner_reports_missing_executable_and_bounds_stderr(tmp_path: Path)
     with pytest.raises(GitCommandError) as not_found:
         GitRunner(process_runner=missing).run(("rev-parse", "--git-dir"), cwd=tmp_path)
     assert not_found.value.code == "git_not_found"
-    assert not_found.value.hint == "Install Git or use --mode fs."
+    assert not_found.value.hint == "Install Git or select filesystem events with --profile fs."
 
     def failed(arguments: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         return subprocess.CompletedProcess(arguments, 128, stdout=b"", stderr=b"abcdefgh")
@@ -745,7 +745,7 @@ def test_collector_returns_actionable_structured_errors_and_continues(tmp_path: 
     assert {diagnostic.code for diagnostic in result.diagnostics} == {"not_git_repository", "path_not_found"}
     non_repo = next(item for item in result.diagnostics if item.code == "not_git_repository")
     assert non_repo.stage == "git_repository_resolution"
-    assert non_repo.hint == "Use --mode fs or pass a path inside a Git repository."
+    assert non_repo.hint == "Use --profile fs or pass a path inside a Git repository."
     assert result.is_partial
 
 

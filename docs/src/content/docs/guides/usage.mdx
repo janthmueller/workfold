@@ -18,19 +18,19 @@ workfold [PATH ...]
 With no path, Workfold uses `.`. For Git collection, a path selects its entire
 containing repository, not a history pathspec. Multiple paths in the same
 repository are deduplicated. If the selected path is not in a repository, use
-`-m fs` or pass a repository path.
+`-p fs` or pass a repository path.
 
 The default view selects:
 
 - the current ISO week in the resolved local timezone;
-- the `standard` evidence preset;
+- the `git` event profile;
 - Git commit records reachable through local branches plus a detached `HEAD`;
 - author timestamps from every recorded Git identity;
 - `Mo-Fr 08:00-16:30` as the working schedule;
 - a `1h` sparse cluster window anchored at events;
 - range labels for occupied time bands.
 
-`-m/--mode` selects `git`, `fs`, or `both` and defaults to `git`. It is
+`-p/--profile` selects a named event set and defaults to `git`. It is
 independent from `-t/--time`: changing one never changes the other.
 
 Git collection invokes the local `git` executable and never fetches or contacts
@@ -70,8 +70,7 @@ A standalone file stores keys at its root:
 
 ```toml title="workfold.toml"
 time = "this-week"
-mode = "git"
-profile = "standard"
+profile = "git"
 
 timezone = "Europe/Berlin"
 hours = "Mo-Thu 08:00-16:30; Fr 08:00-14:00"
@@ -80,6 +79,7 @@ cluster-anchor = "event"
 band-label = "range"
 show-empty-bands = false
 marker-style = "identity"
+count-grouping = "event"
 grid = "vertical"
 hide-empty-days = ["weekend"]
 ```
@@ -141,7 +141,7 @@ retained role: `git:commit:*` covers the pair, while
 `git:commit:author` styles only an author-only marker. This keeps one logical
 event and never chooses an arbitrary role or draws a duplicate.
 
-Custom symbols and colors apply to source-marker mode. Git identity mode keeps
+Custom symbols and colors apply to source-marker style. Git identity mode keeps
 its generated uppercase/lowercase identity codes and established green/red
 schedule encoding; filesystem markers still use configured event styles. The
 content-aware key groups equal visuals and names only style groups present in
@@ -151,7 +151,7 @@ Repeatable and multi-value CLI selections use TOML arrays. `time` also accepts
 one string for its common single-selector form:
 
 ```toml
-mode = "both"
+profile = "both"
 time = ["2026-W30", "2026-W31"]
 git-identity = ["jan@example.com", "Jan Müller"]
 fs-exclude = ["node_modules", "*.log"]
@@ -160,23 +160,23 @@ hide-empty-days = ["weekend"]
 list = ["outside"]
 ```
 
-For exact event selection, use `events` instead of `mode` and `profile` in that
-layer:
+For exact event selection, use `events` instead of `profile` in that layer:
 
 ```toml
 events = ["git:commit:committer", "git:tag:tagger", "fs:file:modified"]
 list = ["outside", "git:tag:tagger"]
 ```
 
-`events` is a complete alternative to the mode/profile preset pair. Defining
-both styles in one precedence layer is an error. A higher-precedence `events`
-setting replaces a lower mode/profile choice; a higher-precedence mode or
-profile replaces lower custom events. Git-only and filesystem-only non-event
-keys must agree with the resulting event sources.
+`events` is a complete alternative to a named profile. Defining both in one
+precedence layer is an error. A higher-precedence `events` setting replaces a
+lower profile; a higher-precedence profile replaces lower custom events.
+Git-only and filesystem-only non-event keys must agree with the resulting event
+sources.
 
 Other configurable keys are `git-commits-from`, `include-ignored`, `fs-exclude`,
-`cluster-anchor`, `band-label`, `show-empty-bands`, `display-hours`, `no-color`,
-`list`, `limit`, `coverage`, `strict`, and `verbose`. Boolean values use
+`cluster-anchor`, `band-label`, `show-empty-bands`, `marker-style`,
+`count-grouping`, `grid`, `display-hours`, `no-color`, `list`, `limit`,
+`coverage`, `strict`, and `verbose`. Boolean values use
 TOML `true`/`false`. Positional paths and the configuration-control flags
 themselves are deliberately not configurable.
 `no-color = false` restores the same automatic terminal detection used by
@@ -185,14 +185,13 @@ default; neither it nor `--color` overrides `NO_COLOR` or terminal detection.
 `show-empty-bands = true` without disabling the rest of the configuration.
 Use `timezone = "local"` for the operating-system local zone and
 `display-hours = "auto"` for an automatic chart range; these values can also
-reset a global setting from a nearer layer. Omit `git-commits-from` for the
-selected profile's default.
+reset a global setting from a nearer layer. Omit `git-commits-from` for its
+built-in `local-branches` default.
 
-The locked `portable` and `full` profiles keep their CLI semantics. A
-higher-precedence profile replaces custom events and policy defaults inherited
-from a lower layer. Reachability and ignore-policy settings
-that would redefine a locked profile are rejected at the same or a higher
-layer.
+Profiles expand only to event sets. A higher-precedence profile replaces lower
+custom events and a higher-precedence `events` value replaces a lower profile.
+Independent reachability and ignore-policy settings continue through normal
+configuration precedence whenever they apply to the resulting event sources.
 
 Inspect the fully validated result without collecting Git or filesystem data:
 
@@ -204,10 +203,15 @@ workfold . --grid both --show-config  # includes this CLI override and its origi
 `--show-config` prints the loaded files followed by every effective value and
 whether it came from a built-in, global file, local file, exact config file, or
 the CLI. It also lists custom event-style rules in their applied global-to-local
-order. Derived values identify every controlling setting, while values reset
-by a higher-precedence source or profile identify that decision. The table
-wraps to the terminal width. `--help` remains stable and describes built-in
-defaults; it does not pretend configured values are universal defaults.
+order. Derived values identify every controlling setting, while source-specific
+values reset by a higher-precedence event selection or profile identify that
+decision. The table wraps to the terminal width. `--help` remains stable and
+describes built-in defaults; it does not pretend configured values are
+universal defaults. A named profile shows its expanded `events` row as a
+profile-derived value; exact `events` show `profile = —` rather than inventing
+a synthetic custom profile. Source-specific settings that cannot affect the
+selected event set are shown as `not applicable` rather than as active-looking
+defaults.
 
 Use one exact file and disable automatic global/project discovery with
 `--config FILE`. An explicitly named `pyproject.toml` still reads
@@ -238,7 +242,7 @@ workfold . -t 2w
 workfold . -t 2w3d
 workfold . -t 6h30m
 
-# Every available date for the otherwise selected mode/evidence scope
+# Every available date for the otherwise selected profile/event scope
 workfold . -t all
 ```
 
@@ -378,11 +382,20 @@ group those events into columns. Each ordinary event is a symbol. By default,
 Git uses circles and filesystem uses squares;
 inside-hours markers are filled, and outside-hours markers are hollow. Color
 adds green for inside-hours Git, blue for inside-hours filesystem, and red for
-outside-hours events. Event-style configuration can replace those source-mode
-symbols and colors for exact or wildcard event kinds. If a cell is too busy for individual symbols at the
-available width, exact tokens such as `●×12 ■×4 ○×2` replace only that
-cell; they are counts, not density estimates. Empty bands are omitted by
-default. With event anchoring, a gap cue measures consecutive observed extents;
+outside-hours events. Event-style configuration can replace those source-marker
+symbols and colors for exact or wildcard event kinds. If a cell is too busy for
+individual symbols at the available width, exact tokens such as
+`●×12 ■×4 ○×2` replace only that cell; they are counts, not density estimates.
+The default `--count-grouping event` keeps tokens separate for distinct event
+kinds even when those kinds currently share a symbol and color. Use
+`--count-grouping visual` to merge only groups whose fully resolved marker
+symbol and configured style are identical. Schedule state and identity codes
+are part of that visual, so inside/outside or distinct identity markers do not
+merge. Grouping is based on the configured visual before ANSI suppression;
+`NO_COLOR` therefore does not restructure the chart. This option affects only
+busy-cell `×N` tokens, not ordinary markers, collection, totals, coverage, or
+clustering.
+Empty bands are omitted by default. With event anchoring, a gap cue measures consecutive observed extents;
 with midnight anchoring, it measures wholly omitted fixed intervals. A gap of
 at least one configured cluster window gets one dim duration cue. Consequently,
 one omitted fixed band is enough under midnight anchoring, while a shorter
@@ -478,8 +491,8 @@ does not realign midnight-anchored interval boundaries.
 
 ## Select exact event evidence
 
-Mode and profile provide the common presets. `-e/--events` is the exact
-alternative when a preset is not the question you want to ask:
+Profiles provide common named event sets. `-e/--events` is the exact alternative
+when a profile is not the question you want to ask:
 
 ```bash
 workfold . --events git:commit:author
@@ -515,13 +528,12 @@ identifiers, so `git:*`, `git:commit:*`, `git:*:committer`, `fs:file:*`,
 Quote wildcard selectors to prevent shell pathname expansion. Identifiers are
 case-insensitive and output is normalized to the lower-case forms above.
 
-`--events` cannot be combined with `-m/--mode` or `-p/--profile` in the same
-CLI invocation because it already defines both source and event kind. It does
-not replace independent controls such as `--git-commits-from`, `--git-identity`,
-ignore policy, or `--fs-exclude`. Consequently `--events '*'`
-selects every timestamp event kind but is not identical to `-m both -p full`:
-the custom form retains ordinary local-branch reachability and the
-ignore-respecting filesystem policy unless those axes are changed explicitly.
+`--events` cannot be combined with `-p/--profile` in the same CLI invocation
+because both define the complete event set. It does not replace independent
+controls such as `--git-commits-from`, `--git-identity`, ignore policy, or
+`--fs-exclude`. Consequently `--events '*'` and `-p full` select the same event
+kinds and retain the same local-branch and ignore-respecting defaults unless
+those independent axes are changed explicitly.
 
 Because `--events` and `--list` accept one or more whitespace-separated values,
 put every positional `PATH` before either option. If a generated command must
@@ -551,10 +563,9 @@ Commit reachability has three explicit scopes:
 - `head` follows the ancestry of the currently checked-out branch or detached
   `HEAD`;
 - `local-branches` follows every `refs/heads/*` branch and also includes a
-  detached `HEAD`; this is the standard default;
+  detached `HEAD`; this is the built-in default;
 - `all-refs` follows every locally stored ref, including remote-tracking refs,
-  tags, stash, and custom refs; it never fetches and is the portable/full
-  default.
+  tags, stash, and custom refs; it never fetches.
 
 A commit is considered once by object ID even when several selected refs reach
 it. Reachability is established before timestamp-role selection. Each requested
@@ -583,8 +594,8 @@ reflog actor. File-change observations inherit the corresponding author or
 committer identity from their commit. Matching is a case-insensitive literal
 substring of the recorded name or email. Repeated values use OR semantics; with
 no flag, all recorded Git identities are included. Git identities are
-self-declared metadata, not verified people or accounts. In combined mode the
-filter does not affect filesystem observations.
+self-declared metadata, not verified people or accounts. In a combined event
+selection the filter does not affect filesystem observations.
 
 Identity selection happens before plotting. Therefore, when identical author and
 committer instants could share one marker, only the matching role remains if
@@ -600,7 +611,7 @@ Git's reported change kind, and preserves renames when Git reports one.
 
 ## Inspect filesystem evidence
 
-Filesystem mode scans current metadata rather than reconstructing editing
+Filesystem collection scans current metadata rather than reconstructing editing
 history:
 
 ```bash
@@ -608,8 +619,8 @@ workfold . --events fs:file:birth fs:file:modified
 workfold . --events fs:directory:metadata-changed fs:symlink:accessed
 workfold . --events 'fs:*:modified'
 workfold . --events 'fs:directory:*'
-workfold . -m fs -p full
-workfold . -m both
+workfold . -p fs
+workfold . -p full
 ```
 
 Timestamp labels are deliberately precise:
@@ -620,7 +631,7 @@ Timestamp labels are deliberately precise:
 - `metadata-changed` is POSIX metadata-change ctime, never creation time;
 - `accessed` is atime and is labeled potentially unreliable.
 
-The standard filesystem preset selects birth and modification timestamps for
+The `fs` profile selects birth and modification timestamps for
 regular files. Exact selectors make entry type and timestamp role independent:
 `fs:*:modified` requests mtime for files, directories, and symlinks, while
 `fs:directory:*` requests every supported timestamp only for directories.
@@ -630,17 +641,17 @@ time is reported as unavailable rather than receiving a fabricated ctime value.
 In a Git worktree, standard Git ignore semantics are respected by default:
 
 ```bash
-workfold . -m fs --respect-gitignore
-workfold . -m fs --include-ignored
-workfold . -m fs --fs-exclude node_modules --fs-exclude '*.log'
+workfold . -p fs --respect-gitignore
+workfold . -p fs --include-ignored
+workfold . -p fs --fs-exclude node_modules --fs-exclude '*.log'
 ```
 
 Tracked files remain included even if a current ignore pattern matches them.
 Explicit exclusions are applied after discovery and always win. When directory
 entries are requested, the default ignore-respecting scan reports each ignored
 subtree it prunes and states that descendant directories were not enumerated.
-Use `--include-ignored` or the full profile when those entries and their
-timestamps should be included.
+Use `--include-ignored` when those entries and their timestamps should be
+included. Event profiles never alter ignore policy.
 
 An embedded Git repository inherits the containing scan's visibility decision
 at its boundary. If the outer repository ignores that directory, the normal
@@ -649,32 +660,33 @@ so its own ignore rules apply below the boundary. Naming the embedded
 repository as an explicit `PATH` also scans it independently, even when a
 separately selected parent repository ignores it.
 
-## Choose an evidence preset
+## Choose an event profile
 
 ```bash
-workfold . -p standard
-workfold . -t all -m git -p portable
-workfold . -t all -m both -p full
-workfold . -t 2026-W31 -m fs -p full
+workfold . -p git
+workfold . -p fs
+workfold . -p both
+workfold . -t all -p portable
+workfold . -t all -p full --git-commits-from all-refs --include-ignored
 ```
 
-`-p/--profile` selects an evidence preset and defaults to `standard`. Presets
-answer different questions about the available evidence; they are not merely
-levels of collection depth.
+`-p/--profile` selects a fixed, named event set and defaults to `git`. A profile
+changes only enabled event kinds; time, Git reachability, Git identities,
+filesystem ignore policy, and explicit exclusions remain independent.
 
-### Standard: What does the ordinary activity pattern look like?
+### Git, filesystem, and both: What does the ordinary pattern look like?
 
-The standard profile is the customizable everyday view:
+The low-noise profiles are:
 
-- Git mode uses commit records and their author dates from local branches plus
-  a detached `HEAD`.
-- Filesystem mode uses birth and modification dates for regular files while
-  respecting Git ignore rules.
-- Combined mode applies both sets of defaults.
+- `git` uses commit records and their author dates. This is the built-in
+  default.
+- `fs` uses birth and modification dates for regular files.
+- `both` is the exact union of the `git` and `fs` event sets.
 
-Use `--events` instead of the mode/profile pair when these event defaults are
-not the desired combination. Standard keeps the initial chart focused, but it
-is not a completeness claim.
+The independent defaults still read commits from local branches plus a detached
+`HEAD` and respect standard Git ignore rules. Use `--events` when these named
+event sets are not the desired combination. The low-noise profiles are not
+completeness claims.
 
 ### Portable: What dated evidence is stored inside Git objects?
 
@@ -693,39 +705,43 @@ Thursday 15:00  Bob rebases or cherry-picks it       → committer date
 Friday 09:00    Bob creates annotated tag v1.0       → tagger date
 ```
 
-Standard shows the Monday author event. Portable retains all three object-backed
-observations. If one commit's author and committer timestamps are identical,
-Workfold may plot one marker carrying both roles; provenance and coverage still
-retain both timestamp roles.
+The `git` profile shows the Monday author event. Portable retains all three
+object-backed observations. If one commit's author and committer timestamps are
+identical, Workfold may plot one marker carrying both roles; provenance and
+coverage still retain both timestamp roles.
 
-Portable is a locked, Git-only profile. It reads commit author and committer
-dates from all locally stored refs plus annotated-tag tagger dates. Lightweight
-tags have no independent tag object or tagger date and remain explicitly
-unavailable. Derived per-file changes are excluded because Git does not store a
-separate timestamp for each changed file.
+Portable selects commit author and committer dates plus annotated-tag tagger
+dates. Commit reachability remains independently configurable and defaults to
+local branches plus a detached `HEAD`. Lightweight tags have no independent tag
+object or tagger date and remain explicitly unavailable. Derived per-file
+changes are excluded because Git does not store a separate timestamp for each
+changed file.
 
 These timestamps travel when their Git objects are transferred, but they do
 not say when an object was pushed or published. Portable therefore excludes
 local reflogs and filesystem metadata, and Workfold never invents push,
 branch-creation, or lightweight-tag creation times.
 
-### Full: What dated evidence can this local machine still discover?
+### Full: What do all supported event kinds show?
 
-Full selects every supported evidence kind available to the selected mode. In
-Git mode it enables commit, file-change, tag, and reflog records, both commit
-times, and all locally stored refs. In filesystem mode it enables every
-supported timestamp and entry kind and includes ignored entries.
+Full selects every supported Git and filesystem event kind. It enables commit,
+file-change, tag, reflog, regular-file, directory, and symlink records together
+with every supported timestamp role.
+
+For every supported kind from only one source, use the exact selectors
+`--events 'git:*'` or `--events 'fs:*'`.
 
 Full includes machine-local and mutable evidence, so it is broader than
-portable rather than more transferable. It changes collection scope only and
-does not enable the detailed coverage ledger automatically.
+portable rather than more transferable. It does not enable the detailed
+coverage ledger automatically.
 
-Profiles never change the selected time or mode: `full` does not imply
-`-t all` or `-m both`. `--events` is an alternative to profiles, not an
-override layered on top of one. Portable and full lock their reachability and
-ignore-policy defaults; `--git-identity` and, when filesystem mode is
-enabled, repeatable `--fs-exclude` may still narrow them. Such
-narrowing remains visible in coverage status and verbose output.
+Profiles never change selected time, commit reachability, or ignore policy.
+Thus `full` still defaults to the current week, local branches plus a detached
+`HEAD`, and an ignore-respecting filesystem scan. The explicit broad request is
+`-t all -p full --git-commits-from all-refs --include-ignored`. `--events` is
+an alternative to profiles rather than an override layered on top. Identity and
+explicit exclusion filters remain visible in coverage status and verbose
+output.
 
 ## Control terminal detail
 
@@ -739,6 +755,7 @@ workfold . --band-label start
 workfold . --cluster-anchor midnight --show-empty-bands
 workfold . --hours all
 workfold . --marker-style identity
+workfold . --count-grouping visual
 workfold . --grid both
 workfold . --hide-empty-days all
 workfold . --hide-days weekend
@@ -767,7 +784,8 @@ replacing them. Identity mappings themselves remain independent of schedule
 state: each canonical code and full recorded identity appears once in the key.
 
 `--verbose` appends operational details after the compact summary: cluster and
-compression policy, Scope (mode plus profile), Period (range plus timezone), the
+compression policy, Scope (derived event sources plus profile), Period (range
+plus timezone), the
 full Coverage status, source/record breakdowns, exact Git/filesystem collector
 selection, Git identity scope, resolved repositories/roots, and filesystem
 ignore/exclusion policy. It does not change the matrix, compact totals, or

@@ -12,7 +12,7 @@ from workfold.configuration.options import (
     DEFAULT_CLUSTER_WINDOW,
     DEFAULT_HOURS,
     BandLabel,
-    CollectionProfile,
+    CountGrouping,
     DisplayHours,
     EventListSelection,
     GridStyle,
@@ -20,7 +20,6 @@ from workfold.configuration.options import (
     MarkerStyle,
     RollingDuration,
     RunOptions,
-    SourceMode,
     TerminalPreferences,
     UnresolvedOptions,
     UsageError,
@@ -36,6 +35,7 @@ from workfold.configuration.parsing import (
     parse_weekday_scopes,
     validate_iso_week,
 )
+from workfold.configuration.profiles import EventProfile, evidence_for_profile
 from workfold.configuration.resolution import resolve_options
 from workfold.configuration.schema import SettingValue
 from workfold.configuration.styles import (
@@ -56,11 +56,12 @@ __all__ = [
     "DEFAULT_HOURS",
     "BandLabel",
     "ClusterAnchor",
-    "CollectionProfile",
+    "CountGrouping",
     "DisplayHours",
     "EffectiveOrigin",
     "EffectiveSettings",
     "EventListSelection",
+    "EventProfile",
     "EventStyleRule",
     "EventStyleRules",
     "EventStyleSheet",
@@ -75,12 +76,12 @@ __all__ = [
     "ResolvedSettings",
     "RollingDuration",
     "SettingValue",
-    "SourceMode",
     "TerminalPreferences",
     "UnresolvedOptions",
     "UsageError",
     "DEFAULT_EVENT_STYLE_SHEET",
     "compile_event_style_sheet",
+    "evidence_for_profile",
     "global_config_path",
     "materialize_settings",
     "options_from_settings",

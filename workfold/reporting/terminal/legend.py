@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from rich.text import Text
 
 from workfold.application.report import Report
-from workfold.configuration.options import MarkerStyle
+from workfold.configuration.options import CountGrouping, MarkerStyle
 from workfold.configuration.styles import DEFAULT_EVENT_STYLE_SHEET, EventVisualStyle
 from workfold.domain.evidence import EvidenceKind, evidence_kinds_from_mask, evidence_mask_source
 from workfold.domain.observations import EntryType, RecordKind, Source
@@ -69,7 +69,8 @@ def render_legend(report: Report, options: TerminalOptions) -> tuple[Text, ...]:
         for cluster in aggregation.clusters
         for cell in cluster.cells
     ):
-        items.append(Text("×N exact count", style="dim"))
+        label = "×N exact per visual" if options.count_grouping is CountGrouping.VISUAL else "×N exact per event kind"
+        items.append(Text(label, style="dim"))
 
     lines = list(_pack_legend_items(items, options.width))
     schedule = f"Working hours: {sanitize_terminal_text(report.context.scope.schedule)}"

@@ -81,8 +81,8 @@ Run representative current-scope cases against a real repository:
 uv run --locked python -m benchmarks.run ~/linux --suite quick --warmups 1 --repetitions 3
 ```
 
-Exercise every mode, date scope, and evidence profile against a disposable
-medium fixture:
+Exercise every event profile, date scope, and exact selector family against a
+disposable medium fixture:
 
 ```bash
 uv run --locked python -m benchmarks.run \
@@ -189,13 +189,13 @@ application; it owns ordering between those capabilities and publishes a
 normalized source summary and coverage fragment. Keep protocol state machines
 independent from normalized domain conversion and report construction.
 
-Configuration resolves time independently from evidence scope. Common evidence
-scope uses the mode/profile preset pair; exact `--events` selectors are a
+Configuration resolves time independently from evidence scope. A named profile
+expands directly to a fixed event set; exact `--events` selectors are the
 complete alternative. `EvidenceSelection` is the one canonical set after
 resolution, and the application derives its exact collector activation through
-`CollectionPlan` rather than retaining parallel record/timestamp flags. The
-preset defaults to `standard` and never rewrites time or mode; `portable` is
-intentionally valid only with Git mode.
+`CollectionPlan` rather than retaining parallel source/record/timestamp flags.
+The profile defaults to `git`. Profiles never rewrite time, Git reachability,
+or filesystem ignore policy.
 
 Within `configuration/`, `schema` is the single catalog of setting keys,
 built-in defaults, TOML shapes, simple choices, and CLI destinations. `options`

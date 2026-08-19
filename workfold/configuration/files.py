@@ -264,10 +264,8 @@ def _validate_table(
     if unknown:
         label = ", ".join(repr(key) for key in unknown)
         raise UsageError(f"unknown Workfold configuration key(s) in {path}: {label}")
-    preset_keys = tuple(key for key in ("mode", "profile") if key in table)
-    if "events" in table and preset_keys:
-        conflicts = ", ".join(preset_keys)
-        raise UsageError(f"{path}: events cannot be combined with {conflicts} in the same precedence layer")
+    if "events" in table and "profile" in table:
+        raise UsageError(f"{path}: events cannot be combined with profile in the same precedence layer")
     settings = {key: _validate_value(key, value, path=path) for key, value in table.items() if key != "styles"}
     try:
         styles = (

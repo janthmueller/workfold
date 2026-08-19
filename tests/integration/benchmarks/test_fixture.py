@@ -65,8 +65,6 @@ def test_synthetic_fixture_exercises_complete_workfold_collection(tmp_path: Path
             "-m",
             "workfold",
             os.fspath(root),
-            "-m",
-            "both",
             "-p",
             "full",
             "-t",

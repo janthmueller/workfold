@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import TypeAlias
 
 from workfold.configuration.options import DEFAULT_HOURS
+from workfold.configuration.profiles import EventProfile
 
 SettingValue: TypeAlias = str | bool | int | tuple[str, ...] | None
 
@@ -46,13 +47,12 @@ class SettingSpec:
 
 SETTING_SPECS = (
     SettingSpec("time", "time_selectors", ("this-week",), ConfigShape.STRING_OR_ARRAY),
-    SettingSpec("mode", "modes", ("git",), ConfigShape.SINGLE_STRING_TUPLE, ("git", "fs", "both")),
     SettingSpec(
         "profile",
         "profiles",
-        ("standard",),
+        (EventProfile.GIT.value,),
         ConfigShape.SINGLE_STRING_TUPLE,
-        ("standard", "portable", "full"),
+        tuple(profile.value for profile in EventProfile),
     ),
     SettingSpec("events", "event_selectors", None, ConfigShape.STRING_ARRAY),
     SettingSpec(
@@ -72,6 +72,7 @@ SETTING_SPECS = (
     SettingSpec("band-label", "band_label", "range", ConfigShape.STRING, ("range", "start")),
     SettingSpec("show-empty-bands", "show_empty_bands", False, ConfigShape.BOOLEAN),
     SettingSpec("marker-style", "marker_style", "source", ConfigShape.STRING, ("source", "identity")),
+    SettingSpec("count-grouping", "count_grouping", "event", ConfigShape.STRING, ("event", "visual")),
     SettingSpec("grid", "grid_style", "none", ConfigShape.STRING, ("none", "vertical", "horizontal", "both")),
     SettingSpec("display-hours", "display_hours", None, ConfigShape.STRING),
     SettingSpec("hide-days", "hide_days", (), ConfigShape.STRING_ARRAY),

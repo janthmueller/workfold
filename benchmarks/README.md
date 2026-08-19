@@ -17,10 +17,11 @@ uv run python -m benchmarks.run --fixture medium --suite complete
 
 The built-in suites are:
 
-- `quick`: standard Git, filesystem, and combined current-week runs;
-- `scope`: those three modes for both current-week and all-date selection;
-- `profiles`: portable and full evidence profiles with bounded and all-date
-  selections;
+- `quick`: low-noise Git, filesystem, and combined current-week profiles;
+- `scope`: those three profiles for both current-week and all-date selection;
+- `profiles`: deliberately broad portable and full workloads with bounded and
+  all-date selections; Git cases use all locally stored refs and filesystem
+  cases include ignored entries where applicable;
 - `complete`: every named case.
 
 Repeat `--case NAME` to select an exact subset instead. Run `--help` for the

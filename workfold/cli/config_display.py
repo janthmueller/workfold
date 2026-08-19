@@ -9,6 +9,7 @@ from workfold.configuration.layers import ResolvedSettings
 from workfold.configuration.options import ListSchedule
 from workfold.configuration.schema import DEFAULT_SETTINGS, SettingValue
 from workfold.configuration.styles import EventStyleRule
+from workfold.domain.observations import RecordKind, Source
 from workfold.reporting.sanitization import display_width, pad_right, sanitize_terminal_text
 from workfold.reporting.terminal.layout import aligned_fact_lines, column_chunks
 
@@ -101,6 +102,12 @@ def _effective_rows(effective: EffectiveSettings) -> list[tuple[str, str, str]]:
 def _effective_values(effective: EffectiveSettings) -> dict[str, SettingValue]:
     options = effective.options
     preferences = options.terminal
+    includes_git = options.evidence.includes_source(Source.GIT)
+    includes_filesystem = options.evidence.includes_source(Source.FILESYSTEM)
+    includes_commit_history = any(
+        kind.record_kind in {RecordKind.COMMIT, RecordKind.GIT_FILE_CHANGE} for kind in options.evidence.kinds
+    )
+    not_applicable = "not applicable"
     if options.weeks:
         time_value: SettingValue = options.weeks
     elif options.from_date is not None or options.to_date is not None:
@@ -122,16 +129,14 @@ def _effective_values(effective: EffectiveSettings) -> dict[str, SettingValue]:
             *((event_list.schedule.value,) if event_list.schedule is not ListSchedule.ALL else ()),
             *(kind.value for kind in event_list.evidence_kinds),
         )
-    source_mode = options.source.value
     return {
         "time": time_value,
-        "mode": source_mode,
-        "profile": options.profile.value,
+        "profile": options.profile.value if options.profile is not None else None,
         "events": tuple(kind.value for kind in options.evidence.kinds),
-        "git-commits-from": options.ref_scope.value,
-        "git-identity": options.git_identities,
-        "include-ignored": options.include_ignored,
-        "fs-exclude": options.exclusions,
+        "git-commits-from": options.ref_scope.value if includes_commit_history else not_applicable,
+        "git-identity": options.git_identities if includes_git else not_applicable,
+        "include-ignored": options.include_ignored if includes_filesystem else not_applicable,
+        "fs-exclude": options.exclusions if includes_filesystem else not_applicable,
         "hours": str(options.schedule),
         "timezone": options.timezone.key if options.timezone is not None else "local",
         "cluster-window": _format_duration(options.cluster_window.total_seconds()),
@@ -139,6 +144,7 @@ def _effective_values(effective: EffectiveSettings) -> dict[str, SettingValue]:
         "band-label": preferences.band_label.value,
         "show-empty-bands": preferences.show_empty_bands,
         "marker-style": preferences.marker_style.value,
+        "count-grouping": preferences.count_grouping.value,
         "grid": preferences.grid_style.value,
         "display-hours": (
             "auto"

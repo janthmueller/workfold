@@ -40,18 +40,18 @@ Workfold therefore uses qualified wording such as:
 
 > complete for all discoverable timestamps in the requested scope
 
-That scope includes paths, the time selector, the mode/profile preset or exact
+That scope includes paths, the time selector, the named profile or exact
 event selectors, commit reachability, Git identity filters, filesystem ignore
 policy, explicit exclusions, and platform capabilities. `--coverage` prints
 the detailed ledger without operational details; `--verbose` prints operational
 details, the full successful coverage status, and that ledger. The `full`
-profile changes collection scope only and does not imply either report-detail
-flag.
+profile changes the event set only and does not imply either report-detail flag.
 
 Default output omits the ordinary complete status, but it must show a compact
 coverage exception for active Git identity filtering, explicit exclusions,
 unsupported capabilities, partial collection, or collection errors. The
-verbose Scope fact combines mode and profile, such as `Git · portable`, while
+verbose Scope fact combines derived event sources and profile, such as
+`Git · portable`, while
 the full Coverage fact stays focused on completeness.
 
 The ledger keeps four checks separate:
@@ -80,10 +80,16 @@ not event order, clustering, totals, or coverage.
 Sparse chart layout does not change this accounting. Empty wall-clock bands are
 omitted because they contain no selected markers, not because collection skipped
 them. Ordinary cells show one symbol per activity marker. If the terminal is too
-narrow for that representation, a cell switches to exact per-symbol `×N` counts;
+narrow for that representation, a cell switches to exact `×N` counts;
 very busy cells may make that same exact-count switch before rendering so their
 visual sequence cannot grow memory without bound. The underlying event,
 source/schedule, and coverage totals are unchanged.
+By default, each token represents one retained event-kind, schedule, and
+identity signature. `--count-grouping visual` may instead sum signatures only
+when their resolved symbol and configured style match. This is a terminal-only
+projection: it never merges normalized evidence, changes totals, or alters
+coverage. The grouping decision is made before ANSI color suppression, so
+`NO_COLOR` cannot change token boundaries.
 Event-style rules operate only on that retained plotted-marker projection.
 They cannot change discovery, timestamp selection, coalescing, scope, totals,
 or coverage. When equal Git author and committer instants coalesce, a style
@@ -159,8 +165,8 @@ weeks, dates, or months.
 - Ignored leaf candidates and ignored subtree boundaries are counted without
   reading their metadata. When directories are requested, coverage separately
   reports each pruned ignored subtree and states that descendant directories
-  were not enumerated. The full profile and `--include-ignored` instead traverse
-  and stat those entries because their timestamps are explicitly in scope.
+  were not enumerated. `--include-ignored` instead traverses and stats those
+  entries because their timestamps are explicitly in scope.
 - A repository embedded below a selected root is not an escape from that
   root's ignore policy. An ignored repository boundary is pruned; a visible
   boundary receives its own repository context. A nested repository supplied

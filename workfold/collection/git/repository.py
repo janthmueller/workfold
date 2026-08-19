@@ -77,7 +77,7 @@ def resolve_repository(path: Path, runner: GitRunner) -> GitRepository:
                 returncode=error.returncode,
                 stderr=error.stderr,
                 stderr_truncated=error.stderr_truncated,
-                hint="Use --mode fs or pass a path inside a Git repository.",
+                hint="Use --profile fs or pass a path inside a Git repository.",
                 category=DiagnosticCategory.INVOCATION,
             ) from error
         raise

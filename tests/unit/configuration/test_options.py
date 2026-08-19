@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import cast
@@ -10,15 +10,15 @@ from workfold.cli import parse_options
 from workfold.configuration import (
     BandLabel,
     ClusterAnchor,
-    CollectionProfile,
+    CountGrouping,
     EventListSelection,
+    EventProfile,
     GridStyle,
     ListSchedule,
     MarkerStyle,
     RefScope,
     RollingDuration,
     RunOptions,
-    SourceMode,
     TerminalPreferences,
     UnresolvedOptions,
     UsageError,
@@ -33,20 +33,20 @@ from workfold.configuration import (
     validate_iso_week,
 )
 from workfold.domain.evidence import EvidenceKind, EvidenceSelection
-from workfold.domain.observations import Weekday
+from workfold.domain.observations import Source, Weekday
 
 
 def test_default_options_are_the_quick_git_view_for_this_week() -> None:
     options = parse_options([])
 
     assert options.paths == (Path("."),)
-    assert options.source is SourceMode.GIT
+    assert options.evidence.sources == (Source.GIT,)
     assert options.weeks == ()
     assert options.from_date is None
     assert options.to_date is None
     assert not options.all_dates
     assert options.rolling_duration is None
-    assert options.profile is CollectionProfile.STANDARD
+    assert options.profile is EventProfile.GIT
     assert options.evidence == EvidenceSelection.create((EvidenceKind.GIT_COMMIT_AUTHOR,))
     assert options.ref_scope is RefScope.LOCAL_BRANCHES
     assert options.git_identities == ()
@@ -56,9 +56,17 @@ def test_default_options_are_the_quick_git_view_for_this_week() -> None:
     assert options.terminal.band_label is BandLabel.RANGE
     assert not options.terminal.show_empty_bands
     assert options.terminal.marker_style is MarkerStyle.SOURCE
+    assert options.terminal.count_grouping is CountGrouping.EVENT
     assert options.terminal.grid_style is GridStyle.NONE
     assert options.hide_days == ()
     assert options.hide_empty_days == ()
+
+
+def test_named_profile_cannot_drift_from_its_canonical_event_set() -> None:
+    options = parse_options([])
+
+    with pytest.raises(ValueError, match="profile does not match"):
+        replace(options, evidence=EvidenceSelection.create((EvidenceKind.FS_FILE_MODIFIED,)))
 
 
 def test_terminal_preferences_are_grouped_away_from_collection_options() -> None:
@@ -80,15 +88,17 @@ def test_terminal_preferences_are_grouped_away_from_collection_options() -> None
         "coverage",
         "strict",
         "verbose",
+        "count_grouping",
         "event_styles",
     )
-    assert unresolved_names[-6:] == (
+    assert unresolved_names[-7:] == (
         "strict",
         "verbose",
         "explicit_names",
         "cluster_anchor",
         "band_label",
         "show_empty_bands",
+        "count_grouping",
     )
     assert resolved.terminal.event_limit == 50
 
@@ -216,6 +226,10 @@ def test_identity_marker_style_is_opt_in() -> None:
     assert parse_options(["--marker-style", "identity"]).terminal.marker_style is MarkerStyle.IDENTITY
 
 
+def test_busy_count_grouping_is_explicit_and_enum_backed() -> None:
+    assert parse_options(["--count-grouping", "visual"]).terminal.count_grouping is CountGrouping.VISUAL
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -295,57 +309,65 @@ def test_unconditional_day_hiding_must_leave_one_column(arguments: list[str]) ->
         parse_options(arguments)
 
 
-def test_mode_selects_collectors_without_changing_evidence_preset() -> None:
-    filesystem = parse_options(["--mode", "fs"])
-    combined = parse_options(["-m", "both"])
+def test_profiles_are_fixed_event_sets_with_derived_sources() -> None:
+    filesystem = parse_options(["--profile", "fs"])
+    combined = parse_options(["-p", "both"])
 
-    assert filesystem.source is SourceMode.FILESYSTEM
-    assert filesystem.profile is CollectionProfile.STANDARD
-    assert combined.source is SourceMode.BOTH
-    assert combined.profile is CollectionProfile.STANDARD
+    assert filesystem.profile is EventProfile.FILESYSTEM
+    assert filesystem.evidence == EvidenceSelection.create((EvidenceKind.FS_FILE_BIRTH, EvidenceKind.FS_FILE_MODIFIED))
+    assert combined.profile is EventProfile.BOTH
+    assert combined.evidence == EvidenceSelection.create(
+        (
+            EvidenceKind.GIT_COMMIT_AUTHOR,
+            EvidenceKind.FS_FILE_BIRTH,
+            EvidenceKind.FS_FILE_MODIFIED,
+        )
+    )
 
 
-def test_mode_may_be_selected_only_once() -> None:
-    with pytest.raises(UsageError, match="only once"):
-        parse_options(["--mode", "git", "--mode", "fs"])
-
-
-def test_full_git_broadens_only_git_and_preserves_explicit_time() -> None:
+def test_full_profile_selects_every_event_kind_and_preserves_explicit_time() -> None:
     options = parse_options(["-p", "full", "--time", "2026-W31"])
 
-    assert options.source is SourceMode.GIT
-    assert options.profile is CollectionProfile.FULL
+    assert options.profile is EventProfile.FULL
     assert options.weeks == ("2026-W31",)
     assert not options.all_dates
-    assert options.evidence == EvidenceSelection.create(kind for kind in EvidenceKind if kind.value.startswith("git:"))
-    assert options.ref_scope is RefScope.ALL_REFS
+    assert options.evidence == EvidenceSelection.create(EvidenceKind)
+    assert options.ref_scope is RefScope.LOCAL_BRANCHES
     assert not options.include_ignored
+    assert options.respect_gitignore
     assert not options.terminal.coverage
 
 
-@pytest.mark.parametrize("mode", ["fs", "both"])
-def test_full_filesystem_scope_includes_all_metadata_entries_and_ignored(mode: str) -> None:
-    options = parse_options(["--mode", mode, "--profile", "full"])
+def test_profiles_do_not_own_independent_discovery_policy() -> None:
+    portable = parse_options(["--profile", "portable", "--git-commits-from", "head"])
+    full = parse_options(["--profile", "full", "--git-commits-from", "all-refs", "--include-ignored"])
 
-    assert all(kind in options.evidence.kinds for kind in EvidenceKind if kind.value.startswith("fs:"))
-    assert options.include_ignored
-    assert not options.respect_gitignore
-    assert not options.terminal.coverage
-    assert not options.all_dates
+    assert portable.ref_scope is RefScope.HEAD
+    assert full.ref_scope is RefScope.ALL_REFS
+    assert full.include_ignored
+    assert not full.respect_gitignore
+
+
+def test_equivalent_profile_and_exact_events_share_discovery_defaults() -> None:
+    profile = parse_options(["--profile", "full"])
+    exact = parse_options(["--events", "*"])
+
+    assert profile.evidence == exact.evidence
+    assert profile.ref_scope is exact.ref_scope is RefScope.LOCAL_BRANCHES
+    assert profile.include_ignored == exact.include_ignored is False
 
 
 def test_full_profile_keeps_expanded_coverage_opt_in() -> None:
     options = parse_options(["--profile", "full", "--coverage"])
 
-    assert options.profile is CollectionProfile.FULL
+    assert options.profile is EventProfile.FULL
     assert options.terminal.coverage
 
 
-def test_portable_is_the_locked_git_object_backed_preset() -> None:
+def test_portable_is_a_git_object_backed_event_profile() -> None:
     options = parse_options(["--profile", "portable"])
 
-    assert options.source is SourceMode.GIT
-    assert options.profile is CollectionProfile.PORTABLE
+    assert options.profile is EventProfile.PORTABLE
     assert options.evidence == EvidenceSelection.create(
         (
             EvidenceKind.GIT_COMMIT_AUTHOR,
@@ -353,38 +375,18 @@ def test_portable_is_the_locked_git_object_backed_preset() -> None:
             EvidenceKind.GIT_TAG_TAGGER,
         )
     )
-    assert options.ref_scope is RefScope.ALL_REFS
+    assert options.ref_scope is RefScope.LOCAL_BRANCHES
     assert EvidenceKind.GIT_REFLOG_UPDATE not in options.evidence.kinds
     assert not options.terminal.coverage
 
 
-@pytest.mark.parametrize("mode", ["fs", "both"])
-def test_portable_rejects_non_git_modes(mode: str) -> None:
-    with pytest.raises(UsageError, match="only with --mode git"):
-        parse_options(["--mode", mode, "--profile", "portable"])
-
-
-@pytest.mark.parametrize("profiles", [("standard", "full"), ("portable", "full"), ("full", "full")])
+@pytest.mark.parametrize("profiles", [("git", "full"), ("portable", "full"), ("full", "full")])
 def test_profile_may_be_selected_only_once(profiles: tuple[str, str]) -> None:
     with pytest.raises(UsageError, match="only once"):
         parse_options(["--profile", profiles[0], "--profile", profiles[1]])
 
 
-@pytest.mark.parametrize(
-    "flag",
-    [
-        ["--git-commits-from", "head"],
-        ["--respect-gitignore"],
-        ["--include-ignored"],
-    ],
-)
-@pytest.mark.parametrize("profile", ["portable", "full"])
-def test_locked_profiles_reject_scope_overrides(profile: str, flag: list[str]) -> None:
-    with pytest.raises(UsageError, match=f"--profile {profile} controls"):
-        parse_options(["--profile", profile, *flag])
-
-
-def test_custom_events_are_an_exact_alternative_to_mode_and_profile() -> None:
+def test_custom_events_are_an_exact_alternative_to_profiles() -> None:
     options = parse_options(
         [
             "--events",
@@ -395,7 +397,7 @@ def test_custom_events_are_an_exact_alternative_to_mode_and_profile() -> None:
         ]
     )
 
-    assert options.profile is CollectionProfile.CUSTOM
+    assert options.profile is None
     assert options.evidence == EvidenceSelection.create(
         (EvidenceKind.GIT_COMMIT_COMMITTER, EvidenceKind.GIT_TAG_TAGGER)
     )
@@ -445,10 +447,9 @@ def test_commit_reachability_requires_commit_derived_events() -> None:
         parse_options(["--events", "git:tag:tagger", "git:reflog:update", "--git-commits-from", "head"])
 
 
-@pytest.mark.parametrize("preset_flag", [("--mode", "git"), ("--profile", "standard")])
-def test_custom_events_cannot_share_a_cli_layer_with_presets(preset_flag: tuple[str, str]) -> None:
+def test_custom_events_cannot_share_a_cli_layer_with_a_profile() -> None:
     with pytest.raises(UsageError, match="--events cannot be combined"):
-        parse_options(["--events", "git:tag:tagger", *preset_flag])
+        parse_options(["--events", "git:tag:tagger", "--profile", "git"])
 
 
 def test_git_identity_filter_applies_to_non_commit_git_records() -> None:
@@ -475,15 +476,15 @@ def test_commits_from_maps_to_commit_reachability() -> None:
 
 def test_source_specific_options_are_not_silently_ignored() -> None:
     with pytest.raises(UsageError, match="Git-specific"):
-        parse_options(["--mode", "fs", "--git-commits-from", "head"])
+        parse_options(["--profile", "fs", "--git-commits-from", "head"])
     with pytest.raises(UsageError, match="Git-specific"):
-        parse_options(["--mode", "fs", "--git-identity", "Ada"])
+        parse_options(["--profile", "fs", "--git-identity", "Ada"])
     with pytest.raises(UsageError, match="filesystem-specific"):
-        parse_options(["--mode", "git", "--include-ignored"])
+        parse_options(["--profile", "git", "--include-ignored"])
     with pytest.raises(UsageError, match="filesystem-specific"):
-        parse_options(["--mode", "git", "--fs-exclude", "*.log"])
+        parse_options(["--profile", "git", "--fs-exclude", "*.log"])
 
-    options = parse_options(["--mode", "fs", "--fs-exclude", "build", "--fs-exclude", "*.log"])
+    options = parse_options(["--profile", "fs", "--fs-exclude", "build", "--fs-exclude", "*.log"])
     assert options.exclusions == ("build", "*.log")
 
 
@@ -651,4 +652,4 @@ def test_list_wildcards_match_only_enabled_event_kinds() -> None:
 
 def test_explicit_exclusions_cannot_be_negated() -> None:
     with pytest.raises(UsageError, match="cannot be negated"):
-        parse_options(["--mode", "fs", "--fs-exclude", "!keep.log"])
+        parse_options(["--profile", "fs", "--fs-exclude", "!keep.log"])

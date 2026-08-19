@@ -22,7 +22,7 @@ class ReportScope:
     period_label: str
     timezone_name: str
     schedule: Schedule
-    profile_name: str
+    profile_name: str | None
     evidence: EvidenceSelection
     ref_scope: RefScope
     git_identities: tuple[str, ...]

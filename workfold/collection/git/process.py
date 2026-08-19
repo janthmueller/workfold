@@ -88,7 +88,7 @@ def open_git_stdout(
                 message=f"Git executable was not found: {command[0]}",
                 command=command,
                 cwd=cwd,
-                hint="Install Git or use --mode fs.",
+                hint="Install Git or select filesystem events with --profile fs.",
                 category=DiagnosticCategory.INVOCATION,
             ) from error
         except OSError as error:

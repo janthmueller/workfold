@@ -30,14 +30,15 @@ Run `workfold` inside a Git repository to see the current ISO week:
 workfold
 ```
 
-The four selectors you will use most are:
+The selectors you will use most are:
 
 ```bash
 workfold . -t 2w3d                    # rolling elapsed window
 workfold . -t 2026-W31                # one ISO week
-workfold . -m fs                      # current filesystem metadata
-workfold . -m both -p full -t all     # exhaustive local view
-workfold . -m git -p portable -t all  # evidence stored in Git objects
+workfold . -p fs                      # current filesystem metadata
+workfold . -p both                    # low-noise Git + filesystem view
+workfold . -p portable -t all         # evidence stored in Git objects
+workfold . -p full -t all --git-commits-from all-refs --include-ignored
 workfold . -e git:tag:tagger fs:file:modified
 ```
 
@@ -46,15 +47,19 @@ They control separate parts of the request:
 | Selector | Purpose | Values |
 | --- | --- | --- |
 | `-t`, `--time` | Date scope | `this-week`, `2w3d`, `YYYY-Www`, `DATE..DATE`, `all` |
-| `-m`, `--mode` | Evidence source | `git`, `fs`, `both` |
-| `-p`, `--profile` | Evidence preset | `standard`, `portable`, `full` |
-| `-e`, `--events` | Exact event scope (alternative to mode/profile) | IDs and wildcards |
+| `-p`, `--profile` | Named event set | `git`, `fs`, `both`, `portable`, `full` |
+| `-e`, `--events` | Exact event set (alternative to a profile) | IDs and wildcards |
 
 The profiles answer different questions:
 
-- `standard`: What does the ordinary activity pattern look like?
+- `git`: What does ordinary commit activity look like? This is the default.
+- `fs`: What birth and modification metadata exists for current regular files?
+- `both`: What does the combined low-noise Git and filesystem pattern look like?
 - `portable`: What dated evidence is stored inside Git objects?
-- `full`: What can this machine still discover for the selected mode and time?
+- `full`: Which timestamps exist across every supported Git and filesystem event kind?
+
+Profiles expand only to event sets. Time, Git reachability, ignored files, and
+explicit exclusions remain independently configurable.
 
 For exact control, `-e/--events` accepts identifiers such as
 `git:commit:author`, `git:tag:tagger`, and `fs:file:modified`; quote wildcards
@@ -81,11 +86,11 @@ defaults in `workfold.toml`:
 ```toml
 timezone = "Europe/Berlin"
 hours = "Mo-Thu 08:00-16:30; Fr 08:00-14:00"
-mode = "git"
 profile = "portable"
 cluster-anchor = "midnight"
 band-label = "start"
 show-empty-bands = true
+count-grouping = "visual"
 grid = "vertical"
 hide-empty-days = ["weekend"]
 
@@ -114,10 +119,12 @@ documents locations, discovery, merging, and every supported key.
 - Default green/blue filled markers are inside the schedule; red hollow markers
   are outside. Colorless output preserves the shape distinction, and event
   style rules may replace both symbol pairs and their colors.
-- One symbol is one event; busy cells use exact `×N` counts.
+- One symbol is one event; busy cells use exact `×N` counts. Counts stay
+  separate per event kind by default; `--count-grouping visual` merges kinds
+  only when their resolved symbol and configured color match.
 - Empty time is compressed, and `⋮` reports a meaningful gap.
 - Identity-marker mode replaces Git circles with codes mapped in the key.
-- Event-selector style rules can replace source-mode symbols and colors while
+- Event-selector style rules can replace source-marker symbols and colors while
   keeping collection and coverage unchanged.
 
 The summary independently splits all events by schedule and by calendar day.

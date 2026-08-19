@@ -9,17 +9,18 @@ from workfold.cli.config_display import format_resolved_settings
 from workfold.configuration import (
     BandLabel,
     ClusterAnchor,
-    CollectionProfile,
+    CountGrouping,
     EventListSelection,
+    EventProfile,
     GridStyle,
     ListSchedule,
     OriginKind,
-    SourceMode,
     UsageError,
     global_config_path,
 )
 from workfold.configuration.schema import DEFAULT_SETTINGS, SETTING_BY_DESTINATION, SETTING_BY_KEY, SETTING_SPECS
 from workfold.domain.evidence import EvidenceKind, EvidenceSelection, evidence_mask
+from workfold.domain.observations import Source
 from workfold.reporting.sanitization import display_width
 
 
@@ -89,7 +90,8 @@ def test_global_local_and_cli_layers_merge_by_key(tmp_path: Path) -> None:
     )
     local_path = _write(
         project / "workfold.toml",
-        'hours = "Mo-Thu 08:00-16:00"\nband-label = "start"\nhide-empty-days = ["weekend"]\n',
+        'hours = "Mo-Thu 08:00-16:00"\nband-label = "start"\ncount-grouping = "visual"\n'
+        'hide-empty-days = ["weekend"]\n',
     )
 
     invocation = parse_invocation(
@@ -103,6 +105,7 @@ def test_global_local_and_cli_layers_merge_by_key(tmp_path: Path) -> None:
     assert str(invocation.options.schedule) == "Mo-Th 08:00-16:00"
     assert invocation.options.cluster_anchor is ClusterAnchor.MIDNIGHT
     assert invocation.options.terminal.band_label is BandLabel.START
+    assert invocation.options.terminal.count_grouping is CountGrouping.VISUAL
     assert invocation.options.terminal.grid_style is GridStyle.BOTH
     assert invocation.settings.global_config == global_path
     assert invocation.settings.local_config == local_path
@@ -110,6 +113,7 @@ def test_global_local_and_cli_layers_merge_by_key(tmp_path: Path) -> None:
     assert invocation.settings.origins["hours"].kind is OriginKind.LOCAL
     assert invocation.settings.origins["cluster-anchor"].kind is OriginKind.GLOBAL
     assert invocation.settings.origins["band-label"].kind is OriginKind.LOCAL
+    assert invocation.settings.origins["count-grouping"].kind is OriginKind.LOCAL
     assert invocation.settings.origins["grid"].kind is OriginKind.CLI
 
 
@@ -387,7 +391,7 @@ def test_local_sentinels_can_restore_dynamic_defaults(tmp_path: Path) -> None:
     assert cli.settings.origins["timezone"].kind is OriginKind.CLI
 
 
-def test_higher_precedence_locked_profile_replaces_lower_scope_details(tmp_path: Path) -> None:
+def test_higher_precedence_profile_replaces_lower_custom_events(tmp_path: Path) -> None:
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
@@ -404,7 +408,7 @@ def test_higher_precedence_locked_profile_replaces_lower_scope_details(tmp_path:
         platform_name="linux",
     ).options
 
-    assert options.profile is CollectionProfile.PORTABLE
+    assert options.profile is EventProfile.PORTABLE
     assert options.evidence == EvidenceSelection.create(
         (
             EvidenceKind.GIT_COMMIT_AUTHOR,
@@ -415,23 +419,23 @@ def test_higher_precedence_locked_profile_replaces_lower_scope_details(tmp_path:
 
 
 @pytest.mark.parametrize(
-    ("global_setting", "local_mode", "expected_source"),
+    ("global_setting", "local_profile", "expected_sources"),
     [
-        ('git-identity = ["global@example.test"]\n', "fs", SourceMode.FILESYSTEM),
-        ('fs-exclude = ["*.log"]\n', "git", SourceMode.GIT),
+        ('git-identity = ["global@example.test"]\n', "fs", (Source.FILESYSTEM,)),
+        ('fs-exclude = ["*.log"]\n', "git", (Source.GIT,)),
     ],
 )
-def test_higher_precedence_mode_discards_lower_disabled_collector_settings(
+def test_higher_precedence_profile_discards_lower_disabled_collector_settings(
     tmp_path: Path,
     global_setting: str,
-    local_mode: str,
-    expected_source: SourceMode,
+    local_profile: str,
+    expected_sources: tuple[Source, ...],
 ) -> None:
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
     _write(global_config_path(environ=environ, platform_name="linux"), global_setting)
-    _write(project / "workfold.toml", f'mode = "{local_mode}"\n')
+    _write(project / "workfold.toml", f'profile = "{local_profile}"\n')
 
     options = parse_invocation(
         [str(project)],
@@ -440,7 +444,7 @@ def test_higher_precedence_mode_discards_lower_disabled_collector_settings(
         platform_name="linux",
     ).options
 
-    assert options.source is expected_source
+    assert options.evidence.sources == expected_sources
     assert options.git_identities == ()
     assert options.exclusions == ()
 
@@ -453,7 +457,7 @@ def test_higher_precedence_profile_replaces_lower_custom_source_details(tmp_path
         global_config_path(environ=environ, platform_name="linux"),
         'events = ["fs:file:modified"]\ninclude-ignored = true\nfs-exclude = ["*.log"]\n',
     )
-    _write(project / "workfold.toml", 'profile = "standard"\n')
+    _write(project / "workfold.toml", 'profile = "git"\n')
 
     invocation = parse_invocation(
         [str(project)],
@@ -462,17 +466,17 @@ def test_higher_precedence_profile_replaces_lower_custom_source_details(tmp_path
         platform_name="linux",
     )
 
-    assert invocation.options.source is SourceMode.GIT
+    assert invocation.options.evidence.sources == (Source.GIT,)
     assert invocation.options.exclusions == ()
     assert not invocation.options.include_ignored
-    assert invocation.effective.origins["fs-exclude"].label == ("built-in mode + local profile (source selection)")
+    assert invocation.effective.origins["fs-exclude"].label == "local (profile selection)"
     rendered = " ".join(format_resolved_settings(invocation.settings, invocation.effective).split())
-    assert "fs-exclude [] built-in mode + local profile (source selection)" in rendered
+    assert "fs-exclude not applicable local (profile selection)" in rendered
 
 
-def test_show_config_attributes_preset_expansion_to_mode_and_profile(tmp_path: Path) -> None:
+def test_show_config_attributes_event_expansion_to_its_profile(tmp_path: Path) -> None:
     invocation = parse_invocation(
-        ["--no-config", "--mode", "fs"],
+        ["--no-config", "--profile", "fs"],
         cwd=tmp_path,
         environ=_environment(tmp_path),
         platform_name="linux",
@@ -481,7 +485,27 @@ def test_show_config_attributes_preset_expansion_to_mode_and_profile(tmp_path: P
     output = format_resolved_settings(invocation.settings, invocation.effective)
     normalized = " ".join(output.split())
 
-    assert "events [fs:file:birth, fs:file:modified] CLI mode + built-in profile (preset expansion)" in normalized
+    assert "profile fs CLI" in normalized
+    assert "events [fs:file:birth, fs:file:modified] CLI (profile expansion)" in normalized
+    assert "git-commits-from not applicable CLI (profile selection)" in normalized
+    assert "git-identity not applicable CLI (profile selection)" in normalized
+    assert "include-ignored false built-in" in normalized
+    assert "mode" not in invocation.effective.values
+
+
+def test_show_config_marks_commit_reachability_inapplicable_without_commit_events(tmp_path: Path) -> None:
+    invocation = parse_invocation(
+        ["--no-config", "--events", "git:tag:tagger"],
+        cwd=tmp_path,
+        environ=_environment(tmp_path),
+        platform_name="linux",
+    )
+
+    normalized = " ".join(format_resolved_settings(invocation.settings, invocation.effective).split())
+
+    assert "git-commits-from not applicable CLI (event selection)" in normalized
+    assert "git-identity [] built-in" in normalized
+    assert "include-ignored not applicable CLI (event selection)" in normalized
 
 
 def test_show_config_wraps_full_event_selection_to_terminal_width(
@@ -495,24 +519,26 @@ def test_show_config_wraps_full_event_selection_to_terminal_width(
 
     assert main(["--no-config", "--events", "*", "--show-config"]) == 0
     output = capsys.readouterr().out
+    normalized = " ".join(output.split())
 
     assert max(display_width(line) for line in output.splitlines()) <= 80
+    assert "profile — CLI (derived from events)" in normalized
     assert "git:commit:author" in output
     assert "fs:symlink:accessed" in output
 
 
 @pytest.mark.parametrize(
-    ("global_settings", "local_events", "expected_source"),
+    ("global_settings", "local_events", "expected_sources"),
     [
         (
-            'mode = "fs"\nfs-exclude = ["*.log"]\n',
+            'profile = "fs"\nfs-exclude = ["*.log"]\n',
             'events = ["git:tag:tagger"]\n',
-            SourceMode.GIT,
+            (Source.GIT,),
         ),
         (
-            'mode = "git"\ngit-identity = ["global@example.test"]\n',
+            'profile = "git"\ngit-identity = ["global@example.test"]\n',
             'events = ["fs:file:modified"]\n',
-            SourceMode.FILESYSTEM,
+            (Source.FILESYSTEM,),
         ),
     ],
 )
@@ -520,7 +546,7 @@ def test_higher_precedence_custom_events_discard_lower_disabled_collector_settin
     tmp_path: Path,
     global_settings: str,
     local_events: str,
-    expected_source: SourceMode,
+    expected_sources: tuple[Source, ...],
 ) -> None:
     environ = _environment(tmp_path)
     project = tmp_path / "project"
@@ -535,8 +561,8 @@ def test_higher_precedence_custom_events_discard_lower_disabled_collector_settin
         platform_name="linux",
     ).options
 
-    assert options.profile is CollectionProfile.CUSTOM
-    assert options.source is expected_source
+    assert options.profile is None
+    assert options.evidence.sources == expected_sources
     assert options.git_identities == ()
     assert options.exclusions == ()
 
@@ -565,11 +591,11 @@ def test_higher_precedence_non_commit_events_discard_lower_commit_reachability(
     assert invocation.settings.origins["events"].kind is OriginKind.LOCAL
 
 
-def test_mode_profile_and_custom_events_cannot_share_one_config_layer(tmp_path: Path) -> None:
+def test_profile_and_custom_events_cannot_share_one_config_layer(tmp_path: Path) -> None:
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
-    config = _write(project / "workfold.toml", 'mode = "git"\nevents = ["git:tag:tagger"]\n')
+    config = _write(project / "workfold.toml", 'profile = "git"\nevents = ["git:tag:tagger"]\n')
 
     with pytest.raises(UsageError, match=rf"{re.escape(str(config))}.*same precedence layer"):
         parse_invocation(
@@ -588,9 +614,9 @@ def test_invalid_selection_family_in_lower_layer_cannot_be_hidden_by_partial_ove
     project.mkdir()
     global_path = _write(
         global_config_path(environ=environ, platform_name="linux"),
-        'mode = "fs"\nevents = ["git:tag:tagger"]\n',
+        'profile = "fs"\nevents = ["git:tag:tagger"]\n',
     )
-    _write(project / "workfold.toml", 'profile = "standard"\n')
+    _write(project / "workfold.toml", 'profile = "git"\n')
 
     with pytest.raises(UsageError, match=rf"{re.escape(str(global_path))}.*same precedence layer"):
         parse_invocation(
@@ -621,11 +647,11 @@ def test_incompatible_inherited_list_selector_identifies_its_config_file(tmp_pat
         )
 
 
-def test_combined_mode_is_supported_in_configuration(tmp_path: Path) -> None:
+def test_combined_profile_is_supported_in_configuration(tmp_path: Path) -> None:
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
-    _write(project / "workfold.toml", 'mode = "both"\n')
+    _write(project / "workfold.toml", 'profile = "both"\n')
 
     options = parse_invocation(
         [str(project)],
@@ -634,16 +660,17 @@ def test_combined_mode_is_supported_in_configuration(tmp_path: Path) -> None:
         platform_name="linux",
     ).options
 
-    assert options.source is SourceMode.BOTH
+    assert options.profile is EventProfile.BOTH
+    assert options.evidence.sources == (Source.GIT, Source.FILESYSTEM)
 
 
-def test_retired_all_mode_is_rejected_in_configuration(tmp_path: Path) -> None:
+def test_retired_mode_key_is_rejected_in_configuration(tmp_path: Path) -> None:
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
-    _write(project / "workfold.toml", 'mode = "all"\n')
+    _write(project / "workfold.toml", 'mode = "both"\n')
 
-    with pytest.raises(UsageError, match="must be one of both, fs, git"):
+    with pytest.raises(UsageError, match="unknown Workfold configuration key.*mode"):
         parse_invocation(
             [str(project)],
             cwd=tmp_path,
@@ -652,23 +679,21 @@ def test_retired_all_mode_is_rejected_in_configuration(tmp_path: Path) -> None:
         )
 
 
-def test_locked_profile_and_scope_details_in_one_layer_are_rejected(tmp_path: Path) -> None:
+def test_profile_and_independent_scope_details_can_share_one_layer(tmp_path: Path) -> None:
     environ = _environment(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
-    config = _write(project / "workfold.toml", 'profile = "portable"\ngit-commits-from = "head"\n')
+    _write(project / "workfold.toml", 'profile = "portable"\ngit-commits-from = "head"\n')
 
-    with pytest.raises(UsageError) as captured:
-        parse_invocation(
-            [str(project)],
-            cwd=tmp_path,
-            environ=environ,
-            platform_name="linux",
-        )
+    options = parse_invocation(
+        [str(project)],
+        cwd=tmp_path,
+        environ=environ,
+        platform_name="linux",
+    ).options
 
-    message = str(captured.value)
-    assert message.startswith(f"{config.resolve()}: profile, git-commits-from:")
-    assert "--profile portable controls --git-commits-from" in message
+    assert options.profile is EventProfile.PORTABLE
+    assert options.ref_scope.value == "head"
 
 
 def test_cross_setting_error_identifies_origins_from_distinct_config_layers(tmp_path: Path) -> None:
@@ -676,7 +701,7 @@ def test_cross_setting_error_identifies_origins_from_distinct_config_layers(tmp_
     project = tmp_path / "project"
     project.mkdir()
     global_path = global_config_path(environ=environ, platform_name="linux")
-    _write(global_path, 'mode = "fs"\n')
+    _write(global_path, 'profile = "fs"\n')
     local_path = _write(project / "workfold.toml", 'git-commits-from = "head"\n')
 
     with pytest.raises(UsageError) as captured:
@@ -688,10 +713,9 @@ def test_cross_setting_error_identifies_origins_from_distinct_config_layers(tmp_
         )
 
     message = str(captured.value)
-    assert message.startswith("Git-specific options cannot be used with --mode fs")
+    assert message.startswith("Git-specific options require at least one Git event")
     assert f"git-commits-from (local {local_path.resolve()})" in message
-    assert f"mode (global {global_path.resolve()})" in message
-    assert "profile (built-in)" in message
+    assert f"profile (global {global_path.resolve()})" in message
 
 
 def test_cli_can_negate_booleans_and_disable_a_configured_event_list(tmp_path: Path) -> None:
@@ -741,10 +765,11 @@ def test_cli_can_negate_booleans_and_disable_a_configured_event_list(tmp_path: P
         ('unknown-setting = "value"\n', "unknown Workfold configuration key"),
         ('coverage = "yes"\n', "must be true or false"),
         ('events = "git:commit:author"\n', "must be an array of strings"),
-        ('mode = "remote"\n', "must be one of"),
+        ('profile = "remote"\n', "must be one of"),
         ('cluster-anchor = "noon"\n', "must be one of"),
         ('band-label = "compact"\n', "must be one of"),
         ('show-empty-bands = "yes"\n', "must be true or false"),
+        ('count-grouping = "source"\n', "must be one of"),
         ('[styles."git:*"]\nsymbol = "XX"\n', "one printable terminal cell"),
         ('[styles."git:*"]\ncolor = "not-a-color"\n', "valid terminal color"),
         ("hours = [\n", "invalid TOML"),
@@ -886,6 +911,8 @@ def test_show_config_prints_values_origins_and_files_without_collecting(
                 "--band-label",
                 "start",
                 "--show-empty-bands",
+                "--count-grouping",
+                "visual",
             ]
         )
         == 0
@@ -900,6 +927,7 @@ def test_show_config_prints_values_origins_and_files_without_collecting(
     assert re.search(r"^cluster-anchor\s+midnight\s+CLI$", output, re.MULTILINE)
     assert re.search(r"^band-label\s+start\s+CLI$", output, re.MULTILINE)
     assert re.search(r"^show-empty-bands\s+true\s+CLI$", output, re.MULTILINE)
+    assert re.search(r"^count-grouping\s+visual\s+CLI$", output, re.MULTILINE)
     assert "Event styles" in output
     assert re.search(r"^git:tag:\*\s+symbol=◆ color=magenta\s+local$", output, re.MULTILINE)
     assert "Time band" not in output

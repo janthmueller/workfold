@@ -116,7 +116,7 @@ class GitRunner:
                 message=f"Git executable was not found: {self._executable}",
                 command=command,
                 cwd=cwd,
-                hint="Install Git or use --mode fs.",
+                hint="Install Git or select filesystem events with --profile fs.",
                 category=DiagnosticCategory.INVOCATION,
             ) from error
         except subprocess.TimeoutExpired as error:

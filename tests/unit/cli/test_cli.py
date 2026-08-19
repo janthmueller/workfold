@@ -55,7 +55,7 @@ def test_truncated_missing_path_diagnostics_keep_the_usage_exit_status(
 ) -> None:
     missing_paths = tuple(os.fspath(tmp_path / f"missing-{index}") for index in range(257))
 
-    assert main([*missing_paths, "--mode", "fs", "--no-color"]) == 2
+    assert main([*missing_paths, "--profile", "fs", "--no-color"]) == 2
     captured = capsys.readouterr()
     assert "1 additional diagnostic(s) omitted" in captured.err
     assert "(errors=1, warnings=0, info=0)" in captured.err
@@ -95,8 +95,6 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
         "--show-config",
         "-t",
         "--time",
-        "-m",
-        "--mode",
         "-p",
         "--profile",
         "-e",
@@ -106,14 +104,15 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     } <= public_options
     assert "--time SELECTOR" in normalized_help
     assert "rolling duration such as 2w3d" in normalized_help
-    assert "--mode {git,fs,both}" in normalized_help
-    assert "--profile {standard,portable,full}" in normalized_help
-    assert "evidence preset" in normalized_help
-    assert "customizable low-noise defaults" in normalized_help
-    assert "standard (built-in default)" in normalized_help
-    assert "author, committer, and tagger" in normalized_help
-    assert "no file changes or reflogs" in normalized_help
-    assert "selected mode for full (not all time)" in normalized_help
+    assert "--mode" not in public_options
+    assert "-m" not in public_options
+    assert "--profile {git,fs,both,portable,full}" in normalized_help
+    assert "named event set" in normalized_help
+    assert "git=commit author (built-in default)" in normalized_help
+    assert "fs=regular-file birth+modified" in normalized_help
+    assert "portable=Git object-backed commit/tag timestamps" in normalized_help
+    assert "full=every supported Git and filesystem kind" in normalized_help
+    assert "profiles do not change time, commit reachability, or ignore policy" in normalized_help
     assert "implies coverage" not in normalized_help
     assert "--events SELECTOR [SELECTOR ...]" in normalized_help
     assert actions_by_option["-e"] is actions_by_option["--events"]
@@ -123,9 +122,11 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     assert "Place PATH arguments before --events/--list" in normalized_help
     assert "after an option-terminating --" in normalized_help
     assert "--git-commits-from {head,local-branches,all-refs}" in normalized_help
-    assert "standard built-in: local-branches; portable/full: all-refs" in normalized_help.replace("- ", "-")
+    assert "built-in default: local-branches; independent of event profile" in normalized_help.replace("- ", "-")
     assert "--git-identity VALUE" in normalized_help
     assert "--marker-style {source,identity}" in normalized_help
+    assert "--count-grouping {event,visual}" in normalized_help
+    assert "busy-cell exact counts stay separate per event kind" in normalized_help
     assert "--cluster-anchor {event,midnight}" in normalized_help
     assert "--band-label {range,start}" in normalized_help
     assert "--show-empty-bands" in normalized_help
@@ -158,6 +159,7 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
         "--all",
         "--everything",
         "--source",
+        "--mode",
         "--git-mode",
         "--git-date",
         "--refs",
@@ -175,6 +177,7 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
         "--exclude",
         "--list-outside",
         "--no-list-outside",
+        "-m",
     }.isdisjoint(public_options)
 
 
@@ -200,6 +203,7 @@ def test_space_separated_selectors_have_documented_path_disambiguation(arguments
         "--all",
         "--everything",
         "--source",
+        "--mode",
         "--git-mode",
         "--git-date",
         "--refs",
@@ -217,18 +221,12 @@ def test_space_separated_selectors_have_documented_path_disambiguation(arguments
         "--exclude",
         "--list-outside",
         "--no-list-outside",
+        "-m",
     ],
 )
 def test_cli_rejects_retired_collection_options(option: str) -> None:
     with pytest.raises(SystemExit) as error:
         build_parser().parse_args([option])
-
-    assert error.value.code == 2
-
-
-def test_cli_rejects_retired_all_mode_value() -> None:
-    with pytest.raises(SystemExit) as error:
-        build_parser().parse_args(["--mode", "all"])
 
     assert error.value.code == 2
 
@@ -317,7 +315,7 @@ def test_cli_rejects_date_selectors_without_a_representable_end(
 def test_cli_maps_local_calendar_boundary_overflow_to_a_usage_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    assert main(["--mode", "fs", "--time", "0001-01-01..", "--timezone", "Asia/Kolkata"]) == 2
+    assert main(["--profile", "fs", "--time", "0001-01-01..", "--timezone", "Asia/Kolkata"]) == 2
     assert "representable UTC" in capsys.readouterr().err
 
 

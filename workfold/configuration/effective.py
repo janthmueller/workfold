@@ -14,6 +14,7 @@ from workfold.configuration.layers import (
 )
 from workfold.configuration.options import RunOptions, UnresolvedOptions, UsageError
 from workfold.configuration.parsing import parse_event_selectors
+from workfold.configuration.profiles import EventProfile, evidence_for_profile
 from workfold.configuration.resolution import resolve_options
 from workfold.configuration.schema import DEFAULT_SETTINGS, SETTING_BY_KEY, SettingValue
 from workfold.configuration.styles import compile_event_style_sheet
@@ -135,7 +136,6 @@ def _unresolved_options(
     return UnresolvedOptions(
         paths=tuple(paths),
         time_selectors=_tuple_value(values, "time"),
-        modes=_tuple_value(values, "mode"),
         profiles=_tuple_value(values, "profile"),
         event_selectors=_optional_tuple(values, "events"),
         commits_from=_optional_string(values, "git-commits-from"),
@@ -149,6 +149,7 @@ def _unresolved_options(
         band_label=_string_value(values, "band-label"),
         show_empty_bands=_boolean_value(values, "show-empty-bands"),
         marker_style=_string_value(values, "marker-style"),
+        count_grouping=_string_value(values, "count-grouping"),
         grid_style=_string_value(values, "grid"),
         display_hours=_optional_sentinel(values, "display-hours", sentinel="auto"),
         hide_days=_tuple_value(values, "hide-days"),
@@ -171,94 +172,65 @@ def _suppress_shadowed_settings(
 ) -> None:
     events = _optional_tuple(values, "events")
     event_precedence = resolution.origins["events"].precedence if events is not None else -1
-    preset_precedence = max(resolution.origins["mode"].precedence, resolution.origins["profile"].precedence)
-    if event_precedence == preset_precedence and event_precedence > 0:
-        conflicting_presets = tuple(
-            key for key in ("mode", "profile") if resolution.origins[key].precedence == event_precedence
-        )
+    profile_precedence = resolution.origins["profile"].precedence
+    if event_precedence == profile_precedence and event_precedence > 0:
         raise UsageError(
-            "--events cannot be combined with --mode or --profile at the same precedence layer",
-            setting_keys=("events", *conflicting_presets),
+            "--events cannot be combined with --profile at the same precedence layer",
+            setting_keys=("events", "profile"),
         )
-    if event_precedence > preset_precedence:
-        # Custom event selection is a complete alternative to a preset. Do
-        # not inherit scope broadening that a lower-precedence profile would
-        # otherwise apply during expansion.
-        values["mode"] = DEFAULT_SETTINGS["mode"]
-        values["profile"] = DEFAULT_SETTINGS["profile"]
-        explicit_keys.discard("mode")
+    if event_precedence > profile_precedence:
+        values["profile"] = ()
         explicit_keys.discard("profile")
         event_origin = resolution.origins["events"]
         derived_from_events = EffectiveOrigin((("events", event_origin),), "derived from events")
-        origins["mode"] = derived_from_events
         origins["profile"] = derived_from_events
-    elif preset_precedence > event_precedence and events is not None:
+    elif profile_precedence > event_precedence and events is not None:
         values["events"] = None
         explicit_keys.discard("events")
 
-    preset_origin = EffectiveOrigin(
-        (
-            ("mode", resolution.origins["mode"]),
-            ("profile", resolution.origins["profile"]),
-        ),
-        "preset expansion",
-    )
+    active_events = _optional_tuple(values, "events")
+    if active_events is not None:
+        event_selection = parse_event_selectors(active_events)
+        selection_precedence = resolution.origins["events"].precedence
+        selection_origin = EffectiveOrigin((("events", resolution.origins["events"]),), "event selection")
+    else:
+        profiles = _tuple_value(values, "profile")
+        profile = EventProfile(profiles[0] if profiles else EventProfile.GIT.value)
+        event_selection = evidence_for_profile(profile)
+        selection_precedence = profile_precedence
+        selection_origin = EffectiveOrigin((("profile", resolution.origins["profile"]),), "profile selection")
+        origins["events"] = EffectiveOrigin(
+            (("profile", resolution.origins["profile"]),),
+            "profile expansion",
+        )
 
-    profiles = _tuple_value(values, "profile")
-    if len(profiles) == 1 and profiles[0] in {"portable", "full"}:
-        profile_precedence = resolution.origins["profile"].precedence
+    has_commit_derived_events = any(
+        kind.record_kind in {RecordKind.COMMIT, RecordKind.GIT_FILE_CHANGE} for kind in event_selection.kinds
+    )
+    if not has_commit_derived_events:
         _reset_lower_precedence(
             values,
             origins,
             explicit_keys,
             resolution,
-            precedence=profile_precedence,
-            effective_origin=EffectiveOrigin((("profile", resolution.origins["profile"]),), "profile"),
-            keys=(
-                "git-commits-from",
-                "include-ignored",
-            ),
+            precedence=selection_precedence,
+            effective_origin=selection_origin,
+            keys=("git-commits-from",),
         )
 
-    active_events = _optional_tuple(values, "events")
-    if active_events is not None:
-        event_selection = parse_event_selectors(active_events)
-        selected_sources = event_selection.sources
-        source_key = "both" if len(selected_sources) == 2 else ("git" if selected_sources == (Source.GIT,) else "fs")
-        source_precedence = resolution.origins["events"].precedence
-        source_origin = EffectiveOrigin((("events", resolution.origins["events"]),), "event selection")
-        has_commit_derived_events = any(
-            kind.record_kind in {RecordKind.COMMIT, RecordKind.GIT_FILE_CHANGE} for kind in event_selection.kinds
-        )
-        if not has_commit_derived_events:
-            _reset_lower_precedence(
-                values,
-                origins,
-                explicit_keys,
-                resolution,
-                precedence=source_precedence,
-                effective_origin=source_origin,
-                keys=("git-commits-from",),
-            )
-    else:
-        modes = _tuple_value(values, "mode")
-        source_key = modes[0] if len(modes) == 1 else "git"
-        source_precedence = preset_precedence
-        source_origin = EffectiveOrigin(preset_origin.dependencies, "source selection")
-        origins["events"] = preset_origin
-    irrelevant = {
-        "git": ("include-ignored", "fs-exclude"),
-        "fs": ("git-commits-from", "git-identity"),
-        "both": (),
-    }[source_key]
+    selected_sources = event_selection.sources
+    irrelevant = (
+        *(("git-commits-from", "git-identity") if Source.GIT not in selected_sources else ()),
+        *(("include-ignored", "fs-exclude") if Source.FILESYSTEM not in selected_sources else ()),
+    )
     if irrelevant:
         _reset_lower_precedence(
             values,
             origins,
             explicit_keys,
             resolution,
-            precedence=source_precedence,
-            effective_origin=source_origin,
+            precedence=selection_precedence,
+            effective_origin=selection_origin,
             keys=irrelevant,
         )
 

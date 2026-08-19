@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import NoReturn, cast
 
 from workfold import __version__
-from workfold.configuration.schema import SETTING_SPECS, SettingValue
+from workfold.configuration.schema import SETTING_BY_KEY, SETTING_SPECS, SettingValue
 from workfold.reporting.sanitization import sanitize_terminal_text
 
 
@@ -123,25 +123,16 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
 
     collection_group = parser.add_argument_group("event selection")
     collection_group.add_argument(
-        "-m",
-        "--mode",
-        dest="modes",
-        action="append",
-        choices=("git", "fs", "both"),
-        default=[],
-        help="evidence collector mode (built-in default: git)",
-    )
-    collection_group.add_argument(
         "-p",
         "--profile",
         dest="profiles",
         action="append",
-        choices=("standard", "portable", "full"),
+        choices=SETTING_BY_KEY["profile"].choices,
         default=[],
         help=(
-            "evidence preset: customizable low-noise defaults for standard (built-in default); Git object-backed "
-            "commits and tags with author, committer, and tagger times for portable (Git mode only; no file "
-            "changes or reflogs); every supported kind in the selected mode for full (not all time)"
+            "named event set: git=commit author (built-in default), fs=regular-file birth+modified, "
+            "both=their union, portable=Git object-backed commit/tag timestamps, full=every supported Git and "
+            "filesystem kind; profiles do not change time, commit reachability, or ignore policy"
         ),
     )
     collection_group.add_argument(
@@ -154,7 +145,7 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
         metavar="SELECTOR",
         help=(
             "exact custom event scope; accepts space-separated identifiers and '*' wildcards such as "
-            "git:tag:tagger fs:file:modified or 'git:*:committer'; replaces mode/profile selection"
+            "git:tag:tagger fs:file:modified or 'git:*:committer'; replaces profile selection"
         ),
     )
 
@@ -164,7 +155,7 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
         dest="commits_from",
         choices=("head", "local-branches", "all-refs"),
         default=None,
-        help="commit reachability (standard built-in: local-branches; portable/full: all-refs)",
+        help="commit reachability (built-in default: local-branches; independent of event profile)",
     )
     git_group.add_argument(
         "--git-identity",
@@ -246,6 +237,15 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
         choices=("source", "identity"),
         default="source",
         help="Git marker labels: source symbol (built-in default) or recorded identity codes",
+    )
+    output_group.add_argument(
+        "--count-grouping",
+        choices=("event", "visual"),
+        default="event",
+        help=(
+            "busy-cell exact counts stay separate per event kind (built-in default) "
+            "or merge when their resolved marker visuals match"
+        ),
     )
     output_group.add_argument(
         "--grid",

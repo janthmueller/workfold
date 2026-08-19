@@ -618,7 +618,7 @@ def test_no_usable_git_target_fails_with_actionable_hint(tmp_path: Path) -> None
     assert not output.getvalue()
     assert not errors.getvalue().startswith("\n")
     assert "not a Git repository" in errors.getvalue()
-    assert "Use --mode fs" in errors.getvalue()
+    assert "Use --profile fs" in errors.getvalue()
 
 
 def test_empty_repository_plus_failed_target_renders_an_honest_partial_run(

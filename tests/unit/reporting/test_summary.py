@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 from workfold.application.report import DiagnosticFacts
-from workfold.configuration import BandLabel, ClusterAnchor, EventListSelection, GridStyle, MarkerStyle
+from workfold.configuration import BandLabel, ClusterAnchor, CountGrouping, EventListSelection, GridStyle, MarkerStyle
 from workfold.domain.coverage import Capability, CapabilityKind, CapabilityReason, CapabilityStatus
 from workfold.domain.evidence import EvidenceKind
 from workfold.domain.observations import Source
@@ -116,7 +116,7 @@ def test_verbose_renderer_restores_operational_and_exact_scope_details() -> None
     rendered = render_terminal(replace(value, context=context), options=TerminalOptions(width=80, verbose=True))
 
     assert rendered.index("Events") < rendered.index("Details")
-    assert "Scope: Git + filesystem · standard" in rendered
+    assert "Scope: Git + filesystem · both" in rendered
     assert "Period: 2026-W32 · UTC" in rendered
     assert "Schedule: Mo-Fr 08:00-16:30" in rendered
     assert f"Coverage: {COMPLETE_COVERAGE_STATUS}" in rendered
@@ -220,6 +220,7 @@ def test_terminal_options_preserve_existing_positional_enum_arguments() -> None:
     assert options.marker_style is MarkerStyle.IDENTITY
     assert options.grid_style is GridStyle.BOTH
     assert options.band_label is BandLabel.RANGE
+    assert options.count_grouping is CountGrouping.EVENT
     assert not options.show_empty_bands
 
 
@@ -229,6 +230,7 @@ def test_terminal_options_preserve_existing_positional_enum_arguments() -> None:
         ("marker_style", "identity", "marker_style"),
         ("grid_style", "both", "grid_style"),
         ("band_label", "start", "band_label"),
+        ("count_grouping", "visual", "count_grouping"),
         ("show_empty_bands", "yes", "show_empty_bands"),
         ("coverage", "yes", "coverage"),
     ],

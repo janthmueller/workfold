@@ -8,9 +8,10 @@ from enum import Enum
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from workfold.configuration.profiles import EventProfile, evidence_for_profile
 from workfold.configuration.styles import DEFAULT_EVENT_STYLE_SHEET, EventStyleSheet
 from workfold.domain.evidence import EvidenceKind, EvidenceSelection
-from workfold.domain.observations import Source, Weekday
+from workfold.domain.observations import Weekday
 from workfold.domain.schedule import Schedule
 from workfold.domain.scope import RefScope
 from workfold.folding.bands import ClusterAnchor
@@ -33,30 +34,16 @@ class UsageError(ValueError):
         self.include_setting_values = include_setting_values
 
 
-class SourceMode(str, Enum):
-    GIT = "git"
-    FILESYSTEM = "fs"
-    BOTH = "both"
-
-    @property
-    def includes_git(self) -> bool:
-        return self in {SourceMode.GIT, SourceMode.BOTH}
-
-    @property
-    def includes_filesystem(self) -> bool:
-        return self in {SourceMode.FILESYSTEM, SourceMode.BOTH}
-
-
-class CollectionProfile(str, Enum):
-    STANDARD = "standard"
-    PORTABLE = "portable"
-    FULL = "full"
-    CUSTOM = "custom"
-
-
 class MarkerStyle(str, Enum):
     SOURCE = "source"
     IDENTITY = "identity"
+
+
+class CountGrouping(str, Enum):
+    """How exact-count tokens group busy-cell events."""
+
+    EVENT = "event"
+    VISUAL = "visual"
 
 
 class GridStyle(str, Enum):
@@ -159,6 +146,7 @@ class TerminalPreferences:
     coverage: bool
     strict: bool
     verbose: bool
+    count_grouping: CountGrouping = CountGrouping.EVENT
     event_styles: EventStyleSheet = DEFAULT_EVENT_STYLE_SHEET
 
 
@@ -172,7 +160,7 @@ class RunOptions:
     to_date: date | None
     all_dates: bool
     rolling_duration: RollingDuration | None
-    profile: CollectionProfile
+    profile: EventProfile | None
     evidence: EvidenceSelection
     ref_scope: RefScope
     git_identities: tuple[str, ...]
@@ -188,15 +176,9 @@ class RunOptions:
     terminal: TerminalPreferences
     cluster_anchor: ClusterAnchor = ClusterAnchor.EVENT
 
-    @property
-    def source(self) -> SourceMode:
-        """Return the source mode derived from the canonical event selection."""
-
-        includes_git = self.evidence.includes_source(Source.GIT)
-        includes_filesystem = self.evidence.includes_source(Source.FILESYSTEM)
-        if includes_git and includes_filesystem:
-            return SourceMode.BOTH
-        return SourceMode.GIT if includes_git else SourceMode.FILESYSTEM
+    def __post_init__(self) -> None:
+        if self.profile is not None and self.evidence != evidence_for_profile(self.profile):
+            raise ValueError("named event profile does not match the resolved evidence selection")
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +187,6 @@ class UnresolvedOptions:
 
     paths: tuple[Path, ...]
     time_selectors: tuple[str, ...]
-    modes: tuple[str, ...]
     profiles: tuple[str, ...]
     event_selectors: tuple[str, ...] | None
     commits_from: str | None
@@ -230,6 +211,7 @@ class UnresolvedOptions:
     cluster_anchor: str = ClusterAnchor.EVENT.value
     band_label: str = BandLabel.RANGE.value
     show_empty_bands: bool = False
+    count_grouping: str = CountGrouping.EVENT.value
 
 
 DEFAULT_HOURS = "Mo-Fr 08:00-16:30"
@@ -239,7 +221,7 @@ DEFAULT_CLUSTER_WINDOW = timedelta(hours=1)
 __all__ = [
     "DEFAULT_CLUSTER_WINDOW",
     "DEFAULT_HOURS",
-    "CollectionProfile",
+    "CountGrouping",
     "DisplayHours",
     "EventListSelection",
     "GridStyle",
@@ -248,7 +230,6 @@ __all__ = [
     "RunOptions",
     "RefScope",
     "RollingDuration",
-    "SourceMode",
     "TerminalPreferences",
     "UnresolvedOptions",
     "UsageError",

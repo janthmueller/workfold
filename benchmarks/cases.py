@@ -15,47 +15,55 @@ class BenchmarkCase:
 
 
 CASES = (
-    BenchmarkCase("git-current", ("-m", "git"), "standard Git evidence in the current week"),
-    BenchmarkCase("git-all", ("-m", "git", "-t", "all"), "standard Git evidence across all dates"),
-    BenchmarkCase("fs-current", ("-m", "fs"), "standard filesystem evidence in the current week"),
-    BenchmarkCase("fs-all", ("-m", "fs", "-t", "all"), "standard filesystem evidence across all dates"),
-    BenchmarkCase("both-current", ("-m", "both"), "standard Git and filesystem evidence in the current week"),
+    BenchmarkCase("git-current", ("-p", "git"), "low-noise Git evidence in the current week"),
+    BenchmarkCase("git-all", ("-p", "git", "-t", "all"), "low-noise Git evidence across all dates"),
+    BenchmarkCase("fs-current", ("-p", "fs"), "low-noise filesystem evidence in the current week"),
+    BenchmarkCase("fs-all", ("-p", "fs", "-t", "all"), "low-noise filesystem evidence across all dates"),
+    BenchmarkCase("both-current", ("-p", "both"), "low-noise Git and filesystem evidence in the current week"),
     BenchmarkCase(
         "both-all",
-        ("-m", "both", "-t", "all"),
-        "standard Git and filesystem evidence across all dates",
+        ("-p", "both", "-t", "all"),
+        "low-noise Git and filesystem evidence across all dates",
     ),
     BenchmarkCase(
         "git-portable-current",
-        ("-m", "git", "-p", "portable"),
-        "portable Git evidence in the current week",
+        ("-p", "portable", "--git-commits-from", "all-refs"),
+        "portable Git events from all locally stored refs in the current week",
     ),
     BenchmarkCase(
         "git-portable-all",
-        ("-m", "git", "-p", "portable", "-t", "all"),
-        "portable Git evidence across all dates",
+        ("-p", "portable", "--git-commits-from", "all-refs", "-t", "all"),
+        "portable Git events from all locally stored refs across all dates",
     ),
-    BenchmarkCase("git-full-current", ("-m", "git", "-p", "full"), "full Git evidence in the current week"),
+    BenchmarkCase(
+        "git-full-current",
+        ("-e", "git:*", "--git-commits-from", "all-refs"),
+        "every Git event kind from all locally stored refs in the current week",
+    ),
     BenchmarkCase(
         "git-full-all",
-        ("-m", "git", "-p", "full", "-t", "all"),
-        "full Git evidence across all dates",
+        ("-e", "git:*", "--git-commits-from", "all-refs", "-t", "all"),
+        "every Git event kind from all locally stored refs across all dates",
     ),
-    BenchmarkCase("fs-full-current", ("-m", "fs", "-p", "full"), "full filesystem evidence in the current week"),
+    BenchmarkCase(
+        "fs-full-current",
+        ("-e", "fs:*", "--include-ignored"),
+        "every filesystem event kind including ignored entries in the current week",
+    ),
     BenchmarkCase(
         "fs-full-all",
-        ("-m", "fs", "-p", "full", "-t", "all"),
-        "full filesystem evidence across all dates",
+        ("-e", "fs:*", "--include-ignored", "-t", "all"),
+        "every filesystem event kind including ignored entries across all dates",
     ),
     BenchmarkCase(
         "both-full-current",
-        ("-m", "both", "-p", "full"),
-        "full Git and filesystem evidence in the current week",
+        ("-p", "full", "--git-commits-from", "all-refs", "--include-ignored"),
+        "every event kind using all local refs and including ignored entries in the current week",
     ),
     BenchmarkCase(
         "both-full-all",
-        ("-m", "both", "-p", "full", "-t", "all"),
-        "full Git and filesystem evidence across all dates",
+        ("-p", "full", "--git-commits-from", "all-refs", "--include-ignored", "-t", "all"),
+        "every event kind using all local refs and including ignored entries across all dates",
     ),
 )
 

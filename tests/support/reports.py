@@ -40,6 +40,7 @@ def classified_marker(
     actor_name: str = "Fixture",
     actor_email: str = "fixture@example.test",
     day: int = 3,
+    timestamp_kind: TimestampKind | None = None,
 ) -> ClassifiedMarker:
     local_datetime = datetime(
         2026,
@@ -62,7 +63,7 @@ def classified_marker(
         entry_type=None if is_git else EntryType.REGULAR_FILE,
         description=description,
     )
-    kind = TimestampKind.GIT_AUTHOR if is_git else TimestampKind.FS_MODIFIED
+    kind = timestamp_kind or (TimestampKind.GIT_AUTHOR if is_git else TimestampKind.FS_MODIFIED)
     instant_ns = int(local_datetime.replace(microsecond=0).timestamp()) * 1_000_000_000 + fractional_nanoseconds
     marker = ActivityMarker.create(
         (
@@ -107,7 +108,7 @@ def report(
         hide_days=hide_days,
         hide_empty_days=hide_empty_days,
     )
-    options = parse_options(["--mode", "both", "--time", "2026-W32", "--timezone", "UTC"])
+    options = parse_options(["--profile", "both", "--time", "2026-W32", "--timezone", "UTC"])
     context = build_report_context(
         options=options,
         collection=Collection((), (), True),

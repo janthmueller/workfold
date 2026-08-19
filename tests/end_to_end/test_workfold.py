@@ -79,7 +79,7 @@ class _IncompleteInventoryService(GitIgnoreService):
         return GitIgnoreProbe(self._repository, True, "test repository")
 
 
-def test_standard_uses_local_branches_while_all_refs_includes_remote_tracking(tmp_path: Path) -> None:
+def test_default_profile_uses_local_branches_while_all_refs_includes_remote_tracking(tmp_path: Path) -> None:
     repo = GitRepo.create(tmp_path / "repo")
     instant = datetime(2026, 8, 3, 10, 5, tzinfo=UTC)
     root = repo.commit(
@@ -108,19 +108,19 @@ def test_standard_uses_local_branches_while_all_refs_includes_remote_tracking(tm
         update_ref="refs/remotes/origin/remote-only",
     )
 
-    standard_output = StringIO()
-    standard = parse_options([str(repo.path), "--time", "all", "--no-color"])
-    assert run(standard, stdout=standard_output, stderr=StringIO(), terminal_width=80) == 0
+    default_output = StringIO()
+    default_options = parse_options([str(repo.path), "--time", "all", "--no-color"])
+    assert run(default_options, stdout=default_output, stderr=StringIO(), terminal_width=80) == 0
 
     all_refs_output = StringIO()
     all_refs = parse_options([str(repo.path), "--time", "all", "--git-commits-from", "all-refs", "--no-color"])
     assert run(all_refs, stdout=all_refs_output, stderr=StringIO(), terminal_width=80) == 0
 
-    _assert_summary_count(standard_output.getvalue(), "Events", 2)
+    _assert_summary_count(default_output.getvalue(), "Events", 2)
     _assert_summary_count(all_refs_output.getvalue(), "Events", 3)
 
 
-def test_filesystem_mode_flows_through_the_shared_pipeline(tmp_path: Path) -> None:
+def test_filesystem_profile_flows_through_the_shared_pipeline(tmp_path: Path) -> None:
     root = tmp_path / "root"
     root.mkdir()
     file_path = root / "work.txt"
@@ -159,6 +159,61 @@ def test_filesystem_mode_flows_through_the_shared_pipeline(tmp_path: Path) -> No
     assert "fs:file:modified selected: 1" in rendered
     assert "Coverage details:" in rendered
     assert "Details\n" not in rendered
+
+
+def test_visual_count_grouping_flows_from_cli_to_busy_filesystem_cells(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    instant = datetime(2026, 8, 3, 10, 5, tzinfo=UTC)
+    for index in range(15):
+        path = root / f"work-{index:02d}.txt"
+        path.write_text("work", encoding="utf-8")
+        _set_times(path, instant)
+
+    base_arguments = [
+        str(root),
+        "--events",
+        "fs:file:modified",
+        "fs:file:accessed",
+        "--include-ignored",
+        "--time",
+        "all",
+        "--timezone",
+        "UTC",
+        "--hours",
+        "all",
+        "--no-color",
+    ]
+    per_event_output = StringIO()
+    per_visual_output = StringIO()
+
+    assert (
+        run(
+            parse_options(base_arguments),
+            stdout=per_event_output,
+            stderr=StringIO(),
+            terminal_width=80,
+        )
+        == 0
+    )
+    assert (
+        run(
+            parse_options([*base_arguments, "--count-grouping", "visual"]),
+            stdout=per_visual_output,
+            stderr=StringIO(),
+            terminal_width=80,
+        )
+        == 0
+    )
+
+    per_event = per_event_output.getvalue()
+    per_visual = per_visual_output.getvalue()
+    assert "■×15 ■×15" in per_event
+    assert "×N exact per event kind" in per_event
+    assert "■×30" in per_visual
+    assert "×N exact per visual" in per_visual
+    _assert_summary_count(per_event, "Events", 30)
+    _assert_summary_count(per_visual, "Events", 30)
 
 
 def test_all_hours_and_midnight_start_labels_flow_through_the_cli(tmp_path: Path) -> None:
@@ -316,7 +371,7 @@ def test_directory_coverage_discloses_pruned_ignored_subtrees(tmp_path: Path) ->
     assert "1 ignored filesystem subtree pruned; descendant directories not counted" in normalized
 
 
-def test_both_mode_preserves_git_and_filesystem_as_distinct_evidence(tmp_path: Path) -> None:
+def test_combined_profile_preserves_git_and_filesystem_as_distinct_evidence(tmp_path: Path) -> None:
     repo = GitRepo.create(tmp_path / "repo")
     instant = datetime(2026, 8, 3, 10, 5, tzinfo=UTC)
     repo.commit(
@@ -381,7 +436,7 @@ def test_full_profile_keeps_default_report_lean_and_coverage_opt_in(tmp_path: Pa
     assert "Details\n" not in rendered
 
 
-def test_full_both_mode_collects_all_record_families_and_reports_capabilities(
+def test_full_profile_collects_all_record_families_and_reports_capabilities(
     tmp_path: Path,
 ) -> None:
     repo = GitRepo.create(tmp_path / "repo")
@@ -417,8 +472,6 @@ def test_full_both_mode_collects_all_record_families_and_reports_capabilities(
             str(repo.path),
             "--time",
             "all",
-            "--mode",
-            "both",
             "--profile",
             "full",
             "--coverage",

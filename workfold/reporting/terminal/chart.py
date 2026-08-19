@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable
+from typing import TypeAlias
 
 from rich.text import Text
 
 from workfold.application.report import Report
-from workfold.configuration.options import BandLabel
+from workfold.configuration.options import BandLabel, CountGrouping
 from workfold.domain.observations import Source, Weekday
 from workfold.folding import (
     NANOSECONDS_PER_DAY,
@@ -35,6 +36,9 @@ from workfold.reporting.terminal.options import TerminalOptions
 WEEKDAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 MAX_LITERAL_EVENT_LINES = 3
 GRID_STYLE = "dim"
+
+_CountKey: TypeAlias = tuple[Source, bool, int, int | None]
+_CountToken: TypeAlias = tuple[str, str, int]
 
 
 def render_chart(report: Report, options: TerminalOptions) -> Iterable[Text]:
@@ -323,21 +327,9 @@ def _compact_cell_lines(
     options: TerminalOptions,
     identity_symbols: tuple[IdentitySymbol, ...],
 ) -> tuple[Text, ...]:
-    counts: Counter[tuple[Source, bool, int, int | None]] = Counter()
-    for run in runs:
-        counts[(run.source, run.within_schedule, run.evidence_mask, run.identity_id)] += run.count
     lines: list[Text] = []
     current = Text()
-    for source, within_schedule, evidence_mask, identity_id in sorted(counts, key=visual_sort_key):
-        count = counts[(source, within_schedule, evidence_mask, identity_id)]
-        run = MarkerRun(
-            source,
-            within_schedule,
-            count,
-            identity_id=identity_id,
-            evidence_mask=evidence_mask,
-        )
-        symbol, style = marker_visual(run, options, identity_symbols)
+    for symbol, style, count in _compact_tokens(runs, options, identity_symbols):
         token = Text(f"{symbol}×{count:,}", style=style)
         if token.cell_len > width:
             if current:
@@ -358,3 +350,47 @@ def _compact_cell_lines(
     if current:
         lines.append(current)
     return tuple(lines)
+
+
+def _compact_tokens(
+    runs: tuple[MarkerRun, ...],
+    options: TerminalOptions,
+    identity_symbols: tuple[IdentitySymbol, ...],
+) -> tuple[_CountToken, ...]:
+    """Resolve exact count tokens independently from their line layout."""
+
+    counts: Counter[_CountKey] = Counter()
+    for run in runs:
+        counts[(run.source, run.within_schedule, run.evidence_mask, run.identity_id)] += run.count
+    event_tokens = tuple(
+        _event_count_token(key, counts[key], options, identity_symbols) for key in sorted(counts, key=visual_sort_key)
+    )
+    if options.count_grouping is CountGrouping.EVENT:
+        return event_tokens
+
+    visual_counts: Counter[tuple[str, str]] = Counter()
+    visual_order: list[tuple[str, str]] = []
+    for symbol, style, count in event_tokens:
+        visual = (symbol, style)
+        if visual not in visual_counts:
+            visual_order.append(visual)
+        visual_counts[visual] += count
+    return tuple((symbol, style, visual_counts[(symbol, style)]) for symbol, style in visual_order)
+
+
+def _event_count_token(
+    key: _CountKey,
+    count: int,
+    options: TerminalOptions,
+    identity_symbols: tuple[IdentitySymbol, ...],
+) -> _CountToken:
+    source, within_schedule, evidence_mask, identity_id = key
+    run = MarkerRun(
+        source,
+        within_schedule,
+        count,
+        identity_id=identity_id,
+        evidence_mask=evidence_mask,
+    )
+    symbol, style = marker_visual(run, options, identity_symbols)
+    return symbol, style, count

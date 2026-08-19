@@ -42,7 +42,7 @@ def build_report_context(
             period_label=time_selection.label,
             timezone_name=timezone.key,
             schedule=schedule,
-            profile_name=options.profile.value,
+            profile_name=options.profile.value if options.profile is not None else None,
             evidence=options.evidence,
             ref_scope=options.ref_scope,
             git_identities=options.git_identities,
