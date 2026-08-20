@@ -1,819 +1,234 @@
 ---
 title: Using Wuf
-description: Select local activity, schedules, sources, and terminal detail.
+description: Choose a time period, event set, schedule, and useful terminal detail.
 ---
 
-:::note[Alpha surface]
-The terminal behavior below, including the sparse chart, is implemented. The
-CLI remains an alpha surface, so use `wuf --help` for the exact build you
-are running.
-:::
+Wuf combines four independent choices: where to look, which timestamps to use,
+which period to include, and how to present the result. Start with the defaults
+and add only the control you need.
 
-## Default view
+## Start with a repository
 
 ```bash
-wuf [PATH ...]
+wuf
+wuf ~/code/my-project
 ```
 
-With no path, Wuf uses `.`. For Git collection, a path selects its entire
-containing repository, not a history pathspec. Multiple paths in the same
-repository are deduplicated. If the selected path is not in a repository, use
-`-p fs` or pass a repository path.
+Without a path, Wuf uses the current directory. The default reads commit author
+timestamps reachable from local branches during the current ISO week. It does
+not fetch from a remote.
 
-The default view selects:
+## Choose a period
 
-- the current ISO week in the resolved local timezone;
-- the `git` event profile;
-- Git commit records reachable through local branches plus a detached `HEAD`;
-- author timestamps from every recorded Git identity;
-- `Mo-Fr 08:00-16:30` as the working schedule;
-- a `1h` sparse cluster window anchored at events;
-- range labels for occupied time bands.
+Use `-t/--time` for both fixed and rolling periods:
 
-`-p/--profile` selects a named event set and defaults to `git`. It is
-independent from `-t/--time`: changing one never changes the other.
-
-Git collection invokes the local `git` executable and never fetches or contacts
-a remote. Use `--git-commits-from head` to limit history to the currently
-checked-out branch or detached `HEAD`.
-
-## Configuration files
-
-Wuf can load personal and project defaults without changing the meaning of
-its CLI flags. Resolution is deterministic:
-
-```text
-built-in → global config → nearest project config → explicit CLI
+```bash
+wuf -t this-week
+wuf -t 2026-W31
+wuf -t 2w3d
+wuf -t 2026-07-01..2026-07-31
+wuf -t 2026-07-01..
+wuf -t all
 ```
 
-Each layer overrides only the keys it contains. Arrays replace earlier arrays;
-they are not concatenated. Unknown keys, wrong TOML types, malformed values,
-and invalid final option combinations are usage errors rather than silently
-ignored settings.
+Calendar-date endpoints are inclusive and interpreted in the selected
+timezone. A rolling duration ends when the command starts.
 
-The automatic global file is platform-specific:
+## Choose timestamp evidence
 
-| Platform | Location |
-| --- | --- |
-| Linux and other Unix | `${XDG_CONFIG_HOME:-~/.config}/wuf/wuf.toml` |
-| macOS | `~/Library/Application Support/wuf/wuf.toml` |
-| Windows | `%APPDATA%\wuf\wuf.toml` |
+Profiles are convenient named event sets:
 
-Starting at each selected `PATH`, Wuf searches upward for the nearest
-`wuf.toml` or a `pyproject.toml` containing `[tool.wuf]`. A standalone
-`wuf.toml` wins if both exist in the same directory. Multiple input paths
-must resolve to the same project configuration because one chart has one
-timezone, schedule, and rendering policy; otherwise Wuf asks for an
-explicit choice.
+<table>
+  <thead>
+    <tr>
+      <th>Profile</th>
+      <th>Question</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>git</code></td>
+      <td>When were ordinary commits authored?</td>
+    </tr>
+    <tr>
+      <td><code>fs</code></td>
+      <td>What birth and modification times exist for current files?</td>
+    </tr>
+    <tr>
+      <td><code>both</code></td>
+      <td>What does the low-noise Git and filesystem combination show?</td>
+    </tr>
+    <tr>
+      <td><code>portable</code></td>
+      <td>Which selected dates are stored inside Git objects?</td>
+    </tr>
+    <tr>
+      <td><code>full</code></td>
+      <td>What do all supported Git and filesystem timestamp kinds show?</td>
+    </tr>
+  </tbody>
+</table>
 
-A standalone file stores keys at its root:
+```bash
+wuf -p fs
+wuf -p both -t 2w
+wuf -p portable -t all
+```
+
+For an exact event set, use `-e/--events` instead of a profile:
+
+```bash
+wuf -e git:tag:tagger fs:file:modified
+wuf -e 'git:*:committer'
+wuf -e 'fs:*:modified'
+```
+
+Quote wildcard selectors so your shell does not expand them. Paths must appear
+before the space-separated `--events` values, or after `--`.
+
+Profiles and event selectors do not change the time period, Git reachability,
+ignore policy, or explicit exclusions.
+
+## Set working hours
+
+The built-in schedule is Monday-Friday, 08:00-16:30. Supply one or more daily
+intervals, an overnight interval, or make every timestamp inside the schedule:
+
+```bash
+wuf --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
+wuf --hours 'Mo-Fr 08:00-12:00,13:00-16:30'
+wuf --hours 'Mo-Fr 22:00-06:00'
+wuf --hours all
+```
+
+Use an IANA timezone when local time is not the desired reference:
+
+```bash
+wuf --timezone Europe/Berlin
+```
+
+Wuf converts each instant before determining its weekday, clock time, and
+inside/outside state. Schedule intervals include their start and exclude their
+end.
+
+## Adjust discovery
+
+Commit-derived events default to local branches. Narrow to the checked-out
+`HEAD` or include every local ref explicitly:
+
+```bash
+wuf --git-commits-from head
+wuf --git-commits-from all-refs
+wuf --git-identity 'name@example.com'
+```
+
+Filesystem discovery respects Git ignore rules by default while retaining
+tracked files. You can include ignored entries or add repeatable exclusions:
+
+```bash
+wuf -p fs --include-ignored
+wuf -p fs --fs-exclude node_modules --fs-exclude '*.log'
+```
+
+The repository's `.git/` internals are always excluded from filesystem
+metadata. Git records are collected through Git itself.
+
+## Tune the chart
+
+Nearby times use an event-anchored one-hour cluster window by default. Change
+the window, use fixed bands from midnight, or show normally omitted fixed
+bands:
+
+```bash
+wuf --cluster-window 10m
+wuf --cluster-window '1h 5m'
+wuf --cluster-anchor midnight --band-label start
+wuf --cluster-anchor midnight --show-empty-bands
+```
+
+`--show-empty-bands` requires midnight anchoring because event-anchored rows do
+not define a complete set of empty intervals.
+
+Presentation controls do not change event totals:
+
+```bash
+wuf --grid vertical
+wuf --marker-style identity
+wuf --hide-empty-days weekend
+wuf --hide-days weekend
+wuf --display-hours 06:00-22:00
+wuf --no-color
+```
+
+## Inspect exact events and coverage
+
+Append a bounded chronological list from the events already enabled in the
+report:
+
+```bash
+wuf --list outside
+wuf --list all --limit 100
+wuf --list git:tag:tagger
+```
+
+`--list` filters presentation; it does not activate a collector. Select an
+event with `--profile` or `--events` before asking to list it.
+
+Use `--coverage` for the detailed accounting ledger, `--verbose` for scope and
+collector details as well, and `--strict` when incomplete collection must
+return a non-zero status.
+
+## Save defaults
+
+Personal defaults live in the platform configuration directory. A project can
+use `wuf.toml`, or `[tool.wuf]` in `pyproject.toml`:
+
+<table>
+  <thead>
+    <tr>
+      <th>Platform</th>
+      <th>Personal configuration</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Linux and other Unix</td>
+      <td><code>&#36;&#123;XDG_CONFIG_HOME:-~/.config&#125;/wuf/wuf.toml</code></td>
+    </tr>
+    <tr>
+      <td>macOS</td>
+      <td><code>~/Library/Application Support/wuf/wuf.toml</code></td>
+    </tr>
+    <tr>
+      <td>Windows</td>
+      <td><code>%APPDATA%\wuf\wuf.toml</code></td>
+    </tr>
+  </tbody>
+</table>
 
 ```toml title="wuf.toml"
-time = "this-week"
-profile = "git"
-
 timezone = "Europe/Berlin"
 hours = "Mo-Thu 08:00-16:30; Fr 08:00-14:00"
-cluster-window = "1h"
-cluster-anchor = "event"
-band-label = "range"
-show-empty-bands = false
-marker-style = "identity"
-count-grouping = "event"
+profile = "portable"
 grid = "vertical"
 hide-empty-days = ["weekend"]
-```
 
-The same settings fit inside a Python project file:
-
-```toml title="pyproject.toml"
-[tool.wuf]
-timezone = "Europe/Berlin"
-hours = "Mo-Fr 08:00-16:30"
-grid = "vertical"
-
-[tool.wuf.styles."git:tag:*"]
+[styles."git:tag:*"]
 symbol = "◆"
 color = "magenta"
 outside-symbol = "◇"
 outside-color = "bright_red"
 ```
 
-### Event marker styles
-
-Persistent source-marker visuals use the same exact and wildcard selectors as
-`--events`. In a standalone file, put style rules beneath `styles`; in a
-Python project, put them beneath `tool.wuf.styles`:
-
-```toml title="wuf.toml"
-[styles."git:commit:*"]
-symbol = "C"
-color = "green"
-outside-symbol = "c"
-outside-color = "bright_red"
-
-[styles."git:tag:tagger"]
-symbol = "◆"
-color = "magenta"
-outside-symbol = "◇"
-
-[styles."fs:*:accessed"]
-symbol = "A"
-color = "cyan"
-```
-
-Each rule may set any combination of `symbol`, `color`, `outside-symbol`, and
-`outside-color`. Missing properties inherit the result from lower-precedence
-layers and ultimately the built-in source style. Symbols must be one printable
-terminal cell. Colors accept Rich terminal color names or `#RRGGBB`; terminal
-capabilities may reduce a true-color value, and `NO_COLOR` still removes all
-color without changing symbols.
-
-Global rules are applied before project rules, so a nearer project can override
-only one property. Within one file, broader wildcard rules apply before more
-specific rules. Equally specific overlapping rules may set different
-properties or the same value, but conflicting values are rejected as ambiguous
-rather than depending on TOML declaration order.
-
-A plotted marker can retain both author and committer roles when their instants
-are identical. A style selector applies to that marker only if it covers every
-retained role: `git:commit:*` covers the pair, while
-`git:commit:author` styles only an author-only marker. This keeps one logical
-event and never chooses an arbitrary role or draws a duplicate.
-
-Custom symbols and colors apply to source-marker style. Git identity mode keeps
-its generated uppercase/lowercase identity codes and established green/red
-schedule encoding; filesystem markers still use configured event styles. The
-content-aware key groups equal visuals and names only style groups present in
-the matrix.
-
-Repeatable and multi-value CLI selections use TOML arrays. `time` also accepts
-one string for its common single-selector form:
-
-```toml
-profile = "both"
-time = ["2026-W30", "2026-W31"]
-git-identity = ["jan@example.com", "Jan Müller"]
-fs-exclude = ["node_modules", "*.log"]
-hide-days = []
-hide-empty-days = ["weekend"]
-list = ["outside"]
-```
-
-For exact event selection, use `events` instead of `profile` in that layer:
-
-```toml
-events = ["git:commit:committer", "git:tag:tagger", "fs:file:modified"]
-list = ["outside", "git:tag:tagger"]
-```
-
-`events` is a complete alternative to a named profile. Defining both in one
-precedence layer is an error. A higher-precedence `events` setting replaces a
-lower profile; a higher-precedence profile replaces lower custom events.
-Git-only and filesystem-only non-event keys must agree with the resulting event
-sources.
-
-Other configurable keys are `git-commits-from`, `include-ignored`, `fs-exclude`,
-`cluster-anchor`, `band-label`, `show-empty-bands`, `marker-style`,
-`count-grouping`, `grid`, `display-hours`, `no-color`, `list`, `limit`,
-`coverage`, `strict`, and `verbose`. Boolean values use
-TOML `true`/`false`. Positional paths and the configuration-control flags
-themselves are deliberately not configurable.
-`no-color = false` restores the same automatic terminal detection used by
-default; neither it nor `--color` overrides `NO_COLOR` or terminal detection.
-`--no-show-empty-bands` can temporarily override a configured
-`show-empty-bands = true` without disabling the rest of the configuration.
-Use `timezone = "local"` for the operating-system local zone and
-`display-hours = "auto"` for an automatic chart range; these values can also
-reset a global setting from a nearer layer. Omit `git-commits-from` for its
-built-in `local-branches` default.
-
-Profiles expand only to event sets. A higher-precedence profile replaces lower
-custom events and a higher-precedence `events` value replaces a lower profile.
-Independent reachability and ignore-policy settings continue through normal
-configuration precedence whenever they apply to the resulting event sources.
-
-Inspect the fully validated result without collecting Git or filesystem data:
+Configuration resolves as built-in → global → nearest project → CLI. Inspect
+every effective value and its origin without collecting events:
 
 ```bash
-wuf . --show-config
-wuf . --grid both --show-config  # includes this CLI override and its origin
+wuf --show-config
+wuf --no-config --show-config
+wuf --config ./team-wuf.toml --show-config
 ```
 
-`--show-config` prints the loaded files followed by every effective value and
-whether it came from a built-in, global file, local file, exact config file, or
-the CLI. It also lists custom event-style rules in their applied global-to-local
-order. Derived values identify every controlling setting, while source-specific
-values reset by a higher-precedence event selection or profile identify that
-decision. The table wraps to the terminal width. `--help` remains stable and
-describes built-in defaults; it does not pretend configured values are
-universal defaults. A named profile shows its expanded `events` row as a
-profile-derived value; exact `events` show `profile = —` rather than inventing
-a synthetic custom profile. Source-specific settings that cannot affect the
-selected event set are shown as `not applicable` rather than as active-looking
-defaults.
-
-Use one exact file and disable automatic global/project discovery with
-`--config FILE`. An explicitly named `pyproject.toml` still reads
-`[tool.wuf]`; any other filename uses the standalone root schema. Use
-`--no-config` for built-ins plus CLI only:
-
-```bash
-wuf . --config ~/wuf/client.toml
-wuf . --no-config
-```
-
-## Select dates
-
-`-t/--time` defaults to `this-week` and accepts one selector kind at a time:
-
-```bash
-# One ISO week, or a union of repeated weeks
-wuf . -t 2026-W31
-wuf . -t 2026-W30 -t 2026-W31
-
-# Inclusive local calendar dates; either endpoint may be open
-wuf . -t 2026-07-01..2026-07-31
-wuf . -t 2026-01-01..
-wuf . -t ..2026-07-31
-
-# A rolling elapsed window ending when this run starts
-wuf . -t 2w
-wuf . -t 2w3d
-wuf . -t 6h30m
-
-# Every available date for the otherwise selected profile/event scope
-wuf . -t all
-```
-
-`this-week`, ranges, and `all` occur once. Repetition is reserved for ISO weeks;
-mixing selector kinds is invalid. All selected dates still fold onto one
-Monday-to-Sunday chart. Internally, Wuf converts inclusive calendar choices
-to half-open instant ranges so a boundary event is not counted twice.
-
-Rolling selectors are also single-use and form the half-open instant range
-`[captured-now - duration, captured-now)`. Wuf captures `now` once for the
-run. Components use ordered, nonrepeating `w`, `d`, `h`, and `m` units;
-`w` is seven elapsed 24-hour days, `d` is 24 elapsed hours, and `m` means
-minutes. This fixed-duration behavior remains exact across daylight-saving
-changes. Calendar months are intentionally not accepted because their length
-and boundary semantics differ from elapsed durations.
-
-## Configure timezone and schedule
-
-Events are converted into the selected IANA timezone before weekday, clock
-time, and schedule classification are derived. This preserves daylight-saving
-rules.
-
-```bash
-wuf . --timezone Europe/Berlin
-wuf . --hours 'Mo-Fr 08:00-16:30'
-wuf . --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
-wuf . --hours 'Mo-Fr 08:00-12:00,13:00-16:30'
-wuf . --hours all
-```
-
-Schedule intervals are half-open: the start is inside and the end is outside.
-A weekday accepts either Wuf's two-letter token (`Mo`, `Th`) or its common
-three-letter English alias (`Mon`, `Thu`), case-insensitively. Output is
-normalized to the two-letter form.
-A weekday with no interval is entirely outside. An interval whose end is
-earlier than its start crosses midnight: `Mo-Fr 22:00-06:00` creates shifts
-starting Monday through Friday, with Friday's shift ending Saturday at 06:00.
-The boundary remains half-open, and `start == end` is rejected rather than
-being interpreted as a full day.
-`all` is a compact seven-day `00:00-24:00` schedule: every selected event is
-inside working hours, including weekend events. It changes classification only;
-it does not select more dates, enable sources, or force empty chart rows.
-
-## Read and tune the chart
-
-By default, the chart renders only occupied bands in implicit
-`00:00`-toward-`24:00` order and compresses empty time. Wuf sorts visible
-events by localized wall-clock time and shares every band across all visible
-weekday columns.
-
-`--cluster-anchor event` is the default. It uses the earliest unassigned event
-as the next anchor, assigns events in `[anchor, anchor + cluster-window)`, and
-repeats. The anchor never moves when a later event joins the band.
-
-`--cluster-anchor midnight` uses fixed local-clock intervals starting at
-`00:00`. With `--cluster-window 1h`, the bands are `[00:00,01:00)`,
-`[01:00,02:00)`, and so on. An event exactly on an endpoint belongs to the next
-band. Its window must be a whole number of minutes so fixed `HH:MM` labels show
-their exact boundaries. If a custom window does not divide 24 hours evenly, the
-last interval is clipped at `24:00` and the next weekday starts from `00:00`
-again.
-
-`--band-label range` is independent from anchoring and remains the default.
-Event-anchored range labels show the first through last visible event, preserving
-the current compact extent view; midnight-anchored range labels show the fixed
-interval bounds. `--band-label start` prints only the band start and includes
-the compact `Time` heading. Endpoint labels use
-minute-level `HH:MM` text. An event-anchored label names the minute containing
-its exact observation or anchor; because the minimum window is one minute,
-distinct clusters cannot receive the same minute-only start label. Exact
-seconds and nanoseconds remain in normalized provenance and exact listed-event
-rows.
-
-`--cluster-window` accepts a duration from `1m` up to, but not including, 24
-hours. Components use
-`h`, `m`, and `s` in that order without repeating a unit. Whitespace is optional
-between complete components, but a spaced value must be quoted as one CLI
-argument. Second components are available with event anchoring; midnight
-anchoring requires a whole-minute result. The default is `1h`; smaller values
-such as `1m30s` and `10m` are custom views:
-
-```bash
-wuf . --cluster-window 1m30s --cluster-anchor event
-wuf . --cluster-window 10m
-wuf . --cluster-window 1h
-wuf . --cluster-window 1h5m --cluster-anchor midnight
-wuf . --cluster-window '1h 5m'
-wuf . --cluster-anchor event
-wuf . --cluster-anchor midnight --show-empty-bands
-wuf . --band-label range
-wuf . --band-label start
-```
-
-Internal grid lines are optional:
-
-```bash
-wuf . --grid none        # default
-wuf . --grid vertical
-wuf . --grid horizontal
-wuf . --grid both
-```
-
-Vertical lines separate the time band from each visible weekday column.
-Horizontal lines appear below the header and between logical time clusters;
-they never split a wrapped continuation row. When clusters have a compressed
-gap, its `⋮` duration is embedded into their shared boundary instead of becoming
-a separate row. Grid styles use dim internal lines without an outer box.
-
-Weekday columns are independently controllable without filtering the event
-scope:
-
-```bash
-wuf . -E all
-wuf . -H weekend
-wuf . --hide-empty-days weekend
-wuf . --hide-empty-days weekdays
-wuf . --hide-empty-days mon,wed,sunday
-wuf . --hide-days weekend --hide-empty-days weekdays
-```
-
-`-H` is short for `--hide-days`; `-E` is short for `--hide-empty-days`. Both
-options are repeatable and accept comma-separated, case-insensitive
-two-letter, three-letter, or full weekday names plus the `weekdays` and
-`weekend` groups. `--hide-empty-days` also accepts `all`. Empty means no marker
-remains in that column after selection and `--display-hours` cropping. An
-occupied day is therefore always preserved by `--hide-empty-days`.
-
-`--hide-days` is unconditional. Its events disappear from the matrix but remain
-in Events, Schedule, Calendar, coverage, and `--list`; a compact
-`Hidden` line accounts for occupied columns. Empty-column hiding needs no such
-notice because it omits no visible event. Column projection happens before
-clustering, so hidden weekdays cannot anchor or stretch a visible time band.
-
-Events are ordered by local wall time, actual instant, canonical source (Git
-before filesystem for simultaneous ties), and stable marker ID; weekdays only
-group those events into columns. Each ordinary event is a symbol. By default,
-Git uses circles and filesystem uses squares;
-inside-hours markers are filled, and outside-hours markers are hollow. Color
-adds green for inside-hours Git, blue for inside-hours filesystem, and red for
-outside-hours events. Event-style configuration can replace those source-marker
-symbols and colors for exact or wildcard event kinds. If a cell is too busy for
-individual symbols at the available width, exact tokens such as
-`●×12 ■×4 ○×2` replace only that cell; they are counts, not density estimates.
-The default `--count-grouping event` keeps tokens separate for distinct event
-kinds even when those kinds currently share a symbol and color. Use
-`--count-grouping visual` to merge only groups whose fully resolved marker
-symbol and configured style are identical. Schedule state and identity codes
-are part of that visual, so inside/outside or distinct identity markers do not
-merge. Grouping is based on the configured visual before ANSI suppression;
-`NO_COLOR` therefore does not restructure the chart. This option affects only
-busy-cell `×N` tokens, not ordinary markers, collection, totals, coverage, or
-clustering.
-Empty bands are omitted by default. With event anchoring, a gap cue measures consecutive observed extents;
-with midnight anchoring, it measures wholly omitted fixed intervals. A gap of
-at least one configured cluster window gets one dim duration cue. Consequently,
-one omitted fixed band is enough under midnight anchoring, while a shorter
-event-to-event gap remains implicit under event anchoring. Second-based event
-windows retain seconds in a displayed gap duration even though clock labels use
-minute-level `HH:MM` text.
-
-Use `--show-empty-bands` to replace sparse gap compression with every fixed
-interval in the resolved display range:
-
-```bash
-wuf . --cluster-anchor midnight --show-empty-bands
-wuf . --cluster-anchor midnight --show-empty-bands --display-hours 06:30-20:15
-```
-
-The option requires midnight anchoring. Event-anchored bands begin at events,
-so an empty event-anchored band has no truthful anchor; combining the option
-with `--cluster-anchor event` is therefore a usage error rather than an ignored
-request. When an explicit display crop cuts through a fixed interval, the
-first or last displayed label is clipped to the requested boundary while event
-membership retains its original midnight-aligned half-open band. Automatic
-display ranges instead expand outward to complete fixed bands, so start-only
-labels always name their real midnight anchor. Under an explicit crop, a
-partial edge shows its exact range even with `--band-label start`. Dense mode
-does not print `⋮` cues, change event counts, or alter coverage.
-
-Use `--marker-style identity` when contributor recognition matters more than a
-single Git source symbol:
-
-```bash
-wuf . -t 2w --marker-style identity
-```
-
-Each visible Git marker then uses a deterministic code derived from the exact
-recorded name/email pair. The key maps every visible code back to that full,
-unverified Git identity exactly once, using its canonical uppercase code in
-green. It never adds a lowercase entry for each identity; the single red `a–z`
-outside-hours cue explains every lowercase occurrence compactly.
-An identity uses the first ASCII letter in its normalized name, then its email
-as a fallback, and `I` if neither contains one. A unique initial remains one
-letter; every member of a shared initial group is numbered from `1`, such as
-`J1`, `J2`, and `J3`. Adjacent markers are self-delimiting without spaces:
-`J1J2j3` is two inside-hours identities followed by the outside-hours form of
-`J3`. To keep memory bounded on repositories with pathological identity
-cardinality, a chart that exceeds 128 distinct visible identity groups falls
-back to ordinary Git source markers and says so in the key. Event provenance,
-identity filters, totals, and coverage remain unchanged.
-When one marker coalesces identical author and committer instants belonging to
-different identities, it receives `◆` (then `◆2`, `◆3`, if several such
-groups are visible) rather than arbitrarily choosing one person. Filesystem
-markers remain squares. In every color mode, uppercase/lowercase identity codes
-mean inside/outside; composite codes use `◆`/`◇` for the same distinction.
-Configured Git event visuals do not replace these generated identity codes or
-their schedule colors. Configured filesystem visuals remain active because
-filesystem markers do not have an identity-code mode.
-
-Terminal output starts directly with the matrix; there is no title or context
-subtitle above it. A content-aware symbol key follows without a heading. It
-names only categories actually visible after display cropping and explains
-`×N` only when exact-count tokens occur. One conditional outside-hours cue uses
-the configured outside symbols or lowercase classes actually present. The cue
-uses one shared color when those visuals agree and styles individual symbols
-when configured outside colors differ. It never repeats one contributor's marker as a global
-example. The configured schedule follows on an independent left-aligned
-`Working hours:` line. Three statistic rows then appear without a Summary
-heading: Events is the common total, Schedule is its
-inside/outside split, and Calendar is its independent weekday/weekend split.
-Both split rows show counts and percentages of Events; a weekend event can also
-be outside the schedule. Use `--verbose` for scope, period, the complete successful
-coverage wording, source/record breakdowns, cluster/compression policy, exact
-collector selection, Git identity scope, collection extents, ignore/exclusion
-policy, and the detailed coverage ledger. Use `--coverage` for the ledger
-without those verbose details. Partial collection, explicit narrowing,
-unsupported capabilities, and nonzero cropping remain visible by default as
-exception notices.
-
-Interactive terminals show one transient collection status while Wuf is
-busy; it is erased before the report. Redirected output and redirected errors
-stay free of progress text. The adaptive layout remains usable down to 40
-columns, while wider terminals devote more space to event cells and details.
-
-`--display-hours` crops chart rows only. It does not change classification:
-
-```bash
-wuf . --hours 'Mo-Fr 08:00-16:30' --display-hours '06:00-22:00'
-```
-
-A compact notice after the summary reports nonzero event counts hidden before or
-at/after an explicit half-open crop; zero-valued crop notices are omitted.
-Cropping happens before clustering and the requested bounds are not rounded, so
-a marker at the start is visible and one exactly at the end is hidden. Cropping
-does not realign midnight-anchored interval boundaries.
-
-## Select exact event evidence
-
-Profiles provide common named event sets. `-e/--events` is the exact alternative
-when a profile is not the question you want to ask:
-
-```bash
-wuf . --events git:commit:author
-wuf . --events git:commit:committer git:tag:tagger
-wuf . --events git:file-change:author fs:file:modified
-wuf . --events 'git:*:committer'
-wuf . --events 'fs:*'
-wuf . --events '*'
-```
-
-The supported identifiers are:
-
-| Identifier | Evidence |
-| --- | --- |
-| `git:commit:author` | commit author timestamp |
-| `git:commit:committer` | commit committer timestamp |
-| `git:file-change:author` | one derived file-change marker at its commit's author time |
-| `git:file-change:committer` | one derived file-change marker at its commit's committer time |
-| `git:tag:tagger` | annotated-tag tagger timestamp |
-| `git:reflog:update` | local ref-update timestamp recorded in a reflog |
-| `fs:file:<timestamp>` | current regular-file metadata timestamp |
-| `fs:directory:<timestamp>` | current directory metadata timestamp |
-| `fs:symlink:<timestamp>` | current symlink metadata timestamp, without following its target |
-
-Every filesystem selector replaces `<timestamp>` with `birth`, `modified`,
-`metadata-changed`, or `accessed`. Exact examples include `fs:file:modified`,
-`fs:directory:birth`, and `fs:symlink:accessed`.
-
-Several values form a union and can follow one `--events`; repeating the option
-also extends that union. Each `*` token is matched against the complete canonical
-identifiers, so `git:*`, `git:commit:*`, `git:*:committer`, `fs:file:*`,
-`fs:*:modified`, `fs:*`, and `*` are useful scopes.
-Quote wildcard selectors to prevent shell pathname expansion. Identifiers are
-case-insensitive and output is normalized to the lower-case forms above.
-
-`--events` cannot be combined with `-p/--profile` in the same CLI invocation
-because both define the complete event set. It does not replace independent
-controls such as `--git-commits-from`, `--git-identity`, ignore policy, or
-`--fs-exclude`. Consequently `--events '*'` and `-p full` select the same event
-kinds and retain the same local-branch and ignore-respecting defaults unless
-those independent axes are changed explicitly.
-
-Because `--events` and `--list` accept one or more whitespace-separated values,
-put every positional `PATH` before either option. If a generated command must
-place paths later, terminate option values explicitly: `wuf --events
-git:commit:author -- path/to/repo`.
-
-## Inspect Git evidence
-
-Git event kind, timestamp role, reachability, and identity are independently
-controllable:
-
-```bash
-wuf . --events git:commit:author
-wuf . --events git:commit:committer
-wuf . --events git:commit:author git:commit:committer
-wuf . --events git:file-change:author
-wuf . --events git:file-change:committer
-wuf . --events git:tag:tagger git:reflog:update
-wuf . --git-commits-from head
-wuf . --git-commits-from local-branches
-wuf . --git-commits-from all-refs
-wuf . --git-identity 'Ada' --git-identity 'ada@example.com'
-```
-
-Commit reachability has three explicit scopes:
-
-- `head` follows the ancestry of the currently checked-out branch or detached
-  `HEAD`;
-- `local-branches` follows every `refs/heads/*` branch and also includes a
-  detached `HEAD`; this is the built-in default;
-- `all-refs` follows every locally stored ref, including remote-tracking refs,
-  tags, stash, and custom refs; it never fetches.
-
-A commit is considered once by object ID even when several selected refs reach
-it. Reachability is established before timestamp-role selection. Each requested
-author or committer role is then matched independently, so a reachable commit
-can contribute its author event, committer event, both, or neither. For bounded
-queries Wuf may apply that exact predicate during its lightweight revision
-scan; known non-matching values are outside the query rather than reported as
-filtered coverage outcomes. Ordinary `git --since` is not used for author-date
-selection because author timestamps are not ordered by commit topology.
-
-Commit and file-change roles are separate selectors: a request may show commit
-author events while deriving file changes only at committer times. File-change
-observations inherit the matching timestamp role and identity of their commit.
-Wuf derives commit-versus-parent tree differences only for commits with at
-least one matching role, producing the same result as deriving every reachable
-change and filtering afterward. Commits known only to an unfetched remote or no
-longer reachable from the selected refs are outside the commit scope. A full
-profile can still expose a local reflog timestamp referring to an otherwise
-unreachable commit, but that reflog observation is not converted into a commit
-observation.
-
-`--git-identity` is an inclusive filter over the identity attached to each Git
-timestamp: an author observation uses its author, a committer observation its
-committer, an annotated-tag observation its tagger, and a reflog observation its
-reflog actor. File-change observations inherit the corresponding author or
-committer identity from their commit. Matching is a case-insensitive literal
-substring of the recorded name or email. Repeated values use OR semantics; with
-no flag, all recorded Git identities are included. Git identities are
-self-declared metadata, not verified people or accounts. In a combined event
-selection the filter does not affect filesystem observations.
-
-Identity selection happens before plotting. Therefore, when identical author and
-committer instants could share one marker, only the matching role remains if
-their identities differ; both roles remain when both match. Lightweight tags
-have no independent tagger timestamp or tagger identity and therefore produce
-no tag observation, as reported by coverage.
-
-Annotated tags carry tagger timestamps; lightweight tags have no independent
-tagger time. Reflogs are local and may be disabled or expired. Git stores tree
-snapshots, not human file-change actions: Wuf derives each change from the
-commit-versus-first-parent tree difference (or root-versus-empty tree), uses
-Git's reported change kind, and preserves renames when Git reports one.
-
-## Inspect filesystem evidence
-
-Filesystem collection scans current metadata rather than reconstructing editing
-history:
-
-```bash
-wuf . --events fs:file:birth fs:file:modified
-wuf . --events fs:directory:metadata-changed fs:symlink:accessed
-wuf . --events 'fs:*:modified'
-wuf . --events 'fs:directory:*'
-wuf . -p fs
-wuf . -p full
-```
-
-Timestamp labels are deliberately precise:
-
-- `birth` uses a real birth/creation time only where available; on Linux,
-  Wuf requests `STATX_BTIME` through `statx`;
-- `modified` is mtime;
-- `metadata-changed` is POSIX metadata-change ctime, never creation time;
-- `accessed` is atime and is labeled potentially unreliable.
-
-The `fs` profile selects birth and modification timestamps for
-regular files. Exact selectors make entry type and timestamp role independent:
-`fs:*:modified` requests mtime for files, directories, and symlinks, while
-`fs:directory:*` requests every supported timestamp only for directories.
-Symlink targets are not followed, including by Linux birth-time reads, and raw
-`.git/` internals are always excluded. A filesystem that does not return birth
-time is reported as unavailable rather than receiving a fabricated ctime value.
-In a Git worktree, standard Git ignore semantics are respected by default:
-
-```bash
-wuf . -p fs --respect-gitignore
-wuf . -p fs --include-ignored
-wuf . -p fs --fs-exclude node_modules --fs-exclude '*.log'
-```
-
-Tracked files remain included even if a current ignore pattern matches them.
-Explicit exclusions are applied after discovery and always win. When directory
-entries are requested, the default ignore-respecting scan reports each ignored
-subtree it prunes and states that descendant directories were not enumerated.
-Use `--include-ignored` when those entries and their timestamps should be
-included. Event profiles never alter ignore policy.
-
-An embedded Git repository inherits the containing scan's visibility decision
-at its boundary. If the outer repository ignores that directory, the normal
-scan prunes it; if it is visible, Wuf gives it an independent scan context
-so its own ignore rules apply below the boundary. Naming the embedded
-repository as an explicit `PATH` also scans it independently, even when a
-separately selected parent repository ignores it.
-
-## Choose an event profile
-
-```bash
-wuf . -p git
-wuf . -p fs
-wuf . -p both
-wuf . -t all -p portable
-wuf . -t all -p full --git-commits-from all-refs --include-ignored
-```
-
-`-p/--profile` selects a fixed, named event set and defaults to `git`. A profile
-changes only enabled event kinds; time, Git reachability, Git identities,
-filesystem ignore policy, and explicit exclusions remain independent.
-
-### Git, filesystem, and both: What does the ordinary pattern look like?
-
-The low-noise profiles are:
-
-- `git` uses commit records and their author dates. This is the built-in
-  default.
-- `fs` uses birth and modification dates for regular files.
-- `both` is the exact union of the `git` and `fs` event sets.
-
-The independent defaults still read commits from local branches plus a detached
-`HEAD` and respect standard Git ignore rules. Use `--events` when these named
-event sets are not the desired combination. The low-noise profiles are not
-completeness claims.
-
-### Portable: What dated evidence is stored inside Git objects?
-
-A commit stores two independently meaningful clocks:
-
-- the **author date**, describing when the change was originally authored;
-- the **committer date**, describing when that particular commit object was
-  created or rewritten.
-
-An annotated tag is a separate Git object with a **tagger date**, describing
-when that tag object was created. For example:
-
-```text
-Monday 10:00    Alice originally authors a commit    → author date
-Thursday 15:00  Bob rebases or cherry-picks it       → committer date
-Friday 09:00    Bob creates annotated tag v1.0       → tagger date
-```
-
-The `git` profile shows the Monday author event. Portable retains all three
-object-backed observations. If one commit's author and committer timestamps are
-identical, Wuf may plot one marker carrying both roles; provenance and
-coverage still retain both timestamp roles.
-
-Portable selects commit author and committer dates plus annotated-tag tagger
-dates. Commit reachability remains independently configurable and defaults to
-local branches plus a detached `HEAD`. Lightweight tags have no independent tag
-object or tagger date and remain explicitly unavailable. Derived per-file
-changes are excluded because Git does not store a separate timestamp for each
-changed file.
-
-These timestamps travel when their Git objects are transferred, but they do
-not say when an object was pushed or published. Portable therefore excludes
-local reflogs and filesystem metadata, and Wuf never invents push,
-branch-creation, or lightweight-tag creation times.
-
-### Full: What do all supported event kinds show?
-
-Full selects every supported Git and filesystem event kind. It enables commit,
-file-change, tag, reflog, regular-file, directory, and symlink records together
-with every supported timestamp role.
-
-For every supported kind from only one source, use the exact selectors
-`--events 'git:*'` or `--events 'fs:*'`.
-
-Full includes machine-local and mutable evidence, so it is broader than
-portable rather than more transferable. It does not enable the detailed
-coverage ledger automatically.
-
-Profiles never change selected time, commit reachability, or ignore policy.
-Thus `full` still defaults to the current week, local branches plus a detached
-`HEAD`, and an ignore-respecting filesystem scan. The explicit broad request is
-`-t all -p full --git-commits-from all-refs --include-ignored`. `--events` is
-an alternative to profiles rather than an override layered on top. Identity and
-explicit exclusion filters remain visible in coverage status and verbose
-output.
-
-## Control terminal detail
-
-```bash
-wuf . --cluster-window 1m30s --cluster-anchor event
-wuf . --cluster-window 10m
-wuf . --cluster-window 1h
-wuf . --cluster-window 1h5m --cluster-anchor midnight
-wuf . --cluster-window '1h 5m'
-wuf . --band-label start
-wuf . --cluster-anchor midnight --show-empty-bands
-wuf . --hours all
-wuf . --marker-style identity
-wuf . --count-grouping visual
-wuf . --grid both
-wuf . --hide-empty-days all
-wuf . --hide-days weekend
-wuf . --color
-wuf . --no-color
-NO_COLOR=1 wuf .
-wuf . --list all --limit 50
-wuf . --list outside
-wuf . --events git:tag:tagger fs:file:accessed --list git:tag:tagger fs:file:accessed
-wuf . --events git:tag:tagger fs:file:accessed --list outside git:tag:tagger fs:file:accessed
-wuf . --coverage
-wuf . --strict
-wuf . --verbose
-```
-
-Color is automatic by default and is emitted only for a capable terminal.
-`NO_COLOR` and `--no-color` disable it. `--color` restores automatic color when
-a configuration file sets `no-color = true`; it still respects `NO_COLOR`,
-terminal capability detection, and output redirection.
-
-With the default source markers, every output keeps circle/square for
-Git/filesystem and filled/hollow for inside/outside hours. In identity-marker
-mode, single identities use uppercase/lowercase for inside/outside, while
-composite identities use `◆`/`◇`. Color reinforces these forms rather than
-replacing them. Identity mappings themselves remain independent of schedule
-state: each canonical code and full recorded identity appears once in the key.
-
-`--verbose` appends operational details after the compact summary: cluster and
-compression policy, Scope (derived event sources plus profile), Period (range
-plus timezone), the
-full Coverage status, source/record breakdowns, exact Git/filesystem collector
-selection, Git identity scope, resolved repositories/roots, and filesystem
-ignore/exclusion policy. It does not change the matrix, compact totals, or
-coverage result, and it also appends the detailed accounting ledger.
-`--coverage` prints that same ledger without the verbose context/operational
-block. Neither output flag changes collection scope, and the `full` profile
-enables neither one implicitly.
-
-`-l/--list` appends exact event details after the report. `all`, `inside`, and
-`outside` select schedule state; event identifiers and wildcards select event
-kinds. Several event selectors form a union, while a schedule selector
-intersects that union. Thus `--list outside git:tag:tagger fs:file:accessed` means
-“outside-hours events that are either tag or access-time evidence.” The event
-kinds must already be enabled in the report; a list wildcard matches only the
-enabled scope and must match at least one kind. The list never broadens
-collection implicitly. `--list none` disables a list inherited from
-configuration.
-
-The list keeps the newest `--limit` matching markers (default 50), renders them
-in chronological order, and reports how many additional matches were omitted.
-It does not alter the matrix, totals, or coverage. Exact timestamps retain
-offsets and nanoseconds where available; the list identifies each marker's
-canonical event kind, schedule classification, repository/root, and source
-detail, including an abbreviated commit ID or ref when present. A fixed
-inside/outside selection states that classification once in the heading; an
-all-schedule list shows it per row.
-
-`--strict` returns a non-zero status for partial traversal, parsing, or
-permission failures instead of accepting a useful-but-partial report.
-Unsupported platform capabilities remain visible and are never replaced with
-invented timestamps.
+Run `wuf --help` for every accepted option, selector shape, and built-in
+default. Read [Coverage, privacy, and accuracy](../../reference/accuracy/) before
+using the output as evidence outside personal inspection.

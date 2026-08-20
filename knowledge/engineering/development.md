@@ -1,0 +1,387 @@
+---
+type: Engineering Reference
+title: Wuf development reference
+description: Detailed repository, testing, packaging, release, and implementation guidance.
+tags: [engineering, development, release]
+status: stable
+---
+
+# Wuf development reference
+
+Wuf is a Python 3.11+ project managed with uv. Nix provides a reproducible
+development shell with Python, uv, Ruff, Node.js, pnpm, and release tooling.
+Rich is confined to the terminal presentation layer; it is not a CLI framework
+or TUI architecture.
+
+## Repository layout
+
+The project deliberately uses a flat package layout:
+
+```text
+wuf/
+├── wuf/            # Python import package
+│   ├── domain/          # technology-neutral facts and invariants
+│   ├── collection/      # Git and filesystem adapters
+│   ├── folding/         # classification, clustering, and aggregation
+│   ├── application/     # use-case orchestration and neutral reports
+│   ├── reporting/       # terminal output adapter
+│   ├── configuration/   # option and TOML resolution
+│   └── cli/             # entrypoint and composition boundary
+├── tests/               # architecture, unit, integration, and end-to-end
+├── benchmarks/          # opt-in CLI time and process-tree memory measurements
+├── docs/                # Astro Starlight product documentation
+├── knowledge/           # internal OKF product and engineering knowledge
+├── README.md            # installation and quick-start overview
+└── pyproject.toml
+```
+
+There is no `src/` wrapper. Packaging discovers `wuf*` directly from the
+repository root. The [architecture reference](architecture.md)
+documents the complete dependency graph and placement rules.
+
+## Set up the environment
+
+```bash
+nix develop
+uv sync --locked --extra dev
+```
+
+Run the checkout without installing another copy:
+
+```bash
+uv run --locked wuf --help
+uv run --locked python -m wuf --version
+```
+
+Without Nix, install uv separately and run `uv sync --locked --extra dev` with a
+compatible Python interpreter.
+
+## Run quality checks
+
+```bash
+uv run --locked pytest
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pyright
+```
+
+Tests use temporary repositories with controlled timestamps for Git integration
+behavior. Filesystem capability tests must report or skip unavailable creation
+time rather than substituting POSIX ctime. Linux tests exercise the native
+`statx` adapter, nanosecond provenance, identity validation, and component-safe
+no-follow behavior.
+
+## Measure performance
+
+Performance measurements live outside the ordinary test suite because wall
+time, process memory, and operating-system caches are machine-dependent. The
+benchmark runner invokes the complete CLI in a subprocess, checks its output,
+and records repeated wall/CPU timings, main-process high-water RSS and sampled
+peak process-tree RSS on Linux, page faults, context switches, output size,
+event count, and host/target metadata. Each workload enables strict collection,
+so an incomplete result cannot become a successful performance sample.
+
+Run representative current-scope cases against a real repository:
+
+```bash
+uv run --locked python -m benchmarks.run ~/linux --suite quick --warmups 1 --repetitions 3
+```
+
+Exercise every event profile, date scope, and exact selector family against a
+disposable medium fixture:
+
+```bash
+uv run --locked python -m benchmarks.run \
+  --fixture medium \
+  --suite complete \
+  --warmups 1 \
+  --repetitions 3 \
+  --json benchmarks/results/medium.json
+```
+
+The runner never clears system caches. Use the same host, command, fixture, and
+warmup policy when comparing JSON results. Full-profile all-history collection
+includes per-file Git derivation and can be intentionally expensive on a very
+large real repository; use the synthetic fixture before selecting that case on
+Linux-sized history.
+
+## Build packages
+
+Build wheel and source distributions with:
+
+```bash
+uv sync --locked --extra release
+uv run --locked python -m build
+uv run --locked python -m build compat/workfold --outdir dist
+uv run --locked python -m twine check dist/*
+```
+
+After a push to `main` passes the complete `Test` workflow, the `Release`
+workflow verifies that the tested commit is still current, creates the alpha
+release, publishes it to PyPI, and attaches PyInstaller archives for the
+supported platforms to the GitHub release. A manual dispatch remains available
+as a guarded fallback. Local development does not need publishing credentials;
+GitHub uses the protected `pypi` environment and trusted publishing.
+During the rename transition, each release contains the canonical `wuf`
+distribution and a metadata-only `workfold` compatibility distribution pinned
+to that exact Wuf version. Both PyPI projects therefore authorize the same
+`release.yml` trusted publisher; the compatibility package carries no duplicate
+implementation.
+Workflow actions are pinned to immutable commits and updated through Renovate.
+CI smoke-tests both the wheel and source distribution, and a separate Python
+3.11 job exercises the declared runtime dependency floors.
+
+## Work on the documentation
+
+Install, validate, build, or serve the Astro Starlight site with:
+
+```bash
+nix run .#docs-install
+nix run .#docs-check
+nix run .#docs-build
+nix run .#docs-dev
+```
+
+The site documents the terminal CLI. Do not add an HTML report, web server, or
+browser renderer without an explicit product decision to expand Wuf's
+scope.
+
+## Implementation boundaries
+
+`ObservationScope` is the single pure predicate for bounded time and Git
+identity selection. Collectors may apply it as soon as a timestamp value is
+known, but an early-selection path must be equivalent to collecting the wider
+source universe and applying that predicate afterward. Schedule classification
+receives selected observations only; it does not decide query membership.
+
+Coverage keeps staged, independently recorded counters. Each source collector
+accounts for records and timestamp slots examined, including unavailable,
+unsupported, and errored values, and counts readable values matching
+`ObservationScope` before consumer delivery. Early-selection collectors do so
+before rich observation materialization. Pipeline accounting independently
+records received observations and plotted or coalesced markers. Known
+non-matching timestamps do not need a filtered counter. Values read need not
+equal the selected result, but every scope match must become a selected
+observation or an explicit materialization error. If rich source metadata is
+required to finish scope evaluation and cannot be read, coverage records a
+scope-evaluation error instead of guessing that the timestamp matched.
+
+Git revision output is streamed. Its lightweight scan contains only ASCII-safe
+object IDs and epoch timestamps and applies the requested author/committer roles
+independently. Git identities, offsets, subjects, and other provenance always
+come from byte-counted raw commit objects; display-formatted Git output is never
+treated as source metadata. Date-matching object IDs are spooled to an
+automatically removed temporary file, then raw commit objects are read through
+one Git process and delivered to consumers in bounded batches. The raw-object
+reader retains only provenance headers and the first subject line, while it
+drains the rest of each commit message in fixed-size chunks. An exceptionally
+long subject is explicitly marked as shortened without discarding its commit's
+timestamps or identities. Identity filters are then applied to the raw
+signatures. This remains exact for file-change observations because they
+inherit those commit roles. Streamed `diff-tree` records are provisional until
+the boundary for their owning commit has been parsed. Wuf stages them in a
+bounded-memory spool that rolls over to an automatically removed temporary
+file, then publishes them only after commit completion; the final commit also
+waits for a successful Git process exit. A malformed, interrupted, or failed
+commit therefore cannot leak a partial subset of its file changes into the
+chart. Do not replace author-date selection with ordinary `git --since`: author
+dates are not topologically monotonic.
+Filesystem discovery still inventories and stats every candidate required by
+entry and ignore scope, but it need not materialize a normalized observation
+for a known out-of-range timestamp. Production runs do not retain the full
+record or observation inventory after its counters have been updated. Batch
+sizes are memory controls, never collection, query, or chart semantics.
+
+Git implementation lives under `collection/git/`. Its `commits`, `changes`,
+`objects`, `tags`, and `reflogs` subpackages own independently named protocol
+and accounting decisions while sharing repository and process machinery. Do
+not recreate a parallel facade or a catch-all `git_core` tree.
+`collection/git/evidence` is the one source-level coordinator presented to the
+application; it owns ordering between those capabilities and publishes a
+normalized source summary and coverage fragment. Keep protocol state machines
+independent from normalized domain conversion and report construction.
+
+Configuration resolves time independently from evidence scope. A named profile
+expands directly to a fixed event set; exact `--events` selectors are the
+complete alternative. `EvidenceSelection` is the one canonical set after
+resolution, and the application derives its exact collector activation through
+`CollectionPlan` rather than retaining parallel source/record/timestamp flags.
+The profile defaults to `git`. Profiles never rewrite time, Git reachability,
+or filesystem ignore policy.
+
+Within `configuration/`, `schema` is the single catalog of setting keys,
+built-in defaults, TOML shapes, simple choices, and CLI destinations. `options`
+owns immutable parsed values, `parsing` owns individual value grammars,
+`files` and `layers` own TOML discovery and precedence, and `resolution` parses
+each effective value once while applying explicit cross-option policy.
+`cli/parser` declares argparse presentation while `cli/main` performs runtime
+dispatch. `RunOptions` groups collection and folding choices while its nested
+terminal preferences remain presentation input. Keep argparse details out of
+configuration and domain validation.
+
+TOML defaults are resolved before `RunOptions` validation as built-ins, the
+platform global file, the nearest selected-path project file, and explicit CLI
+values. Each setting retains its origin for `--show-config`; configuration is
+merged as typed data and is never converted into synthetic command-line
+arguments. Standalone `wuf.toml` and `[tool.wuf]` use the same strict
+schema. Keep discovery, parsing, precedence, CLI materialization, and final
+semantic resolution separate so unknown keys and invalid cross-option states
+cannot be silently ignored. Do not recreate parallel key/type/destination maps
+outside `configuration/schema`.
+
+Coverage data and coverage prose are also separate. `domain/coverage/models`
+defines immutable source fragments, final partitions, capability kinds, and
+reconciliation invariants, while `domain/coverage/builder` owns mutable
+construction and generic fragment finalization. Every source accounts through
+the same fragment contract; `application/coverage/reconciliation` only joins
+those fragments with independently counted pipeline outcomes. The terminal
+adapter owns requested scope descriptions, the compact completeness statement,
+and verbose coverage text.
+
+Filesystem path inventory and filesystem metadata extraction are distinct
+boundaries. For a file/symlink scan that respects ignore rules inside a Git
+worktree, local NUL-delimited `git ls-files` plumbing supplies tracked,
+untracked, and ignored path candidates using Git's standard ignore semantics.
+Git never supplies filesystem types or timestamps: every included candidate
+must still pass a current no-follow filesystem metadata read. The fast inventory
+reader opens every parent component relative to a validated root descriptor,
+never follows intermediate or final symlinks, and keeps only a bounded LRU of
+directory descriptors. On Linux, a combined `statx` snapshot may
+supply both portable fields and birth time in one call. A failed combined read
+falls back to `lstat` for portable fields while retaining the original
+birth-time failure without an immediate retry, so it cannot hide otherwise
+readable metadata. Native traversal resolves the same read relative to safely
+opened directory descriptors. Before either reader publishes successfully read
+timestamp-bearing candidates, it stages a bounded batch and revalidates the
+shared lexical parent mapping. Native traversal also stages child metadata
+errors behind that boundary. The fast Git inventory path accounts ignored
+paths directly from the already validated inventory spool and reports an
+individual metadata-read failure immediately; neither outcome invents a
+timestamp. Parent transitions and final partial batches perform the same
+validation. A detected directory replacement therefore cannot leak pending
+timestamp evidence, while previously validated batches remain useful in a
+reported partial scan. Platforms without component-safe descriptor
+lookup do not use the path-driven fast reader; they combine the bounded Git
+inventory with native traversal instead of polling the selected root around
+every entry. An index-only path absent from the current worktree is therefore
+not filesystem evidence.
+Directory scans combine the same inventory's ignored-directory boundaries with
+the native no-follow walker,
+so current and empty directories remain discoverable without entering ignored
+subtrees. Coverage counts each pruned subtree boundary and explicitly states
+that its descendant directories were not enumerated; scans that include ignored
+entries traverse them instead. Scans outside Git and scans that include ignored
+entries use the native walker alone. Keep the fast inventory and native
+reference behavior equivalent for requested regular files, and never
+reintroduce per-entry path resolution for repository/admin containment.
+Both paths use the same filtered-entry classifier: an explicit exclusion wins
+coverage accounting when it also matches a Git-ignored path, while neither
+path invents retained metadata for an inventory-only entry. Contract tests
+force both discovery paths on capable hosts so this parity is checked without
+waiting for platform CI.
+Apply the containing repository's ignore result before transferring ownership
+to an embedded repository: ignored boundaries are pruned, visible boundaries
+receive their own scan context, and separately requested nested roots remain
+independent members of the requested root union. Explicit roots statically own
+their exact path or subtree; automatically discovered repository roots skip
+those scopes rather than speculatively replacing them. A later failure can
+therefore never erase an explicit request, and successful scans cannot produce
+duplicate evidence.
+
+`FilesystemCollector` resolves roots, `collection/filesystem/root_schedule`
+partitions ownership and orders dynamic repository handoffs,
+`collection/filesystem/inventory_metadata` owns safe inventory-path lookup, and
+`collection/filesystem/root` applies entry, ignore, and extraction policy to one
+prepared root. Its `RootScanRequest`, `RootScanSinks`, and `RootScanServices`
+separate immutable policy, mutable outputs, and shared platform mechanisms;
+do not expand `collect_root` back into an independently ordered parameter list.
+
+Filesystem record discovery is defined by requested metadata-bearing entry
+kinds, not by walker implementation details. A directory used only to reach
+requested files is traversal structure and must not appear as an excluded
+record merely because the native fallback visited it. Explicitly excluded
+boundaries, semantic Git administration, and unreadable candidates remain
+accounted terminal outcomes. Fast Git inventory and native ignore fallback
+must therefore produce the same eligible-file and coverage counters for the
+same stable tree.
+
+Schedule classification, display cropping, weekday-column projection, globally
+aligned time clustering, renderer-neutral report construction, and terminal
+rendering remain separate stages. Full summary and coverage counters
+are updated before projection. Empty-day decisions use post-crop weekday counts;
+only projected markers enter clustering, so an explicitly hidden event cannot
+anchor or stretch a visible row. Explicitly hidden occupied columns retain a
+separate reconciled count. The clusterer supports event-anchored and
+local-midnight-aligned half-open semantic bands. Midnight anchoring accepts only
+whole-minute windows, keeping its fixed bounds exactly representable by the
+terminal renderer's `HH:MM` labels. Each cluster retains semantic assignment
+bounds separately from its first/last observed times, so label formatting cannot
+change membership or gap accounting. The terminal renderer marks a compressed
+gap only when its mode-specific duration reaches one cluster window: observed
+extent to observed extent for event anchoring, or omitted assignment bounds for
+midnight anchoring. Ordered visual runs form ordinary cells.
+Pathologically busy cells retain exact counts per visual kind instead of an
+unbounded alternating sequence. Chart sorting uses a list for mostly unique
+markers and automatically switches to counted groups for duplicate-heavy
+streams. Either representation transparently spills to an ephemeral local
+SQLite sorter above its bounded threshold. Spill rows are append-only and
+grouped at read time, keeping the implementation compatible with the SQLite
+versions supported by Wuf's Python baseline. Temporary data is removed
+when aggregation finishes. Only the renderer creates Rich
+objects or assigns green/blue/red styles. Optional grid lines are likewise
+terminal-only presentation state and never enter the normalized event,
+classification, aggregation, or report model.
+
+Report construction projects execution state once into a stable contract:
+resolved `ReportScope`, source-neutral `CollectionFacts`, coverage, aggregation,
+and bounded provenance. Terminal modules consume that contract and must not
+reach into `RunOptions`, `Collection`, source adapters, or the execution result.
+The architecture tests enforce both this renderer boundary and the Git
+source-facade boundary.
+
+Identity-marker mode projects each visible Git marker to a compact registry ID
+before chart sorting. Full recorded names/emails are retained once per distinct
+identity group, while in-memory and SQLite-spilled marker rows carry only that
+integer. Registry IDs are remapped into deterministic identity order before
+clustering. Initial-group numbering, composite diamond allocation, and
+identity-label formatting remain terminal-renderer concerns; collectors and
+normalized observations never store display codes. The registry is capped at
+128 visible groups; exceeding that bound changes only presentation to ordinary
+Git markers and never discards provenance or coverage.
+Repository-controlled values must be sanitized and added as literal Rich text,
+never parsed as markup.
+
+The renderer independently selects range or start-only band labels and formats
+their clock values at minute precision. Start-only output uses the compact
+`Time` column heading. Cluster windows have a one-minute
+minimum so two distinct clusters cannot collapse to the same visible start
+label. Do not round the underlying instant to obtain that label: normalized
+provenance and listed-event rows retain exact seconds and available nanoseconds. The renderer must emit the
+matrix first, without a title or subtitle. After the matrix it emits a
+content-aware symbol key without a heading, a left-aligned working-hours line,
+and three direct statistic rows without a Summary heading: Events, Schedule,
+and Calendar. Both split rows partition Events but answer independent questions.
+The key derives from visible markers after cropping and mentions `×N` only if
+count tokens render. Identity/source mappings are independent of schedule state
+and appear once. The matrix and key always use the same structural schedule
+encoding: filled/uppercase inside, hollow/lowercase outside. Color reinforces
+that encoding, and the conditional outside cue is styled red when available;
+it never uses an arbitrary contributor's marker as the global example. Identity
+mappings use the canonical uppercase/filled code in Git green and occur once;
+lowercase/hollow variants remain consolidated in the outside cue. Only
+`--verbose` adds scope, period, full successful
+coverage, source/record breakdowns, cluster/compression policy, exact collector
+choices, Git identity scope, collection extents, and ignore/exclusion policy; it also
+includes the detailed coverage ledger. `--coverage` includes the ledger without
+those verbose details, and evidence-profile resolution must not enable either
+output mode. The minimal default must still append exception notices for partial
+collection, explicit narrowing, unsupported capabilities, and nonzero cropping.
+
+Keep record counts, timestamp observations, and plotted activity markers
+distinct: they intentionally answer different accounting questions. Ordinary
+cells draw one symbol per activity marker. Exact `×N` compaction is a
+width- or volume-driven renderer fallback and must not alter event, summary, or
+coverage counts.
+
+Before changing behavior, inspect the CLI help, usage and accuracy documentation,
+and the tests covering the affected pipeline stage.

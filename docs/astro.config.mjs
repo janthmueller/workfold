@@ -7,8 +7,8 @@ export default defineConfig({
   scopedStyleStrategy: 'where',
   integrations: [
     starlight({
-      title: 'Wuf',
-      description: 'Documentation for the Wuf Python CLI.',
+      title: 'WUF Unifies Footprints',
+      description: 'Documentation for the Wuf terminal CLI.',
       disable404Route: true,
       customCss: ['./src/styles/custom.css'],
       social: [
@@ -20,18 +20,22 @@ export default defineConfig({
       ],
       sidebar: [
         {
-          label: 'Start Here',
+          label: 'Wuf',
           items: [
             { label: 'Overview', link: '/' },
             { label: 'Using Wuf', link: '/guides/usage/' },
-            { label: 'Development', link: '/guides/development/' },
-            { label: 'Architecture', link: '/reference/architecture/' },
           ],
         },
         {
           label: 'Reference',
           items: [
             { label: 'Coverage and accuracy', link: '/reference/accuracy/' },
+          ],
+        },
+        {
+          label: 'Contributing',
+          items: [
+            { label: 'Development', link: '/guides/development/' },
           ],
         },
       ],

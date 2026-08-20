@@ -1,195 +1,71 @@
 ---
-title: Wuf
+title: WUF Unifies Footprints
 slug: /
-description: Fold local Git and filesystem timestamps into an honest weekly terminal view.
+description: See when local Git and filesystem activity happened across a representative week.
 ---
 
-**WUF Unifies Footprints.**
+Wuf is a local terminal CLI that folds timestamp activity onto one
+Monday-to-Sunday week. It helps answer two questions quickly:
 
-Wuf is a local, terminal-only CLI for answering two questions:
+1. When did recorded activity happen?
+2. Which events occurred inside or outside the intended working schedule?
 
-1. When did discoverable work activity happen?
-2. Which recorded events occurred inside or outside an intended working schedule?
+The output describes discrete evidence, not continuous work duration.
 
-It converts selected timestamps into one timezone, folds every selected date
-onto a representative Monday-to-Sunday week, and renders a compact terminal
-chart. The result describes discrete evidence, not continuous work duration.
+![Example Wuf terminal output](/wuf/wuf-output.svg)
 
-:::note[Development status]
-Wuf is an alpha. The terminal-only CLI includes the sparse Rich-based
-chart, Git files/tags/reflogs, filesystem metadata, combined-source views, and
-exhaustive coverage.
-:::
+## Install
 
-## Quick start
-
-Wuf requires Python 3.11 or newer. Git views also require the local `git`
-executable.
+Wuf requires Python 3.11 or newer. Git event collection also requires the local
+`git` executable.
 
 ```bash
 pip install wuf
 wuf --help
 ```
 
-For an isolated CLI environment, use `uv tool install wuf` or
-`pipx install wuf`. Standalone archives are available from
-[GitHub releases](https://github.com/janthmueller/wuf/releases).
+For an isolated environment, use `uv tool install wuf` or `pipx install wuf`.
+Platform archives are published with each
+[GitHub release](https://github.com/janthmueller/wuf/releases).
 
-:::note[Renamed from Workfold]
-Wuf continues the same project under its permanent short name. Python packages
-retain `workfold` as a compatibility command, while `wuf` is canonical. Rename
-`workfold.toml` to `wuf.toml` and `[tool.workfold]` to `[tool.wuf]` when moving
-an existing configuration.
-:::
+## See the current week
 
-Inside a Git repository, run:
+Run Wuf inside a Git repository:
 
 ```bash
 wuf
 ```
 
-With no flags, Wuf selects the current ISO week in the operating system's
-local timezone (`-t this-week`), reads commit author timestamps from local
-branches plus a detached `HEAD` under the `git` event profile (`-p git`), uses
-a configurable cluster window (default: `1h`),
-anchors bands at events, labels them as ranges, and classifies against
-`Mo-Fr 08:00-16:30`.
+By default, Wuf reads commit author timestamps reachable from local branches,
+selects the current ISO week in your operating system's timezone, and compares
+them with Monday-Friday 08:00-16:30.
 
 ```bash
-wuf . -t 2026-W31
-wuf . -t 2w3d
-wuf . -t 2026-07-01..2026-07-31
-wuf . --timezone Europe/Berlin --list outside
-wuf . -t all -p portable
-wuf . -t all -p full --git-commits-from all-refs --include-ignored
-wuf . --events git:tag:tagger fs:file:modified
-wuf . --events 'fs:*:modified'
-wuf . --events 'git:*:committer'
-wuf . --cluster-window 1m30s --cluster-anchor event
-wuf . --cluster-window 10m
-wuf . --cluster-window 1h5m --cluster-anchor midnight
-wuf . --cluster-anchor midnight --show-empty-bands
-wuf . --band-label start
-wuf . --hours all
-wuf . --marker-style identity
-wuf . --grid vertical
-wuf . --hide-empty-days all
-wuf . --hide-empty-days weekend
-wuf . --hide-days weekend
-wuf . --show-config
+wuf -t 2w3d
+wuf -t 2026-W31
+wuf -p fs
+wuf -p both -t 2w
+wuf --hours 'Mo-Thu 08:00-16:30; Fr 08:00-14:00'
 ```
 
-`-p/--profile` selects a named event set and defaults to `git`. The `fs` and
-`both` profiles provide low-noise filesystem and combined views. `portable`
-selects Git commit author/committer and annotated-tag tagger evidence stored in
-Git objects; it says nothing about remote publication. `full` selects every
-supported Git and filesystem event kind.
+Continue with [Using Wuf](./guides/usage/) for time selection, event profiles,
+exact selectors, schedules, chart controls, and configuration.
 
-Profiles never change time, commit reachability, or ignore policy. A complete
-all-date, all-ref, ignored-files-included request therefore spells those scopes
-out as `-t all -p full --git-commits-from all-refs --include-ignored`.
+## Local and honest
 
-For a custom scope, `--events` replaces the profile with exact identifiers and
-wildcards. Values are space-separated, and wildcard values should be quoted.
-For example, `--events git:tag:tagger fs:file:modified` combines annotated-tag
-and regular-file mtime observations, while `--events 'fs:*:modified'` selects
-mtime for files, directories, and symlinks. Positional paths come before
-`--events` and `--list`.
+Wuf reads local Git records and current filesystem metadata. It does not fetch,
+contact a hosting service, start a server, or send telemetry.
 
-## Read the chart
+A timestamp is evidence attached to a record. It cannot prove how long someone
+worked, recover activity that was never logged, or reconstruct metadata that
+has already been replaced. Read [Coverage, privacy, and
+accuracy](./reference/accuracy/) for those boundaries.
 
-By default, the chart renders only occupied clusters in implicit
-`00:00`-toward-`24:00` order and compresses empty time. The default
-`--cluster-anchor event` starts each globally shared half-open band at the
-earliest unassigned local wall-clock event. `--cluster-anchor midnight` instead
-uses fixed intervals measured from local `00:00`, so a `1h` window always means
-`[00:00,01:00)`, `[01:00,02:00)`, and so on. An event exactly on an endpoint
-belongs to the following interval. Midnight anchoring requires a whole-minute
-window so every displayed `HH:MM` boundary is exact.
+## Alpha status
 
-Label formatting is independent. `--band-label range` is the default: event
-anchoring shows the first through last observed time, while midnight anchoring
-shows the fixed interval bounds. `--band-label start` prints only the band start
-under the compact `Time` heading. An explicitly
-cropped partial edge remains an exact range so its label cannot imply a complete
-window. Labels use minute-level clock text. An event-anchored label names the
-minute containing its exact observation or anchor; exact seconds and
-nanoseconds remain in provenance and listed-event rows. Empty bands are
-omitted by default, and a gap at least as long as the configured cluster window
-uses one dim duration cue rather than rows of empty intervals. The built-in
-`1h` window therefore retains the familiar one-hour threshold while custom
-windows adjust the cue threshold with them. `--show-empty-bands` expands every
-fixed interval in the resolved display range; automatic bounds expand to full
-bands. It therefore requires `--cluster-anchor midnight`; using it with event
-anchoring is a usage error.
+Wuf is under active development. The installed command's `--help` output is the
+authoritative reference for its exact options and built-in defaults.
 
-The matrix has no grid by default. `--grid vertical`, `horizontal`, or `both`
-adds dim internal separators without drawing an outer box. Horizontal lines
-separate every logical cluster but never split wrapped rows. A compressed `⋮`
-duration is embedded into the boundary between its neighboring clusters.
-
-The matrix is the first terminal output; no title or context line appears above
-it. A content-aware symbol key, left-aligned working-hours line, and three direct
-statistic rows follow. The key has no heading and names only identities and event-style groups,
-outside-hours, and exact-count categories actually visible in the matrix. Each
-identity or equal visual group is mapped once. With built-in styles, one red
-`Outside working hours` cue explains every red marker without repeating a real
-identity; its conditional symbols use the same hollow shapes or lowercase forms
-as the matrix. Custom outside colors are shown on their corresponding symbols.
-Colorless output retains that structure without styling. There is no
-Summary heading: Events shows the total, Schedule splits it into inside/outside,
-and Calendar independently splits it into weekday/weekend.
-Busy cells keep exact-count tokens separate per event kind by default;
-`--count-grouping visual` merges only tokens with the same resolved symbol and
-configured style without changing event totals or collection scope.
-`--verbose` adds scope, period, the full successful coverage status,
-source/record breakdowns, cluster/compression policy, exact collector choices,
-Git identity scope, collection extents, ignore/exclusion policy, and the detailed
-coverage ledger. Use
-`--coverage` for the ledger without the operational details. Partial collection,
-explicit narrowing, unsupported capabilities, and nonzero cropping still appear
-by default as exception notices.
-
-Weekday columns default to Monday through Sunday. `--hide-empty-days all`
-removes every empty column, while the `weekdays`, `weekend`, and individual-day
-scopes apply that condition selectively. `--hide-days` uses the same scopes but
-always hides them. Column controls affect only the matrix: summary, coverage,
-and listed-event rows retain the complete selected event set, and explicitly
-hidden occupied columns receive a compact `Hidden` count.
-
-Each ordinary symbol is one activity marker:
-
-- `●` is an inside-hours Git marker, shown in green;
-- `■` is an inside-hours filesystem marker, shown in blue;
-- `○` and `□` are outside-hours Git/filesystem markers, shown in red.
-
-Circle/square identifies the source and filled/hollow identifies schedule state
-with built-in source markers. Color reinforces those meanings but is never
-required. Persistent `styles` rules can replace the source-marker symbol/color
-pairs per exact or wildcard event selector; they do not alter evidence scope,
-counts, or coverage.
-When an unusually busy cell cannot fit individual symbols, exact tokens such as
-`●×12` replace that cell; Wuf never substitutes an approximate density
-band.
-
-`--marker-style identity` replaces Git circles with deterministic identity codes
-and maps visible codes to the full recorded names/emails in the key. A unique
-initial stays compact (`J`); identities sharing one become `J1`, `J2`, and so
-on. The key uses each canonical uppercase code exactly once and colors that code
-green; the compact red `a–z` cue explains lowercase outside-hours occurrences.
-Uppercase means inside and lowercase means outside whether or not color is
-available; numeric suffixes make adjacent codes self-delimiting. Composite
-identities similarly use green `◆` mappings and the `◇` outside cue. Filesystem
-markers remain squares.
-
-## Local by design
-
-Collection reads local Git records and current filesystem metadata. It does not
-call GitHub, GitLab, Bitbucket, or another remote service, and it does not start
-a web server. This Astro site is product documentation only; Wuf itself
-produces a terminal report.
-
-Continue with [Using Wuf](./guides/usage/) or read
-[Coverage, privacy, and accuracy](./reference/accuracy/). Contributors can use
-the [development guide](./guides/development/) for the repository architecture,
-quality checks, packaging, and release workflow.
+Wuf continues the former Workfold project under its permanent name. The
+transitional `workfold` package and command remain available, while `wuf` and
+`wuf.toml` are canonical.

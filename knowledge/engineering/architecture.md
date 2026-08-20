@@ -1,7 +1,12 @@
 ---
-title: Architecture
-description: Understand Wuf's module boundaries, dependency rules, and event pipeline.
+type: Software Architecture
+title: Wuf architecture
+description: Module boundaries, dependency rules, and the event-processing pipeline.
+tags: [engineering, architecture]
+status: stable
 ---
+
+# Wuf architecture
 
 Wuf is a **layered modular monolith with capability-oriented adapters**. It
 is one Python package, one process, and one distributable CLI. Top-level

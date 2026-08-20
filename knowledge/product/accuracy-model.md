@@ -1,0 +1,231 @@
+---
+type: Product Semantics
+title: Wuf accuracy and coverage model
+description: Detailed semantics for evidence, completeness, privacy, and source limitations.
+tags: [product, accuracy, coverage, privacy]
+status: stable
+---
+
+# Wuf accuracy and coverage model
+
+## What an event means
+
+A Wuf event is a discrete activity marker derived from a timestamp that is
+still discoverable in the requested local sources. It is evidence that a record
+has that timestamp; it is not proof of continuous work before or after it.
+
+Wuf does not estimate hours worked, billable time, focus, or productivity.
+Its within/outside percentages count classifiable activity markers, not time
+duration.
+
+## The completeness boundary
+
+Wuf treats the selected paths, time range, sources, evidence kinds,
+identities, ignore policy, and explicit exclusions as the requested query scope.
+Every discoverable timestamp inside that scope must become a selected
+observation, or Wuf must report why it could not determine or obtain it.
+Known timestamps outside the requested time or identity scope are not part of
+the answer and are not counted as coverage outcomes.
+
+Coverage keeps source extraction and query results separate. Each collector
+records the timestamp slots it had to examine, whether their values were read,
+unavailable, unsupported, or errored, and which readable values matched the
+query before consumer delivery. Early-selection paths do so before rich
+materialization. Pipeline accounting independently records received
+observations and whether each became a plotted marker or was coalesced with an
+identical observation while retaining all provenance roles.
+There is deliberately no equality between values read and observations
+selected: an exact collector may reject a known non-matching value as soon as
+it reads it. Every scope match must, however, become a selected observation or
+an explicit materialization error. An error that prevents Wuf from
+deciding whether a value was in scope remains a conservative coverage
+exception.
+
+Wuf therefore uses qualified wording such as:
+
+> complete for all discoverable timestamps in the requested scope
+
+That scope includes paths, the time selector, the named profile or exact
+event selectors, commit reachability, Git identity filters, filesystem ignore
+policy, explicit exclusions, and platform capabilities. `--coverage` prints
+the detailed ledger without operational details; `--verbose` prints operational
+details, the full successful coverage status, and that ledger. The `full`
+profile changes the event set only and does not imply either report-detail flag.
+
+Default output omits the ordinary complete status, but it must show a compact
+coverage exception for active Git identity filtering, explicit exclusions,
+unsupported capabilities, partial collection, or collection errors. The
+verbose Scope fact combines derived event sources and profile, such as
+`Git · portable`, while
+the full Coverage fact stays focused on completeness.
+
+The ledger keeps four checks separate:
+
+1. discovered source records end as eligible or an explicit record-level
+   disposition;
+2. timestamp slots examined by a collector end as read, unavailable,
+   unsupported, or errored;
+3. readable values matching the query become selected observations or explicit
+   materialization errors;
+4. selected observations end as plotted or explicitly coalesced.
+
+Records examined, timestamp values read, selected observations, and plotted
+events are different totals. For example, one commit with identical author and
+committer instants can produce two selected observations but one marker, with
+both roles preserved. With `-t all`, the time scope itself has no boundary, so
+every otherwise selected available value enters result accounting.
+
+Internal streaming, early exact selection, and batches do not define scope. A
+collector may avoid materializing a normalized observation after proving that
+its timestamp does not match the query. The final selected result must be the
+same as collecting all available values and applying the same scope afterward.
+Crossing the chart sorter's in-memory threshold changes only temporary storage,
+not event order, clustering, totals, or coverage.
+
+Sparse chart layout does not change this accounting. Empty wall-clock bands are
+omitted because they contain no selected markers, not because collection skipped
+them. Ordinary cells show one symbol per activity marker. If the terminal is too
+narrow for that representation, a cell switches to exact `×N` counts;
+very busy cells may make that same exact-count switch before rendering so their
+visual sequence cannot grow memory without bound. The underlying event,
+source/schedule, and coverage totals are unchanged.
+By default, each token represents one retained event-kind, schedule, and
+identity signature. `--count-grouping visual` may instead sum signatures only
+when their resolved symbol and configured style match. This is a terminal-only
+projection: it never merges normalized evidence, changes totals, or alters
+coverage. The grouping decision is made before ANSI color suppression, so
+`NO_COLOR` cannot change token boundaries.
+Event-style rules operate only on that retained plotted-marker projection.
+They cannot change discovery, timestamp selection, coalescing, scope, totals,
+or coverage. When equal Git author and committer instants coalesce, a style
+selector must cover both retained roles to apply; Wuf never discards a role
+or expands the pair into visually inflated duplicate markers for styling.
+Chart band labels use minute-level `HH:MM` clock values. Event anchoring starts
+a half-open band at the earliest unassigned event; midnight anchoring uses fixed
+half-open local-clock intervals from `00:00` and clips a nondividing final band
+at `24:00`. Midnight windows must contain a whole number of minutes, keeping
+their displayed boundaries exact. Range versus start-only labels do not change
+those assignments. Automatic dense ranges expand to complete fixed bands. If
+an explicit display crop cuts an edge band, that partial edge retains an exact
+range label even in start-only mode rather than implying a complete window. The
+cluster window is at least one minute, preventing
+distinct clusters from receiving the same displayed start minute. An
+event-anchored label names the minute containing the exact observation or
+anchor; it does not round or overwrite the normalized instant. Exact seconds
+and available nanoseconds remain in provenance and exact event listings.
+Empty bands do not affect evidence accounting. The terminal adds one `⋮`
+cue only when a compressed gap reaches the configured cluster window. In event
+anchoring that duration is measured between consecutive observed extents; in
+midnight anchoring it covers wholly omitted fixed intervals, so one missing
+fixed band always qualifies. Gap durations retain meaningful second components
+for second-based event windows.
+
+Rolling `-t` durations are fixed elapsed windows ending at one clock value
+captured at run start. Their start is inclusive and captured `now` is exclusive;
+weeks mean seven 24-hour days and days mean 24 hours, including across a local
+daylight-saving transition. Wuf does not reinterpret them as calendar
+weeks, dates, or months.
+
+## Source-specific limitations
+
+### Git
+
+- Author and committer dates can differ, be manually assigned, and be rewritten.
+- For a bounded query, Wuf scans the requested author/committer roles and
+  selects them independently. It does not rely on ordinary `git --since` for
+  author dates because author timestamps are not ordered by commit topology.
+- Commit and file-change timestamp roles are independently selectable. A file
+  change inherits the requested author or committer role from its commit.
+  Wuf therefore derives tree differences only for commits with at least
+  one matching file-change role; this is an exact scope optimization, not a
+  history shortcut.
+- File changes are derived from first-parent tree differences, not stored human
+  actions; root commits are compared with an empty tree.
+- Annotated tags may have independent tagger dates; lightweight tags do not.
+- Reflogs are machine-local, optional, and subject to expiration.
+- The portable profile means timestamps stored in commit and annotated-tag
+  objects. It does not prove when an object was pushed or published, and
+  Wuf does not contact a remote to guess.
+- Git file creation means first recorded addition in selected reachable history,
+  not operating-system creation.
+- A deleted untracked file leaves no Git evidence.
+
+### Filesystem
+
+- A scan sees only the current metadata snapshot, not earlier values.
+- A bounded filesystem query still discovers and stats every candidate needed
+  by the requested entry, ignore, and exclusion scope. Directory mtimes cannot
+  safely prove that descendants are out of range. Once a timestamp value is
+  known, Wuf can discard a non-matching value without building a normalized
+  observation for it.
+- Inside a Git worktree, the normal respect-ignore scan uses local Git plumbing
+  only to inventory tracked and untracked path candidates. A successful current
+  component-safe no-follow filesystem stat—not the Git index—determines whether
+  an included path exists, its entry type, and all of its timestamps. Parent
+  components are resolved beneath an opened root without following symlinks;
+  unsupported platforms use native traversal instead of an unsafe path-driven
+  shortcut. Never-staged,
+  non-ignored files are included; index-only paths absent from the worktree are
+  not filesystem events.
+- Ignored leaf candidates and ignored subtree boundaries are counted without
+  reading their metadata. When directories are requested, coverage separately
+  reports each pruned ignored subtree and states that descendant directories
+  were not enumerated. `--include-ignored` instead traverses and stats those
+  entries because their timestamps are explicitly in scope.
+- A repository embedded below a selected root is not an escape from that
+  root's ignore policy. An ignored repository boundary is pruned; a visible
+  boundary receives its own repository context. A nested repository supplied
+  explicitly as another input root remains independently selected. More
+  generally, every explicit descendant root owns its exact path or subtree, so
+  failure of an automatically discovered repository scan cannot suppress it.
+- A directory visited only so a file-only scan can reach descendant files is
+  traversal structure, not a discovered metadata record. It enters record and
+  timestamp coverage when directories are requested; explicit exclusion and
+  Git-administration boundaries remain accounted separately.
+- Copying, checkout, archive extraction, formatting, and builds may alter times.
+- Creation/birth time is not exposed by every operating system or filesystem.
+  On Linux, Wuf requests `STATX_BTIME` through libc `statx`; the individual
+  slot remains unavailable when the filesystem does not return that mask bit.
+- POSIX ctime means inode/status metadata change; it is never labeled creation.
+- Atime may be disabled, delayed by `relatime`, or changed by another read.
+- Deleted untracked entries and earlier mutable metadata values are
+  unrecoverable. Unsaved and past uncommitted edit sessions cannot be
+  reconstructed without a watcher, which Wuf does not provide.
+
+Collection is not an atomic snapshot. A repository or tree changing during a
+run can produce partial coverage; Wuf reports detected failures but does
+not lock the user's working tree.
+
+Weekday-column controls are presentation-only. `--hide-days` may omit occupied
+columns from the matrix, but those events remain in summary, coverage, and any
+requested event list, and receive a compact hidden-event count.
+
+## Privacy and security
+
+The collection pipeline is local:
+
+- Git is invoked without fetching or contacting remote hosting APIs; Wuf
+  also disables configured credentials, protocols, pagers, and filesystem
+  monitor hooks for its read-only Git subprocesses;
+- filesystem scans do not read arbitrary date-like text from file contents;
+- Wuf has no telemetry, persistent activity database, background watcher,
+  or web server;
+- terminal-facing repository text is sanitized before rendering.
+
+Reports can still contain local paths, recorded Git identities, commit subjects,
+reflog messages, and filenames. Review output before sharing it.
+
+## Errors and strict mode
+
+Invalid option combinations and invalid dates, schedules, or timezones are
+usage errors. If some selected targets succeed while another read fails, a
+normal multi-target run may render useful output with a prominent `partial`
+coverage status and diagnostics.
+
+Use `--strict` when partial evidence must fail automation. It makes traversal,
+subprocess, parsing, permission, and metadata-read errors return a non-zero exit
+status. A platform-wide unsupported timestamp kind is reported as unsupported,
+not fabricated and not silently counted as captured.
+
+The detailed `--coverage` ledger exposes the exact accounting partitions for a
+particular run.
