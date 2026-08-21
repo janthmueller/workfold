@@ -90,8 +90,7 @@ def test_global_local_and_cli_layers_merge_by_key(tmp_path: Path) -> None:
     )
     local_path = _write(
         project / "wuf.toml",
-        'hours = "Mo-Thu 08:00-16:00"\nband-label = "start"\ncount-grouping = "visual"\n'
-        'hide-empty-days = ["weekend"]\n',
+        'hours = "Mo-Thu 08:00-16:00"\nband-label = "start"\ncount-grouping = "event"\nhide-empty-days = ["weekend"]\n',
     )
 
     invocation = parse_invocation(
@@ -105,7 +104,7 @@ def test_global_local_and_cli_layers_merge_by_key(tmp_path: Path) -> None:
     assert str(invocation.options.schedule) == "Mo-Th 08:00-16:00"
     assert invocation.options.cluster_anchor is ClusterAnchor.MIDNIGHT
     assert invocation.options.terminal.band_label is BandLabel.START
-    assert invocation.options.terminal.count_grouping is CountGrouping.VISUAL
+    assert invocation.options.terminal.count_grouping is CountGrouping.EVENT
     assert invocation.options.terminal.grid_style is GridStyle.BOTH
     assert invocation.settings.global_config == global_path
     assert invocation.settings.local_config == local_path
@@ -912,7 +911,7 @@ def test_show_config_prints_values_origins_and_files_without_collecting(
                 "start",
                 "--show-empty-bands",
                 "--count-grouping",
-                "visual",
+                "event",
             ]
         )
         == 0
@@ -927,7 +926,7 @@ def test_show_config_prints_values_origins_and_files_without_collecting(
     assert re.search(r"^cluster-anchor\s+midnight\s+CLI$", output, re.MULTILINE)
     assert re.search(r"^band-label\s+start\s+CLI$", output, re.MULTILINE)
     assert re.search(r"^show-empty-bands\s+true\s+CLI$", output, re.MULTILINE)
-    assert re.search(r"^count-grouping\s+visual\s+CLI$", output, re.MULTILINE)
+    assert re.search(r"^count-grouping\s+event\s+CLI$", output, re.MULTILINE)
     assert "Event styles" in output
     assert re.search(r"^git:tag:\*\s+symbol=◆ color=magenta\s+local$", output, re.MULTILINE)
     assert "Time band" not in output

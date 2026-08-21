@@ -165,7 +165,7 @@ def test_filesystem_profile_flows_through_the_shared_pipeline(tmp_path: Path) ->
     assert "Details\n" not in rendered
 
 
-def test_visual_count_grouping_flows_from_cli_to_busy_filesystem_cells(tmp_path: Path) -> None:
+def test_event_count_grouping_can_override_visual_default_for_busy_filesystem_cells(tmp_path: Path) -> None:
     root = tmp_path / "root"
     root.mkdir()
     instant = datetime(2026, 8, 3, 10, 5, tzinfo=UTC)
@@ -188,13 +188,13 @@ def test_visual_count_grouping_flows_from_cli_to_busy_filesystem_cells(tmp_path:
         "all",
         "--no-color",
     ]
-    per_event_output = StringIO()
     per_visual_output = StringIO()
+    per_event_output = StringIO()
 
     assert (
         run(
             parse_options(base_arguments),
-            stdout=per_event_output,
+            stdout=per_visual_output,
             stderr=StringIO(),
             terminal_width=80,
         )
@@ -202,8 +202,8 @@ def test_visual_count_grouping_flows_from_cli_to_busy_filesystem_cells(tmp_path:
     )
     assert (
         run(
-            parse_options([*base_arguments, "--count-grouping", "visual"]),
-            stdout=per_visual_output,
+            parse_options([*base_arguments, "--count-grouping", "event"]),
+            stdout=per_event_output,
             stderr=StringIO(),
             terminal_width=80,
         )

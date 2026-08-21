@@ -273,10 +273,10 @@ covers every evidence role retained by that marker.
 renderables, applies terminal styles, or turns report facts into scope and
 coverage prose. Generic terminal-safe text handling is in
 `reporting.sanitization` and is shared with configuration display.
-Busy-cell count grouping also belongs here: the default preserves distinct
-retained evidence signatures, while the optional visual projection merges only
-identical resolved symbol/style pairs. The report and folding layers retain the
-same fine-grained runs in either presentation mode.
+Busy-cell count grouping also belongs here: the default visual projection
+merges identical resolved symbol/style pairs, while the event projection keeps
+distinct retained evidence signatures. The report and folding layers retain
+the same fine-grained runs in either presentation mode.
 
 `cli` is the outer composition boundary. It owns argparse, standard-stream
 handling, effective configuration display, diagnostic output, process exit

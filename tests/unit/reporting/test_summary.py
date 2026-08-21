@@ -220,7 +220,7 @@ def test_terminal_options_preserve_existing_positional_enum_arguments() -> None:
     assert options.marker_style is MarkerStyle.IDENTITY
     assert options.grid_style is GridStyle.BOTH
     assert options.band_label is BandLabel.RANGE
-    assert options.count_grouping is CountGrouping.EVENT
+    assert options.count_grouping is CountGrouping.VISUAL
     assert not options.show_empty_bands
 
 

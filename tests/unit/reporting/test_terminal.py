@@ -783,7 +783,7 @@ def test_busy_cells_compact_to_exact_symbol_counts() -> None:
 
     assert "●×25" in rendered
     assert "□×1" in rendered
-    assert "×N exact per event kind" in rendered
+    assert "×N exact per visual" in rendered
     assert "Events    26" in rendered
 
 
@@ -811,10 +811,10 @@ def test_busy_count_tokens_can_group_matching_event_kinds_by_resolved_visual() -
     )
     report = _report(*markers)
 
-    per_event = render_terminal(report, options=TerminalOptions(width=80))
-    per_visual = render_terminal(
+    per_visual = render_terminal(report, options=TerminalOptions(width=80))
+    per_event = render_terminal(
         report,
-        options=TerminalOptions(width=80, count_grouping=CountGrouping.VISUAL),
+        options=TerminalOptions(width=80, count_grouping=CountGrouping.EVENT),
     )
 
     assert "■×15 ■×15" in per_event
@@ -901,10 +901,10 @@ def test_visual_count_grouping_merges_folding_precompacted_event_kinds() -> None
 
     assert cell is not None and cell.compacted
 
-    per_event = render_terminal(report, options=TerminalOptions(width=80))
-    per_visual = render_terminal(
+    per_visual = render_terminal(report, options=TerminalOptions(width=80))
+    per_event = render_terminal(
         report,
-        options=TerminalOptions(width=80, count_grouping=CountGrouping.VISUAL),
+        options=TerminalOptions(width=80, count_grouping=CountGrouping.EVENT),
     )
 
     assert per_event.count("■×150") == 2

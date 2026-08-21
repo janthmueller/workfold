@@ -89,12 +89,12 @@ narrow for that representation, a cell switches to exact `×N` counts;
 very busy cells may make that same exact-count switch before rendering so their
 visual sequence cannot grow memory without bound. The underlying event,
 source/schedule, and coverage totals are unchanged.
-By default, each token represents one retained event-kind, schedule, and
-identity signature. `--count-grouping visual` may instead sum signatures only
-when their resolved symbol and configured style match. This is a terminal-only
-projection: it never merges normalized evidence, changes totals, or alters
-coverage. The grouping decision is made before ANSI color suppression, so
-`NO_COLOR` cannot change token boundaries.
+By default, `--count-grouping visual` sums signatures only when their resolved
+symbol and configured style match. `--count-grouping event` instead keeps one
+token per retained event-kind, schedule, and identity signature. This is a
+terminal-only projection: it never merges normalized evidence, changes totals,
+or alters coverage. The grouping decision is made before ANSI color
+suppression, so `NO_COLOR` cannot change token boundaries.
 Event-style rules operate only on that retained plotted-marker projection.
 They cannot change discovery, timestamp selection, coalescing, scope, totals,
 or coverage. When equal Git author and committer instants coalesce, a style

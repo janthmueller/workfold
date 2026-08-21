@@ -56,7 +56,7 @@ def test_default_options_are_the_quick_git_view_for_this_week() -> None:
     assert options.terminal.band_label is BandLabel.RANGE
     assert not options.terminal.show_empty_bands
     assert options.terminal.marker_style is MarkerStyle.SOURCE
-    assert options.terminal.count_grouping is CountGrouping.EVENT
+    assert options.terminal.count_grouping is CountGrouping.VISUAL
     assert options.terminal.grid_style is GridStyle.NONE
     assert options.hide_days == ()
     assert options.hide_empty_days == ()
@@ -226,8 +226,8 @@ def test_identity_marker_style_is_opt_in() -> None:
     assert parse_options(["--marker-style", "identity"]).terminal.marker_style is MarkerStyle.IDENTITY
 
 
-def test_busy_count_grouping_is_explicit_and_enum_backed() -> None:
-    assert parse_options(["--count-grouping", "visual"]).terminal.count_grouping is CountGrouping.VISUAL
+def test_event_count_grouping_can_override_visual_default() -> None:
+    assert parse_options(["--count-grouping", "event"]).terminal.count_grouping is CountGrouping.EVENT
 
 
 @pytest.mark.parametrize(

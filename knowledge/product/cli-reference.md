@@ -388,11 +388,11 @@ outside-hours events. Event-style configuration can replace those source-marker
 symbols and colors for exact or wildcard event kinds. If a cell is too busy for
 individual symbols at the available width, exact tokens such as
 `●×12 ■×4 ○×2` replace only that cell; they are counts, not density estimates.
-The default `--count-grouping event` keeps tokens separate for distinct event
-kinds even when those kinds currently share a symbol and color. Use
-`--count-grouping visual` to merge only groups whose fully resolved marker
-symbol and configured style are identical. Schedule state and identity codes
-are part of that visual, so inside/outside or distinct identity markers do not
+The default `--count-grouping visual` merges only groups whose fully resolved
+marker symbol and configured style are identical. Use `--count-grouping event`
+to keep tokens separate for distinct event kinds even when those kinds
+currently share a symbol and color. Schedule state and identity codes are part
+of the resolved visual, so inside/outside or distinct identity markers do not
 merge. Grouping is based on the configured visual before ANSI suppression;
 `NO_COLOR` therefore does not restructure the chart. This option affects only
 busy-cell `×N` tokens, not ordinary markers, collection, totals, coverage, or
@@ -757,7 +757,7 @@ wuf . --band-label start
 wuf . --cluster-anchor midnight --show-empty-bands
 wuf . --hours all
 wuf . --marker-style identity
-wuf . --count-grouping visual
+wuf . --count-grouping event
 wuf . --grid both
 wuf . --hide-empty-days all
 wuf . --hide-days weekend

@@ -126,7 +126,7 @@ def test_help_exposes_only_the_new_collection_grammar() -> None:
     assert "--git-identity VALUE" in normalized_help
     assert "--marker-style {source,identity}" in normalized_help
     assert "--count-grouping {event,visual}" in normalized_help
-    assert "busy-cell exact counts stay separate per event kind" in normalized_help
+    assert "busy-cell exact counts merge when their resolved marker visuals match" in normalized_help
     assert "--cluster-anchor {event,midnight}" in normalized_help
     assert "--band-label {range,start}" in normalized_help
     assert "--show-empty-bands" in normalized_help

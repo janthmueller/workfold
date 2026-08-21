@@ -146,7 +146,7 @@ class TerminalPreferences:
     coverage: bool
     strict: bool
     verbose: bool
-    count_grouping: CountGrouping = CountGrouping.EVENT
+    count_grouping: CountGrouping = CountGrouping.VISUAL
     event_styles: EventStyleSheet = DEFAULT_EVENT_STYLE_SHEET
 
 
@@ -211,7 +211,7 @@ class UnresolvedOptions:
     cluster_anchor: str = ClusterAnchor.EVENT.value
     band_label: str = BandLabel.RANGE.value
     show_empty_bands: bool = False
-    count_grouping: str = CountGrouping.EVENT.value
+    count_grouping: str = CountGrouping.VISUAL.value
 
 
 DEFAULT_HOURS = "Mo-Fr 08:00-16:30"

@@ -242,10 +242,10 @@ def build_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
     output_group.add_argument(
         "--count-grouping",
         choices=("event", "visual"),
-        default="event",
+        default="visual",
         help=(
-            "busy-cell exact counts stay separate per event kind (built-in default) "
-            "or merge when their resolved marker visuals match"
+            "busy-cell exact counts merge when their resolved marker visuals match (built-in default) "
+            "or stay separate per event kind"
         ),
     )
     output_group.add_argument(

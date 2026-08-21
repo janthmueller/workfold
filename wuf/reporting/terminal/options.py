@@ -25,7 +25,7 @@ class TerminalOptions:
     show_empty_bands: bool = False
     coverage: bool = False
     event_styles: EventStyleSheet = DEFAULT_EVENT_STYLE_SHEET
-    count_grouping: CountGrouping = CountGrouping.EVENT
+    count_grouping: CountGrouping = CountGrouping.VISUAL
 
     def __post_init__(self) -> None:
         if self.width < MIN_TERMINAL_WIDTH:
