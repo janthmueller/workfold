@@ -1529,7 +1529,7 @@ wheels = [
 
 [[package]]
 name = "wuf"
-version = "0.1.0a7"
+version = "0.1.0a8"
 source = { editable = "." }
 dependencies = [
     { name = "pathspec" },

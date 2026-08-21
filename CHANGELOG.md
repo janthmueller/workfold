@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.1.0-alpha.8 (2026-08-21)
+
+### Documentation
+
+- Streamline user docs and add knowledge bundle
+  ([`044ca06`](https://github.com/janthmueller/wuf/commit/044ca06963d434339c1a99eed908e9d78024b612))
+
+### Features
+
+- Group busy counts by visual by default
+  ([`100c4e0`](https://github.com/janthmueller/wuf/commit/100c4e0f60c602c6ad3f30465727dde1735ec711))
+
+
 ## v0.1.0-alpha.7 (2026-08-19)
 
 ### Features

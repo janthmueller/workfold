@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "workfold"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 description = "Compatibility installer for Wuf, formerly known as Workfold."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-dependencies = ["wuf==0.1.0a7"]
+dependencies = ["wuf==0.1.0a8"]
 classifiers = [
     "Development Status :: 7 - Inactive",
     "Environment :: Console",
